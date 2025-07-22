@@ -32,7 +32,7 @@ impl EthereumChain {
 
 #[async_trait]
 impl ChainOperations for EthereumChain {
-    async fn create_wallet(&self) -> Result<(Wallet, [u8; 32])> {
+    fn create_wallet(&self) -> Result<(Wallet, [u8; 32])> {
         // Generate a random salt
         let mut salt = [0u8; 32];
         getrandom::getrandom(&mut salt).map_err(|_| crate::Error::Serialization {
@@ -56,7 +56,7 @@ impl ChainOperations for EthereumChain {
             master_key,
             salt,
             b"ethereum-wallet"
-        );
+        )?;
         
         // Create signer from derived key
         let signer = PrivateKeySigner::from_bytes(&private_key_bytes.into())

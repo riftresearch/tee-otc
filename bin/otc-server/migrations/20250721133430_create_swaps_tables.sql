@@ -1,16 +1,12 @@
--- Create swaps table
+-- Create swaps table with deterministic wallet salts
 CREATE TABLE swaps (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     quote_id UUID NOT NULL REFERENCES quotes(id),
     market_maker VARCHAR(255) NOT NULL,
     
-    -- User deposit wallet
-    user_deposit_chain VARCHAR(50) NOT NULL,
-    user_deposit_address VARCHAR(255) NOT NULL,
-    
-    -- MM deposit wallet
-    mm_deposit_chain VARCHAR(50) NOT NULL,
-    mm_deposit_address VARCHAR(255) NOT NULL,
+    -- Salt columns for deterministic wallet generation
+    user_deposit_salt BYTEA NOT NULL,
+    mm_deposit_salt BYTEA NOT NULL,
     
     -- User addresses
     user_destination_address VARCHAR(255) NOT NULL,
@@ -33,11 +29,4 @@ CREATE TABLE swaps (
     
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- Create swap secrets table (sensitive data)
-CREATE TABLE swap_secrets (
-    swap_id UUID PRIMARY KEY REFERENCES swaps(id),
-    user_deposit_private_key TEXT NOT NULL,
-    mm_deposit_private_key TEXT NOT NULL
 );

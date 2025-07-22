@@ -7,7 +7,7 @@ use std::time::Duration;
 #[async_trait]
 pub trait ChainOperations: Send + Sync {
     /// Create a new wallet, returning the wallet and the salt used
-    async fn create_wallet(&self) -> Result<(Wallet, [u8; 32])>;
+    fn create_wallet(&self) -> Result<(Wallet, [u8; 32])>;
     
     /// Derive a wallet deterministically from a master key and salt
     fn derive_wallet(&self, master_key: &[u8], salt: &[u8; 32]) -> Result<Wallet>;

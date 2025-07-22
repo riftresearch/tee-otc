@@ -26,6 +26,9 @@ pub enum Error {
     
     #[snafu(display("Serialization error: {message}"))]
     Serialization { message: String },
+    
+    #[snafu(display("Key derivation failed: {message}"))]
+    KeyDerivation { message: String },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

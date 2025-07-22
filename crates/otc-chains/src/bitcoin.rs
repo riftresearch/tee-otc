@@ -30,7 +30,7 @@ impl BitcoinChain {
 
 #[async_trait]
 impl ChainOperations for BitcoinChain {
-    async fn create_wallet(&self) -> Result<(Wallet, [u8; 32])> {
+    fn create_wallet(&self) -> Result<(Wallet, [u8; 32])> {
         // Generate a random salt
         let mut salt = [0u8; 32];
         getrandom::getrandom(&mut salt).map_err(|_| crate::Error::Serialization {
@@ -58,7 +58,7 @@ impl ChainOperations for BitcoinChain {
             master_key,
             salt,
             b"bitcoin-wallet"
-        );
+        )?;
         
         // Create secp256k1 secret key
         let secret_key = SecretKey::from_slice(&private_key_bytes)
