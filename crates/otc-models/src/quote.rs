@@ -16,6 +16,7 @@ pub struct Currency {
     pub chain: ChainType,
     pub token: TokenIdentifier,
     pub amount: U256,
+    pub decimals: u8,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

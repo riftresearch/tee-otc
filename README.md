@@ -9,26 +9,29 @@ Cross-chain OTC swaps secured by Trusted Execution Environments (TEEs).
 - Helios light client for Ethereum verification
 - TEE attestation and secure key management
 
-
 ## Prerequisites
-- Rust Toolchain
-- sqlx cli
+
+- rust toolchain
 - nextest
-// TODO: Links
+- orbstack/docker desktop
+- docker cli
+  // TODO: Links
 
 ## Development Workflow
 
-1. **Start PostgreSQL**:
+1. **Start Development Database**:
 
-   *In a seperate terminal*
+   _In a seperate terminal_
+
    ```bash
    docker compose -f compose.test-db.yml up
    ```
 
    This will automatically:
+
    - Create the `otc_dev` database
    - Apply the schema (embedded in compose file)
-   
+
    To check logs: `docker compose -f compose.test-db.yml logs`
    To stop: `docker compose -f compose.test-db.yml down`
 
@@ -40,5 +43,5 @@ Cross-chain OTC swaps secured by Trusted Execution Environments (TEEs).
 
 3. **Run tests**:
    ```bash
-   cargo nextest run 
+   make test-clean
    ```

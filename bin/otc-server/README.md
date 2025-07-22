@@ -12,30 +12,58 @@ The main server for the TEE-OTC cross-chain swap system.
 
 ### Database Setup
 
-Start PostgreSQL with automatic database initialization:
+Start the development database with migrations:
 
 ```bash
-docker compose -f compose.test-db.yml up
+make dev-db
 ```
 
-This will automatically:
+This will:
 - Start PostgreSQL on port 5432
 - Create the `otc_dev` database
-- Apply the schema from `src/db/schema.sql`
-- Set up everything needed for development
+- Wait for the database to be ready
+- Run all migrations automatically
 
-The database will be ready when you see:
+Other database commands:
+```bash
+make stop-db     # Stop the database
+make clean-db    # Stop and remove all data
+make migrate     # Run migrations manually
 ```
-test_db | LOG:  database system is ready to accept connections
+
+### Database Migrations
+
+The project uses SQLx migrations for schema management:
+
+- Migrations are in `./migrations/`
+- Applied automatically on server startup
+- Embedded in the binary at compile time
+
+To create a new migration:
+```bash
+# Install sqlx-cli if you haven't already
+cargo install sqlx-cli --no-default-features --features rustls,postgres
+
+# Create a new migration
+sqlx migrate add <migration_name>
+
+# Edit the migration file in ./migrations/
+# The server will apply it on next startup
 ```
 
-### Important: DATABASE_URL Configuration
+### Database Configuration
 
-The project uses `sqlx::query!` macros for compile-time SQL validation. This requires:
+The project uses SQLx with runtime queries and automatic migrations. Database migrations are run automatically when the server starts.
 
-1. **`.cargo/config.toml`** - Contains the default DATABASE_URL for development
-2. **Database must exist** - Run `./scripts/setup-dev-db.sh` before building
-3. **For CI/CD** - Use `cargo sqlx prepare` to generate offline query data
+To run the test database:
+```bash
+docker compose -f ../../compose.test-db.yml up -d
+```
+
+The database connection URL can be configured via:
+- `DATABASE_URL` environment variable
+- `--database-url` command line argument
+- Default: `postgres://otc_user:otc_password@localhost:5432/otc_db`
 
 ### Running Tests
 
@@ -57,7 +85,7 @@ cargo test test_quote_round_trip
 cargo test -- --nocapture
 ```
 
-The `.env` file contains the template DATABASE_URL that sqlx::test uses to connect to PostgreSQL and create test databases.
+The `sqlx::test` macro automatically creates isolated test databases for each test using the DATABASE_URL environment variable.
 
 ### Running the Server
 
@@ -76,8 +104,9 @@ cargo run -- --host 0.0.0.0 --port 8080 --database-url postgres://user:pass@loca
   - `swap_repo.rs` - Swap CRUD with public/private separation
   - `conversions.rs` - Type conversions for database storage
   - `row_mappers.rs` - Row to domain type mapping
-  - `schema.sql` - Database schema
-
+- `migrations/` - SQLx database migrations
+- `api/` - API request/response DTOs
+- `services/` - Business logic services
 - `server.rs` - HTTP/WebSocket server setup
 - `main.rs` - CLI entry point
 

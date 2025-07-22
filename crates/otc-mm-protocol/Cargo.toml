@@ -12,5 +12,5 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
-rust_decimal = { version = "1.35", features = ["serde-with-str"] }
+alloy = { workspace = true }
 snafu = { workspace = true }

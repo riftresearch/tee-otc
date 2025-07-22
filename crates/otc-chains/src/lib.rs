@@ -1,4 +1,5 @@
 pub mod error;
+pub mod key_derivation;
 pub mod registry;
 pub mod traits;
 

@@ -11,3 +11,8 @@ serde = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 alloy = { workspace = true }
+zeroize = { workspace = true }
+secrecy = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

@@ -1,12 +1,11 @@
-use crate::{ChainOperations, Result};
+use crate::{ ChainOperations, Result, key_derivation};
 use alloy::primitives::{Address, U256};
 use alloy::providers::{Provider, ProviderBuilder};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::network::{TransactionBuilder, EthereumWallet};
 use alloy::rpc::types::TransactionRequest;
 use async_trait::async_trait;
-use otc_models::{DepositInfo, TxStatus};
-use rust_decimal::prelude::*;
+use otc_models::{DepositInfo, TxStatus, Wallet};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -33,7 +32,13 @@ impl EthereumChain {
 
 #[async_trait]
 impl ChainOperations for EthereumChain {
-    async fn create_wallet(&self) -> Result<(String, String)> {
+    async fn create_wallet(&self) -> Result<(Wallet, [u8; 32])> {
+        // Generate a random salt
+        let mut salt = [0u8; 32];
+        getrandom::getrandom(&mut salt).map_err(|_| crate::Error::Serialization {
+            message: "Failed to generate random salt".to_string(),
+        })?;
+        
         // Create a new random signer
         let signer = PrivateKeySigner::random();
         let address = signer.address();
@@ -41,10 +46,33 @@ impl ChainOperations for EthereumChain {
         
         info!("Created new Ethereum wallet: {}", address);
         
-        Ok((format!("{:?}", address), format!("0x{}", private_key)))
+        let wallet = Wallet::new(format!("{:?}", address), format!("0x{}", private_key));
+        Ok((wallet, salt))
     }
     
-    async fn get_balance(&self, address: &str) -> Result<Decimal> {
+    fn derive_wallet(&self, master_key: &[u8], salt: &[u8; 32]) -> Result<Wallet> {
+        // Derive private key using HKDF
+        let private_key_bytes = key_derivation::derive_private_key(
+            master_key,
+            salt,
+            b"ethereum-wallet"
+        );
+        
+        // Create signer from derived key
+        let signer = PrivateKeySigner::from_bytes(&private_key_bytes.into())
+            .map_err(|_| crate::Error::Serialization {
+                message: "Failed to create signer from derived key".to_string(),
+            })?;
+        
+        let address = format!("{:?}", signer.address());
+        let private_key = format!("0x{}", hex::encode(private_key_bytes));
+        
+        debug!("Derived Ethereum wallet: {}", address);
+        
+        Ok(Wallet::new(address, private_key))
+    }
+    
+    async fn get_balance(&self, address: &str) -> Result<U256> {
         let addr = Address::from_str(address)
             .map_err(|_| crate::Error::InvalidAddress)?;
         
@@ -55,23 +83,18 @@ impl ChainOperations for EthereumChain {
                 message: "Failed to get balance".to_string(),
             })?;
         
-        // Convert from wei to ETH
-        let eth_balance = Decimal::from_str(&balance.to_string())
-            .unwrap_or_default()
-            / Decimal::from_str("1000000000000000000").unwrap();
-        
-        debug!("Balance for {}: {} ETH", address, eth_balance);
-        Ok(eth_balance)
+        debug!("Balance for {}: {} wei", address, balance);
+        Ok(balance)
     }
     
-    async fn get_tx_status(&self, tx_hash: &str) -> Result<TxStatus> {
-        let hash = tx_hash.parse()
+    async fn get_tx_status(&self, txid: &str) -> Result<TxStatus> {
+        let txid = txid.parse()
             .map_err(|_| crate::Error::Serialization {
                 message: "Invalid transaction hash".to_string(),
             })?;
         
         // Get transaction receipt
-        match self.provider.get_transaction_receipt(hash).await {
+        match self.provider.get_transaction_receipt(txid).await {
             Ok(Some(receipt)) => {
                 // Get current block number
                 let current_block = self.provider
@@ -88,7 +111,7 @@ impl ChainOperations for EthereumChain {
             }
             Ok(None) => {
                 // Check if transaction is in mempool
-                match self.provider.get_transaction_by_hash(hash).await {
+                match self.provider.get_transaction_by_hash(txid).await {
                     Ok(Some(_)) => Ok(TxStatus::Confirmed(0)), // In mempool
                     _ => Ok(TxStatus::NotFound),
                 }
@@ -100,7 +123,7 @@ impl ChainOperations for EthereumChain {
     async fn check_deposit(
         &self,
         address: &str,
-        _expected_amount: Decimal,
+        _expected_amount: U256,
         _min_confirmations: u32,
     ) -> Result<Option<DepositInfo>> {
         // In production, would:
@@ -116,7 +139,7 @@ impl ChainOperations for EthereumChain {
         &self,
         private_key: &str,
         to_address: &str,
-        amount: Decimal,
+        amount: U256,
     ) -> Result<String> {
         let signer = PrivateKeySigner::from_str(private_key.trim_start_matches("0x"))
             .map_err(|_| crate::Error::Serialization {
@@ -126,19 +149,12 @@ impl ChainOperations for EthereumChain {
         let to = Address::from_str(to_address)
             .map_err(|_| crate::Error::InvalidAddress)?;
         
-        // Convert ETH to wei
-        let wei_amount = (amount * Decimal::from_str("1000000000000000000").unwrap())
-            .to_u256()
-            .ok_or_else(|| crate::Error::Serialization {
-                message: "Amount overflow".to_string(),
-            })?;
-        
         let _wallet = EthereumWallet::from(signer);
         
         // Create transaction
         let _tx = TransactionRequest::default()
             .with_to(to)
-            .with_value(U256::from_str(&wei_amount.to_string()).unwrap())
+            .with_value(amount)
             .with_chain_id(self.chain_id);
         
         // In production, would:
@@ -146,7 +162,7 @@ impl ChainOperations for EthereumChain {
         // 2. Set gas price
         // 3. Sign and send transaction
         
-        info!("Sending {} ETH to {}", amount, to_address);
+        info!("Sending {} wei to {}", amount, to_address);
         Ok("0x0000000000000000000000000000000000000000000000000000000000000000".to_string())
     }
     
@@ -160,16 +176,5 @@ impl ChainOperations for EthereumChain {
     
     fn estimated_block_time(&self) -> Duration {
         Duration::from_secs(12) // ~12 seconds
-    }
-}
-
-// Helper to convert Decimal to U256
-trait DecimalExt {
-    fn to_u256(&self) -> Option<U256>;
-}
-
-impl DecimalExt for Decimal {
-    fn to_u256(&self) -> Option<U256> {
-        self.to_string().parse().ok()
     }
 }

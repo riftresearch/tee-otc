@@ -18,32 +18,34 @@ impl QuoteRepository {
     }
     
     pub async fn create(&self, quote: &Quote) -> DbResult<()> {
-        let (from_chain, from_token, from_amount) = currency_to_db(&quote.from)?;
-        let (to_chain, to_token, to_amount) = currency_to_db(&quote.to)?;
+        let (from_chain, from_token, from_amount, from_decimals) = currency_to_db(&quote.from)?;
+        let (to_chain, to_token, to_amount, to_decimals) = currency_to_db(&quote.to)?;
         
-        sqlx::query!(
+        sqlx::query(
             r#"
             INSERT INTO quotes (
                 id, 
-                from_chain, from_token, from_amount,
-                to_chain, to_token, to_amount,
+                from_chain, from_token, from_amount, from_decimals,
+                to_chain, to_token, to_amount, to_decimals,
                 market_maker_identifier, 
                 expires_at, 
                 created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             "#,
-            quote.id,
-            from_chain,
-            from_token,
-            from_amount,
-            to_chain,
-            to_token,
-            to_amount,
-            quote.market_maker_identifier,
-            quote.expires_at,
-            quote.created_at
         )
+        .bind(quote.id)
+        .bind(from_chain)
+        .bind(from_token)
+        .bind(from_amount)
+        .bind(from_decimals as i16)
+        .bind(to_chain)
+        .bind(to_token)
+        .bind(to_amount)
+        .bind(to_decimals as i16)
+        .bind(quote.market_maker_identifier.clone())
+        .bind(quote.expires_at)
+        .bind(quote.created_at)
         .execute(&self.pool)
         .await?;
         
@@ -55,8 +57,8 @@ impl QuoteRepository {
             r#"
             SELECT 
                 id,
-                from_chain, from_token, from_amount,
-                to_chain, to_token, to_amount,
+                from_chain, from_token, from_amount, from_decimals,
+                to_chain, to_token, to_amount, to_decimals,
                 market_maker_identifier,
                 expires_at,
                 created_at
@@ -76,8 +78,8 @@ impl QuoteRepository {
             r#"
             SELECT 
                 id,
-                from_chain, from_token, from_amount,
-                to_chain, to_token, to_amount,
+                from_chain, from_token, from_amount, from_decimals,
+                to_chain, to_token, to_amount, to_decimals,
                 market_maker_identifier,
                 expires_at,
                 created_at
@@ -104,8 +106,8 @@ impl QuoteRepository {
             r#"
             SELECT 
                 id,
-                from_chain, from_token, from_amount,
-                to_chain, to_token, to_amount,
+                from_chain, from_token, from_amount, from_decimals,
+                to_chain, to_token, to_amount, to_decimals,
                 market_maker_identifier,
                 expires_at,
                 created_at
@@ -128,14 +130,14 @@ impl QuoteRepository {
     }
     
     pub async fn delete_expired(&self, before: DateTime<Utc>) -> DbResult<u64> {
-        let result = sqlx::query!(
+        let result = sqlx::query(
             r#"
             DELETE FROM quotes
             WHERE expires_at < $1
             AND id NOT IN (SELECT quote_id FROM swaps)
             "#,
-            before
         )
+        .bind(before)
         .execute(&self.pool)
         .await?;
         
@@ -145,7 +147,6 @@ impl QuoteRepository {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use alloy::primitives::U256;
     use chrono::{Duration, Utc};
     use otc_models::{ChainType, Currency, Quote, TokenIdentifier};
@@ -154,10 +155,8 @@ mod tests {
 
     #[sqlx::test]
     async fn test_quote_round_trip(pool: sqlx::PgPool) -> sqlx::Result<()> {
-        // Initialize database schema
-        crate::db::test_helpers::test_helpers::setup_test_schema(&pool).await?;
-        
-        let db = Database::new(pool.clone());
+        // Database will auto-initialize with schema
+        let db = Database::from_pool(pool.clone()).await.unwrap();
         let quote_repo = db.quotes();
         
         // Create a test quote
@@ -167,11 +166,13 @@ mod tests {
                 chain: ChainType::Bitcoin,
                 token: TokenIdentifier::Native,
                 amount: U256::from(1000000u64), // 0.01 BTC in sats
+                decimals: 8,
             },
             to: Currency {
                 chain: ChainType::Ethereum,
                 token: TokenIdentifier::Native,
                 amount: U256::from(500000000000000000u64), // 0.5 ETH in wei
+                decimals: 18,
             },
             market_maker_identifier: "test-mm-1".to_string(),
             expires_at: Utc::now() + Duration::minutes(10),
@@ -207,10 +208,8 @@ mod tests {
 
     #[sqlx::test]
     async fn test_quote_with_token_address(pool: sqlx::PgPool) -> sqlx::Result<()> {
-        // Initialize database schema
-        crate::db::test_helpers::test_helpers::setup_test_schema(&pool).await?;
-        
-        let db = Database::new(pool.clone());
+        // Database will auto-initialize with schema
+        let db = Database::from_pool(pool.clone()).await.unwrap();
         let quote_repo = db.quotes();
         
         // Create a quote with ERC20 tokens
@@ -220,11 +219,13 @@ mod tests {
                 chain: ChainType::Ethereum,
                 token: TokenIdentifier::Address("0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string()), // USDC
                 amount: U256::from(1000000000u64), // 1000 USDC (6 decimals)
+                decimals: 6,
             },
             to: Currency {
                 chain: ChainType::Ethereum,
                 token: TokenIdentifier::Address("0x6B175474E89094C44Da98b954EedeAC495271d0F".to_string()), // DAI
                 amount: U256::from(1000000000000000000000u128), // 1000 DAI (18 decimals)
+                decimals: 18,
             },
             market_maker_identifier: "test-mm-2".to_string(),
             expires_at: Utc::now() + Duration::minutes(5),
@@ -255,10 +256,8 @@ mod tests {
 
     #[sqlx::test]
     async fn test_quote_large_u256_values(pool: sqlx::PgPool) -> sqlx::Result<()> {
-        // Initialize database schema
-        crate::db::test_helpers::test_helpers::setup_test_schema(&pool).await?;
-        
-        let db = Database::new(pool.clone());
+        // Database will auto-initialize with schema
+        let db = Database::from_pool(pool.clone()).await.unwrap();
         let quote_repo = db.quotes();
         
         // Create a quote with very large U256 values
@@ -273,11 +272,13 @@ mod tests {
                 chain: ChainType::Ethereum,
                 token: TokenIdentifier::Native,
                 amount: large_amount,
+                decimals: 18,
             },
             to: Currency {
                 chain: ChainType::Bitcoin,
                 token: TokenIdentifier::Native,
                 amount: U256::from(21000000u64) * U256::from(100000000u64), // 21M BTC in sats
+                decimals: 8,
             },
             market_maker_identifier: "test-mm-3".to_string(),
             expires_at: Utc::now() + Duration::hours(1),
@@ -297,10 +298,8 @@ mod tests {
 
     #[sqlx::test]
     async fn test_get_active_quotes_by_market_maker(pool: sqlx::PgPool) -> sqlx::Result<()> {
-        // Initialize database schema
-        crate::db::test_helpers::test_helpers::setup_test_schema(&pool).await?;
-        
-        let db = Database::new(pool.clone());
+        // Database will auto-initialize with schema
+        let db = Database::from_pool(pool.clone()).await.unwrap();
         let quote_repo = db.quotes();
         
         let mm_identifier = "test-mm-active";
@@ -312,11 +311,13 @@ mod tests {
                 chain: ChainType::Bitcoin,
                 token: TokenIdentifier::Native,
                 amount: U256::from(100000u64),
+                decimals: 8,
             },
             to: Currency {
                 chain: ChainType::Ethereum,
                 token: TokenIdentifier::Native,
                 amount: U256::from(1000000000000000000u64),
+                decimals: 18,
             },
             market_maker_identifier: mm_identifier.to_string(),
             expires_at: Utc::now() - Duration::hours(1), // Already expired
@@ -329,11 +330,13 @@ mod tests {
                 chain: ChainType::Bitcoin,
                 token: TokenIdentifier::Native,
                 amount: U256::from(200000u64),
+                decimals: 8,
             },
             to: Currency {
                 chain: ChainType::Ethereum,
                 token: TokenIdentifier::Native,
                 amount: U256::from(2000000000000000000u64),
+                decimals: 18,
             },
             market_maker_identifier: mm_identifier.to_string(),
             expires_at: Utc::now() + Duration::minutes(30),
@@ -346,11 +349,13 @@ mod tests {
                 chain: ChainType::Ethereum,
                 token: TokenIdentifier::Native,
                 amount: U256::from(3000000000000000000u64),
+                decimals: 18,
             },
             to: Currency {
                 chain: ChainType::Bitcoin,
                 token: TokenIdentifier::Native,
                 amount: U256::from(300000u64),
+                decimals: 8,
             },
             market_maker_identifier: mm_identifier.to_string(),
             expires_at: Utc::now() + Duration::hours(1),

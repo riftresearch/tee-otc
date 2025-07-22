@@ -1,7 +1,7 @@
-use crate::{ChainOperations, Result};
 use otc_models::ChainType;
 use std::collections::HashMap;
 use std::sync::Arc;
+use crate::traits::ChainOperations;
 
 pub struct ChainRegistry {
     chains: HashMap<ChainType, Arc<dyn ChainOperations>>,
@@ -18,13 +18,8 @@ impl ChainRegistry {
         self.chains.insert(chain_type, implementation);
     }
     
-    pub fn get(&self, chain_type: &ChainType) -> Result<Arc<dyn ChainOperations>> {
-        self.chains
-            .get(chain_type)
-            .cloned()
-            .ok_or_else(|| crate::Error::ChainNotSupported {
-                chain: format!("{:?}", chain_type),
-            })
+    pub fn get(&self, chain_type: &ChainType) -> Option<Arc<dyn ChainOperations>> {
+        self.chains.get(chain_type).cloned()
     }
     
     pub fn supported_chains(&self) -> Vec<ChainType> {

@@ -30,6 +30,8 @@ TEE-OTC is a cross-chain OTC settlement system running in Trusted Execution Envi
 
 ## Database
 
-- Using embedded schema approach (no migrations)
 - PostgreSQL with SQLx for async operations
 - Schema is created on first run if it doesn't exist
+- **Each binary maintains its own migrations** - Database migrations are stored within each binary's directory (e.g., `bin/otc-server/migrations/`)
+- Never put migrations at the workspace root - they belong with the binary that uses them
+- If a new binary needs database access, create its own `migrations/` directory within that binary's folder

@@ -1,10 +1,10 @@
-use crate::{ChainOperations, Result};
+use crate::{ChainOperations, Result, key_derivation};
+use alloy::primitives::U256;
 use async_trait::async_trait;
-use bitcoin::secp256k1::{rand, Secp256k1};
+use bitcoin::secp256k1::{rand, Secp256k1, SecretKey};
 use bitcoin::{Address, CompressedPublicKey, Network, PrivateKey};
 use bitcoincore_rpc::{Auth, Client, RpcApi};
-use otc_models::{DepositInfo, TxStatus};
-use rust_decimal::Decimal;
+use otc_models::{DepositInfo, TxStatus, Wallet};
 use std::str::FromStr;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -30,7 +30,13 @@ impl BitcoinChain {
 
 #[async_trait]
 impl ChainOperations for BitcoinChain {
-    async fn create_wallet(&self) -> Result<(String, String)> {
+    async fn create_wallet(&self) -> Result<(Wallet, [u8; 32])> {
+        // Generate a random salt
+        let mut salt = [0u8; 32];
+        getrandom::getrandom(&mut salt).map_err(|_| crate::Error::Serialization {
+            message: "Failed to generate random salt".to_string(),
+        })?;
+        
         // Generate a new private key
         let secp = Secp256k1::new();
         let secret_key = bitcoin::secp256k1::SecretKey::new(&mut rand::thread_rng());
@@ -42,10 +48,37 @@ impl ChainOperations for BitcoinChain {
         
         info!("Created new Bitcoin wallet: {}", address);
         
-        Ok((address.to_string(), private_key.to_wif()))
+        let wallet = Wallet::new(address.to_string(), private_key.to_wif());
+        Ok((wallet, salt))
     }
     
-    async fn get_balance(&self, address: &str) -> Result<Decimal> {
+    fn derive_wallet(&self, master_key: &[u8], salt: &[u8; 32]) -> Result<Wallet> {
+        // Derive private key using HKDF
+        let private_key_bytes = key_derivation::derive_private_key(
+            master_key,
+            salt,
+            b"bitcoin-wallet"
+        );
+        
+        // Create secp256k1 secret key
+        let secret_key = SecretKey::from_slice(&private_key_bytes)
+            .map_err(|_| crate::Error::Serialization {
+                message: "Failed to create secret key from derived bytes".to_string(),
+            })?;
+        
+        let private_key = PrivateKey::new(secret_key, self.network);
+        
+        // Derive public key and address
+        let secp = Secp256k1::new();
+        let compressed_pk = CompressedPublicKey::from_private_key(&secp, &private_key).unwrap();
+        let address = Address::p2wpkh(&compressed_pk, self.network);
+        
+        debug!("Derived Bitcoin wallet: {}", address);
+        
+        Ok(Wallet::new(address.to_string(), private_key.to_wif()))
+    }
+    
+    async fn get_balance(&self, address: &str) -> Result<U256> {
         let addr = Address::from_str(address)
             .map_err(|_| crate::Error::InvalidAddress)?
             .require_network(self.network)
@@ -54,7 +87,7 @@ impl ChainOperations for BitcoinChain {
         // For now, return 0 - implement actual RPC call
         // In production, would query UTXOs for this address
         debug!("Getting balance for address: {}", addr);
-        Ok(Decimal::ZERO)
+        Ok(U256::ZERO)
     }
     
     async fn get_tx_status(&self, tx_hash: &str) -> Result<TxStatus> {
@@ -76,7 +109,7 @@ impl ChainOperations for BitcoinChain {
     async fn check_deposit(
         &self,
         address: &str,
-        _expected_amount: Decimal,
+        _expected_amount: U256,
         _min_confirmations: u32,
     ) -> Result<Option<DepositInfo>> {
         // In production, would scan recent blocks for deposits
@@ -89,7 +122,7 @@ impl ChainOperations for BitcoinChain {
         &self,
         private_key: &str,
         to_address: &str,
-        amount: Decimal,
+        amount: U256,
     ) -> Result<String> {
         // Parse private key and destination
         let _privkey = PrivateKey::from_wif(private_key)

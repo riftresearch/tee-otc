@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
-use otc_models::{Quote, SwapPublic, SwapSecrets, WalletPublic};
+use otc_models::{Quote, Swap};
 use sqlx::postgres::PgRow;
 use sqlx::Row;
 use uuid::Uuid;
 
-use super::conversions::{chain_type_from_db, currency_from_db, swap_status_from_db, u256_from_db};
+use super::conversions::{currency_from_db, swap_status_from_db, u256_from_db};
 use super::DbResult;
 
 pub trait FromRow<'r>: Sized {
@@ -17,15 +17,17 @@ impl<'r> FromRow<'r> for Quote {
         let from_chain: String = row.try_get("from_chain")?;
         let from_token: serde_json::Value = row.try_get("from_token")?;
         let from_amount: String = row.try_get("from_amount")?;
+        let from_decimals: i16 = row.try_get("from_decimals")?;
         let to_chain: String = row.try_get("to_chain")?;
         let to_token: serde_json::Value = row.try_get("to_token")?;
         let to_amount: String = row.try_get("to_amount")?;
+        let to_decimals: i16 = row.try_get("to_decimals")?;
         let market_maker_identifier: String = row.try_get("market_maker_identifier")?;
         let expires_at: DateTime<Utc> = row.try_get("expires_at")?;
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
         
-        let from = currency_from_db(from_chain, from_token, from_amount)?;
-        let to = currency_from_db(to_chain, to_token, to_amount)?;
+        let from = currency_from_db(from_chain, from_token, from_amount, from_decimals as u8)?;
+        let to = currency_from_db(to_chain, to_token, to_amount, to_decimals as u8)?;
         
         Ok(Quote {
             id,
@@ -38,25 +40,32 @@ impl<'r> FromRow<'r> for Quote {
     }
 }
 
-impl<'r> FromRow<'r> for SwapPublic {
+impl<'r> FromRow<'r> for Swap {
     fn from_row(row: &'r PgRow) -> DbResult<Self> {
         let id: Uuid = row.try_get("id")?;
         let quote_id: Uuid = row.try_get("quote_id")?;
         let market_maker: String = row.try_get("market_maker")?;
         
-        let user_deposit_chain: String = row.try_get("user_deposit_chain")?;
-        let user_deposit_address: String = row.try_get("user_deposit_address")?;
-        let user_deposit = WalletPublic {
-            chain: chain_type_from_db(&user_deposit_chain)?,
-            address: user_deposit_address,
-        };
+        // Get salts as Vec<u8> from database and convert to [u8; 32]
+        let user_deposit_salt_vec: Vec<u8> = row.try_get("user_deposit_salt")?;
+        let mm_deposit_salt_vec: Vec<u8> = row.try_get("mm_deposit_salt")?;
         
-        let mm_deposit_chain: String = row.try_get("mm_deposit_chain")?;
-        let mm_deposit_address: String = row.try_get("mm_deposit_address")?;
-        let mm_deposit = WalletPublic {
-            chain: chain_type_from_db(&mm_deposit_chain)?,
-            address: mm_deposit_address,
-        };
+        let mut user_deposit_salt = [0u8; 32];
+        let mut mm_deposit_salt = [0u8; 32];
+        
+        if user_deposit_salt_vec.len() != 32 {
+            return Err(super::DbError::InvalidData {
+                message: "user_deposit_salt must be exactly 32 bytes".to_string(),
+            });
+        }
+        if mm_deposit_salt_vec.len() != 32 {
+            return Err(super::DbError::InvalidData {
+                message: "mm_deposit_salt must be exactly 32 bytes".to_string(),
+            });
+        }
+        
+        user_deposit_salt.copy_from_slice(&user_deposit_salt_vec);
+        mm_deposit_salt.copy_from_slice(&mm_deposit_salt_vec);
         
         let user_destination_address: String = row.try_get("user_destination_address")?;
         let user_refund_address: String = row.try_get("user_refund_address")?;
@@ -78,12 +87,12 @@ impl<'r> FromRow<'r> for SwapPublic {
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
         let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
         
-        Ok(SwapPublic {
+        Ok(Swap {
             id,
             quote_id,
             market_maker,
-            user_deposit,
-            mm_deposit,
+            user_deposit_salt,
+            mm_deposit_salt,
             user_destination_address,
             user_refund_address,
             status: swap_status_from_db(&status)?,
@@ -92,15 +101,6 @@ impl<'r> FromRow<'r> for SwapPublic {
             user_withdrawal_tx,
             created_at,
             updated_at,
-        })
-    }
-}
-
-impl<'r> FromRow<'r> for SwapSecrets {
-    fn from_row(row: &'r PgRow) -> DbResult<Self> {
-        Ok(SwapSecrets {
-            user_deposit_private_key: row.try_get("user_deposit_private_key")?,
-            mm_deposit_private_key: row.try_get("mm_deposit_private_key")?,
         })
     }
 }

@@ -1,16 +1,24 @@
-use crate::{db::Database, Result};
+use crate::{
+    api::swaps::{CreateSwapRequest, CreateSwapResponse, SwapResponse},
+    config::Settings,
+    db::Database,
+    services::SwapManager,
+    Result,
+};
 use axum::{
-    extract::ws::{WebSocket, WebSocketUpgrade},
+    extract::{ws::{WebSocket, WebSocketUpgrade}, Path, State},
+    http::StatusCode,
     response::IntoResponse,
-    routing::{get, Router},
+    routing::{get, post, Router},
     Json,
 };
 use clap::Parser;
+use otc_chains::{bitcoin::BitcoinChain, ethereum::EthereumChain, ChainRegistry};
 use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
-use sqlx::PgPool;
-use std::net::{IpAddr, SocketAddr};
+use std::{net::{IpAddr, SocketAddr}, sync::Arc};
 use tracing::info;
+use uuid::Uuid;
 
 #[derive(Parser, Debug)]
 #[command(name = "otc-server")]
@@ -32,6 +40,7 @@ pub struct Args {
 #[derive(Clone)]
 pub struct AppState {
     pub db: Database,
+    pub swap_manager: Arc<SwapManager>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -43,20 +52,61 @@ struct Status {
 pub async fn run_server(addr: SocketAddr, database_url: &str) -> Result<()> {
     info!("Starting OTC server...");
     
-    info!("Connecting to database...");
-    let pool = PgPool::connect(database_url)
+    // Load configuration
+    let settings = Arc::new(Settings::load().map_err(|e| crate::Error::DatabaseInit { 
+        source: crate::db::DbError::InvalidData { 
+            message: format!("Failed to load settings: {}", e) 
+        }
+    })?);
+    
+    let db = Database::connect(database_url)
         .await
-        .context(crate::DatabaseConnectionSnafu)?;
+        .context(crate::DatabaseInitSnafu)?;
     
-    info!("Checking database schema...");
-    initialize_database(&pool).await?;
+    info!("Initializing chain registry...");
+    let mut chain_registry = ChainRegistry::new();
     
-    let db = Database::new(pool);
-    let state = AppState { db };
+    // Initialize Bitcoin chain (mock for now)
+    let bitcoin_chain = BitcoinChain::new(
+        "http://localhost:8332",
+        bitcoincore_rpc::Auth::UserPass("user".to_string(), "pass".to_string()),
+        bitcoin::Network::Testnet,
+    ).map_err(|e| crate::Error::DatabaseInit { 
+        source: crate::db::DbError::InvalidData { 
+            message: format!("Failed to initialize Bitcoin chain: {}", e) 
+        }
+    })?;
+    chain_registry.register(otc_models::ChainType::Bitcoin, Arc::new(bitcoin_chain));
+    
+    // Initialize Ethereum chain (mock for now)
+    let ethereum_chain = EthereumChain::new(
+        "http://localhost:8545",
+        1, // mainnet chain ID
+    ).await.map_err(|e| crate::Error::DatabaseInit { 
+        source: crate::db::DbError::InvalidData { 
+            message: format!("Failed to initialize Ethereum chain: {}", e) 
+        }
+    })?;
+    chain_registry.register(otc_models::ChainType::Ethereum, Arc::new(ethereum_chain));
+    
+    let chain_registry = Arc::new(chain_registry);
+    
+    info!("Initializing services...");
+    let swap_manager = Arc::new(SwapManager::new(db.clone(), settings, chain_registry));
+    
+    let state = AppState { 
+        db,
+        swap_manager,
+    };
     
     let app = Router::new()
+        // Health check
         .route("/status", get(status_handler))
+        // WebSocket endpoint
         .route("/ws", get(websocket_handler))
+        // API endpoints
+        .route("/api/v1/swaps", post(create_swap))
+        .route("/api/v1/swaps/:id", get(get_swap))
         .with_state(state);
     
     info!("Listening on {}", addr);
@@ -112,29 +162,44 @@ async fn handle_socket(mut socket: WebSocket) {
     }
 }
 
-async fn initialize_database(db: &PgPool) -> Result<()> {
-    // Check if tables exist
-    let tables_exist: bool = sqlx::query_scalar(
-        "SELECT EXISTS (
-            SELECT FROM information_schema.tables 
-            WHERE table_schema = 'public' 
-            AND table_name = 'quotes'
-        )"
-    )
-    .fetch_one(db)
-    .await
-    .context(crate::DatabaseQuerySnafu)?;
+async fn create_swap(
+    State(state): State<AppState>,
+    Json(request): Json<CreateSwapRequest>,
+) -> Result<Json<CreateSwapResponse>, (StatusCode, String)> {
+    state.swap_manager
+        .create_swap(request)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            let status = match e {
+                crate::services::swap_manager::SwapError::QuoteNotFound { .. } => StatusCode::NOT_FOUND,
+                crate::services::swap_manager::SwapError::QuoteExpired => StatusCode::BAD_REQUEST,
+                crate::services::swap_manager::SwapError::MarketMakerMismatch { .. } => StatusCode::BAD_REQUEST,
+                crate::services::swap_manager::SwapError::MarketMakerRejected => StatusCode::CONFLICT,
+                crate::services::swap_manager::SwapError::Database { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+                crate::services::swap_manager::SwapError::ChainNotSupported { .. } => StatusCode::BAD_REQUEST,
+                crate::services::swap_manager::SwapError::WalletDerivation { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (status, e.to_string())
+        })
+}
 
-    if !tables_exist {
-        info!("Creating database schema...");
-        sqlx::query(include_str!("db/schema.sql"))
-            .execute(db)
-            .await
-            .context(crate::DatabaseQuerySnafu)?;
-        info!("Database schema created successfully");
-    } else {
-        info!("Database schema already exists");
-    }
-
-    Ok(())
+async fn get_swap(
+    State(state): State<AppState>,
+    Path(swap_id): Path<Uuid>,
+) -> Result<Json<SwapResponse>, (StatusCode, String)> {
+    state.swap_manager
+        .get_swap(swap_id)
+        .await
+        .map(Json)
+        .map_err(|e| {
+            let status = match e {
+                crate::services::swap_manager::SwapError::QuoteNotFound { .. } => StatusCode::NOT_FOUND,
+                crate::services::swap_manager::SwapError::Database { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+                crate::services::swap_manager::SwapError::ChainNotSupported { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+                crate::services::swap_manager::SwapError::WalletDerivation { .. } => StatusCode::INTERNAL_SERVER_ERROR,
+                _ => StatusCode::INTERNAL_SERVER_ERROR,
+            };
+            (status, e.to_string())
+        })
 }

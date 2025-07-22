@@ -24,7 +24,19 @@ sqlx = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 otc-models = { path = "../../crates/otc-models" }
+otc-chains = { path = "../../crates/otc-chains" }
 alloy = { workspace = true }
+config = { workspace = true }
+zeroize = { workspace = true }
+secrecy = { workspace = true }
+hex = { workspace = true }
+getrandom = { workspace = true }
+toml = { workspace = true }
+bitcoin = { workspace = true }
+bitcoincore-rpc = { workspace = true }
 
 [dev-dependencies]
 sqlx = { workspace = true }
+getrandom = { workspace = true }
+bitcoin = { workspace = true }
+bitcoincore-rpc = { workspace = true }

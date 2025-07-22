@@ -1,5 +1,5 @@
+use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
-use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 use otc_models::ChainType;
 use uuid::Uuid;
@@ -26,7 +26,7 @@ pub enum MMRequest {
         /// Chain for the deposit
         deposit_chain: ChainType,
         /// Expected amount to deposit
-        deposit_amount: Decimal,
+        deposit_amount: U256,
         /// Proof that user is real - their deposit tx hash
         user_tx_hash: String,
         /// Deadline for MM to deposit
@@ -76,7 +76,7 @@ pub enum MMResponse {
         /// Transaction hash of MM's deposit
         tx_hash: String,
         /// Actual amount sent (in case of rounding)
-        amount_sent: Decimal,
+        amount_sent: U256,
         timestamp: DateTime<Utc>,
     },
     

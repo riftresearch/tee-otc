@@ -71,18 +71,20 @@ pub fn u256_from_db(s: &str) -> DbResult<U256> {
     })
 }
 
-pub fn currency_to_db(currency: &Currency) -> DbResult<(String, serde_json::Value, String)> {
+pub fn currency_to_db(currency: &Currency) -> DbResult<(String, serde_json::Value, String, u8)> {
     let chain = chain_type_to_db(&currency.chain).to_string();
     let token = token_identifier_to_json(&currency.token)?;
     let amount = u256_to_db(&currency.amount);
-    Ok((chain, token, amount))
+    let decimals = currency.decimals;
+    Ok((chain, token, amount, decimals))
 }
 
-pub fn currency_from_db(chain: String, token: serde_json::Value, amount: String) -> DbResult<Currency> {
+pub fn currency_from_db(chain: String, token: serde_json::Value, amount: String, decimals: u8) -> DbResult<Currency> {
     Ok(Currency {
         chain: chain_type_from_db(&chain)?,
         token: token_identifier_from_json(token)?,
         amount: u256_from_db(&amount)?,
+        decimals: decimals,
     })
 }
 
@@ -112,13 +114,15 @@ mod tests {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
             amount: U256::from(100),
+            decimals: 8,
         };
-        let (chain, token, amount) = currency_to_db(&currency).unwrap();
+        let (chain, token, amount, decimals) = currency_to_db(&currency).unwrap();
         assert_eq!(chain, "bitcoin");
         assert_eq!(token, serde_json::json!({ "type": "Native" }));
         assert_eq!(amount, "100");
+        assert_eq!(decimals, 8);
 
-        let currency2 = currency_from_db(chain, token, amount).unwrap();
+        let currency2 = currency_from_db(chain, token, amount, decimals).unwrap();
         assert_eq!(currency2.chain, currency.chain);
         assert_eq!(currency2.token, currency.token);
         assert_eq!(currency2.amount, currency.amount); 

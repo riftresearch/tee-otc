@@ -23,5 +23,8 @@ bitcoincore-rpc = "0.19"
 alloy = { workspace = true }
 
 # Common
-rust_decimal = { version = "1.35", features = ["serde-with-str"] }
 rand = "0.8"
+hex = { workspace = true }
+sha2 = "0.10"
+hkdf = "0.12"
+getrandom = { workspace = true }

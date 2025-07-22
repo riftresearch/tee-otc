@@ -1,3 +1,4 @@
+use alloy::primitives::U256;
 use snafu::prelude::*;
 
 #[derive(Debug, Snafu)]
@@ -16,8 +17,8 @@ pub enum Error {
     
     #[snafu(display("Insufficient balance: required {required}, available {available}"))]
     InsufficientBalance {
-        required: rust_decimal::Decimal,
-        available: rust_decimal::Decimal,
+        required: U256,
+        available: U256,
     },
     
     #[snafu(display("Chain not supported: {chain}"))]
