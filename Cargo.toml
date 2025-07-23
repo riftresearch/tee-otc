@@ -5,7 +5,8 @@ members = [
     "crates/otc-models",
     "crates/otc-chains",
     "crates/otc-mm-protocol",
-    "bin/rfq-server"
+    "bin/rfq-server",
+    "bin/mm-server"
 ]
 
 [workspace.package]
@@ -41,6 +42,7 @@ getrandom = "0.2"
 toml = "0.8"
 bitcoin = "0.32"
 bitcoincore-rpc = "0.19"
+tokio-tungstenite = "0.21"
 
 
 [profile.dev.package.sqlx-macros]

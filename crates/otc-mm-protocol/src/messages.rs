@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use otc_models::ChainType;
 use uuid::Uuid;
+use otc_models::TokenIdentifier;
 
 /// Messages sent from OTC server to Market Maker
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +49,17 @@ pub enum MMRequest {
     /// Request MM status/health check
     Ping {
         request_id: Uuid,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Request a quote for a specific swap
+    GetQuote {
+        request_id: Uuid,
+        from_chain: ChainType,
+        from_token: TokenIdentifier,
+        from_amount: U256,
+        to_chain: ChainType,
+        to_token: TokenIdentifier,
         timestamp: DateTime<Utc>,
     },
 }
@@ -102,6 +114,15 @@ pub enum MMResponse {
         request_id: Uuid,
         error_code: MMErrorCode,
         message: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Response to GetQuote
+    QuoteResponse {
+        request_id: Uuid,
+        quote_id: Uuid,
+        to_amount: U256,
+        expires_at: DateTime<Utc>,
         timestamp: DateTime<Utc>,
     },
 }

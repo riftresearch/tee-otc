@@ -1,16 +1,20 @@
 use std::net::SocketAddr;
-use rfq_server::{run_server, Args};
+use std::time::Duration as StdDuration;
+use mm_server::{run_client, Args};
 use snafu::prelude::*;
-use tracing::Level;
+use tokio::time::sleep;
+use tracing::{error, Level};
 use tracing_subscriber::FmtSubscriber;
 use clap::Parser;
+use url::Url;
 
 #[derive(Debug, Snafu)]
 enum MainError {
     #[snafu(display("Failed to set global subscriber"))]
     SetGlobalSubscriber { source: tracing::subscriber::SetGlobalDefaultError },
+    
     #[snafu(display("Server error: {source}"))]
-    Server { source: rfq_server::Error },
+    Server { source: mm_server::Error },
 }
 
 #[tokio::main]
@@ -23,10 +27,19 @@ async fn main() -> Result<(), MainError> {
     
     tracing::subscriber::set_global_default(subscriber)
         .context(SetGlobalSubscriberSnafu)?;
-    
-    let addr = SocketAddr::from((args.host, args.port));
-    
-    run_server(addr).await.context(ServerSnafu)?;
+
+
+    let url = Url::parse(&args.rfq_url).expect("Invalid URL");
+
+    loop {
+        match run_client(&url).await {
+            Ok(_) => break,
+            Err(e) => {
+                error!("Connection error: {}, retrying...", e);
+                sleep(StdDuration::from_secs(5)).await;  // Simple backoff
+            }
+        }
+    }
     
     Ok(())
 }

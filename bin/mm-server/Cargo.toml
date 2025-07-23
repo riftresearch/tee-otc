@@ -1,5 +1,5 @@
 [package]
-name = "rfq-server"
+name = "mm-server"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "rfq-server"
+name = "mm-server"
 path = "src/main.rs"
 
 [lib]
@@ -15,7 +15,8 @@ path = "src/lib.rs"
 
 [dependencies]
 tokio = { workspace = true }
-axum = { workspace = true, features = ["ws"] }
+tokio-tungstenite = { workspace = true }
+futures = "0.3"
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 otc-mm-protocol = { workspace = true }
@@ -26,7 +27,9 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
-tower-http = { version = "0.5", features = ["trace"] }
-futures = "0.3"
+url = "2.5" 
 snafu = { workspace = true }
-crossbeam-channel = "0.5"
+rand = "0.8"
+lazy_static = "1.5.0"
+anyhow = "1.0"
+async-trait = "0.1.86"
