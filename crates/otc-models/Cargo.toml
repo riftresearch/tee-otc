@@ -13,6 +13,9 @@ chrono = { workspace = true }
 alloy = { workspace = true }
 zeroize = { workspace = true }
 secrecy = { workspace = true }
+rand = "0.8"
+hex = { workspace = true }
+sha2 = "0.10"
 
 [dev-dependencies]
 serde_json = { workspace = true }
