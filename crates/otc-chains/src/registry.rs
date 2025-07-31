@@ -8,7 +8,7 @@ pub struct ChainRegistry {
 }
 
 impl ChainRegistry {
-    pub fn new() -> Self {
+    #[must_use] pub fn new() -> Self {
         Self {
             chains: HashMap::new(),
         }
@@ -18,11 +18,11 @@ impl ChainRegistry {
         self.chains.insert(chain_type, implementation);
     }
     
-    pub fn get(&self, chain_type: &ChainType) -> Option<Arc<dyn ChainOperations>> {
+    #[must_use] pub fn get(&self, chain_type: &ChainType) -> Option<Arc<dyn ChainOperations>> {
         self.chains.get(chain_type).cloned()
     }
     
-    pub fn supported_chains(&self) -> Vec<ChainType> {
+    #[must_use] pub fn supported_chains(&self) -> Vec<ChainType> {
         self.chains.keys().copied().collect()
     }
 }

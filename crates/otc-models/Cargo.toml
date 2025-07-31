@@ -1,6 +1,6 @@
 [package]
 name = "otc-models"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -13,9 +13,14 @@ chrono = { workspace = true }
 alloy = { workspace = true }
 zeroize = { workspace = true }
 secrecy = { workspace = true }
-rand = "0.8"
-hex = { workspace = true }
-sha2 = "0.10"
+sqlx = { workspace = true, optional = true }
+snafu = { workspace = true }
+argon2 = { workspace = true }
+serde_json = {workspace = true}
+
+[features]
+default = []
+sqlx = ["dep:sqlx"]
 
 [dev-dependencies]
 serde_json = { workspace = true }

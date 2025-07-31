@@ -26,30 +26,18 @@ stop-db: ## Stop development database
 clean-db: ## Stop and remove database volumes
 	@docker compose -f compose.test-db.yml down -v
 
-test-clean: build-test ## Same as test but will clean up resources on success/failure
+test-clean: build-test | cache-devnet ## Same as test but will clean up resources on success/failure
 	@bash -c 'set -e; \
 	trap "echo \"Cleaning up...\"; $(MAKE) clean-db" EXIT; \
 	$(MAKE) dev-db; \
 	cargo nextest run'
 
-test: build-test | dev-db ## Run all tests
+test: build-test | ## Run all tests, assumes devnet has been cached and database is running
 	@cargo nextest run
 
 build-test: ## Build the project for testing
 	@cargo build --tests
 
-
-build: ## Build the project
-	@cargo build
-
-run: ## Run the OTC server
-	@cargo run --bin otc-server
-
-migrate: ## Run database migrations (requires running database)
-	@sqlx migrate run --database-url $(DATABASE_URL)
-
-migrate-revert: ## Revert last migration
-	@sqlx migrate revert --database-url $(DATABASE_URL)
-
-migrate-info: ## Show migration status
-	@sqlx migrate info --database-url $(DATABASE_URL)
+cache-devnet: build-test ## Cache the devnet
+	cargo run --bin devnet -- cache
+	@echo "Devnet cached"

@@ -1,5 +1,6 @@
 use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
+use otc_models::Quote;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -7,10 +8,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Deserialize)]
 pub struct CreateSwapRequest {
     /// The quote ID to create a swap from
-    pub quote_id: Uuid,
-    
-    /// Market maker identifier (must match the quote)
-    pub market_maker_identifier: String,
+    pub quote: Quote,
     
     /// User's destination address for receiving funds
     pub user_destination_address: String,

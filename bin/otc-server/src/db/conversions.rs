@@ -1,77 +1,48 @@
 use alloy::primitives::U256;
-use otc_models::{ChainType, SwapStatus, TokenIdentifier, Currency};
+use otc_models::{ChainType, TokenIdentifier, Currency, UserDepositStatus, MMDepositStatus, SettlementStatus};
 use serde_json;
-use super::{DbError, DbResult};
+use crate::error::{OtcServerError, OtcServerResult};
 
-pub fn chain_type_to_db(chain: &ChainType) -> &'static str {
+#[must_use] pub fn chain_type_to_db(chain: &ChainType) -> &'static str {
     match chain {
         ChainType::Bitcoin => "bitcoin",
         ChainType::Ethereum => "ethereum",
     }
 }
 
-pub fn chain_type_from_db(s: &str) -> DbResult<ChainType> {
+pub fn chain_type_from_db(s: &str) -> OtcServerResult<ChainType> {
     match s {
         "bitcoin" => Ok(ChainType::Bitcoin),
         "ethereum" => Ok(ChainType::Ethereum),
-        _ => Err(DbError::InvalidData {
-            message: format!("Invalid chain type: {}", s),
+        _ => Err(OtcServerError::InvalidData {
+            message: format!("Invalid chain type: {s}"),
         }),
     }
 }
 
-pub fn swap_status_to_db(status: &SwapStatus) -> &'static str {
-    match status {
-        SwapStatus::QuoteValidation => "quote_validation",
-        SwapStatus::QuoteRejected => "quote_rejected",
-        SwapStatus::WaitingUserDeposit => "waiting_user_deposit",
-        SwapStatus::WaitingMMDeposit => "waiting_mm_deposit",
-        SwapStatus::WaitingConfirmations => "waiting_confirmations",
-        SwapStatus::Settling => "settling",
-        SwapStatus::Completed => "completed",
-        SwapStatus::Refunding => "refunding",
-    }
-}
-
-pub fn swap_status_from_db(s: &str) -> DbResult<SwapStatus> {
-    match s {
-        "quote_validation" => Ok(SwapStatus::QuoteValidation),
-        "quote_rejected" => Ok(SwapStatus::QuoteRejected),
-        "waiting_user_deposit" => Ok(SwapStatus::WaitingUserDeposit),
-        "waiting_mm_deposit" => Ok(SwapStatus::WaitingMMDeposit),
-        "waiting_confirmations" => Ok(SwapStatus::WaitingConfirmations),
-        "settling" => Ok(SwapStatus::Settling),
-        "completed" => Ok(SwapStatus::Completed),
-        "refunding" => Ok(SwapStatus::Refunding),
-        _ => Err(DbError::InvalidData {
-            message: format!("Invalid swap status: {}", s),
-        }),
-    }
-}
-
-pub fn token_identifier_to_json(token: &TokenIdentifier) -> DbResult<serde_json::Value> {
-    serde_json::to_value(token).map_err(|e| DbError::InvalidData {
-        message: format!("Failed to serialize token identifier: {}", e),
+pub fn token_identifier_to_json(token: &TokenIdentifier) -> OtcServerResult<serde_json::Value> {
+    serde_json::to_value(token).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to serialize token identifier: {e}"),
     })
 }
 
-pub fn token_identifier_from_json(value: serde_json::Value) -> DbResult<TokenIdentifier> {
-    serde_json::from_value(value).map_err(|e| DbError::InvalidData {
-        message: format!("Failed to deserialize token identifier: {}", e),
+pub fn token_identifier_from_json(value: serde_json::Value) -> OtcServerResult<TokenIdentifier> {
+    serde_json::from_value(value).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to deserialize token identifier: {e}"),
     })
 }
 
-pub fn u256_to_db(value: &U256) -> String {
+#[must_use] pub fn u256_to_db(value: &U256) -> String {
     value.to_string()
 }
 
-pub fn u256_from_db(s: &str) -> DbResult<U256> {
-    U256::from_str_radix(s, 10).map_err(|_| DbError::InvalidData {
-        message: format!("Invalid U256 value: {}", s),
+pub fn u256_from_db(s: &str) -> OtcServerResult<U256> {
+    U256::from_str_radix(s, 10).map_err(|_| OtcServerError::InvalidData {
+        message: format!("Invalid U256 value: {s}"),
     })
 }
 
-pub fn currency_to_db(currency: &Currency) -> DbResult<(String, serde_json::Value, String, u8)> {
+pub fn currency_to_db(currency: &Currency) -> OtcServerResult<(String, serde_json::Value, String, u8)> {
     let chain = chain_type_to_db(&currency.chain).to_string();
     let token = token_identifier_to_json(&currency.token)?;
     let amount = u256_to_db(&currency.amount);
@@ -79,12 +50,48 @@ pub fn currency_to_db(currency: &Currency) -> DbResult<(String, serde_json::Valu
     Ok((chain, token, amount, decimals))
 }
 
-pub fn currency_from_db(chain: String, token: serde_json::Value, amount: String, decimals: u8) -> DbResult<Currency> {
+pub fn currency_from_db(chain: String, token: serde_json::Value, amount: String, decimals: u8) -> OtcServerResult<Currency> {
     Ok(Currency {
         chain: chain_type_from_db(&chain)?,
         token: token_identifier_from_json(token)?,
         amount: u256_from_db(&amount)?,
-        decimals: decimals,
+        decimals,
+    })
+}
+
+pub fn user_deposit_status_to_json(status: &UserDepositStatus) -> OtcServerResult<serde_json::Value> {
+    serde_json::to_value(status).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to serialize user deposit status: {e}"),
+    })
+}
+
+pub fn user_deposit_status_from_json(value: serde_json::Value) -> OtcServerResult<UserDepositStatus> {
+    serde_json::from_value(value).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to deserialize user deposit status: {e}"),
+    })
+}
+
+pub fn mm_deposit_status_to_json(status: &MMDepositStatus) -> OtcServerResult<serde_json::Value> {
+    serde_json::to_value(status).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to serialize MM deposit status: {e}"),
+    })
+}
+
+pub fn mm_deposit_status_from_json(value: serde_json::Value) -> OtcServerResult<MMDepositStatus> {
+    serde_json::from_value(value).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to deserialize MM deposit status: {e}"),
+    })
+}
+
+pub fn settlement_status_to_json(status: &SettlementStatus) -> OtcServerResult<serde_json::Value> {
+    serde_json::to_value(status).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to serialize settlement status: {e}"),
+    })
+}
+
+pub fn settlement_status_from_json(value: serde_json::Value) -> OtcServerResult<SettlementStatus> {
+    serde_json::from_value(value).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to deserialize settlement status: {e}"),
     })
 }
 
@@ -102,11 +109,6 @@ mod tests {
         assert!(chain_type_from_db("invalid").is_err());
     }
     
-    #[test]
-    fn test_swap_status_conversion() {
-        assert_eq!(swap_status_to_db(&SwapStatus::Completed), "completed");
-        assert_eq!(swap_status_from_db("completed").unwrap(), SwapStatus::Completed);
-    }
 
     #[test]
     fn test_currency_conversion() {

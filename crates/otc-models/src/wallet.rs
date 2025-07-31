@@ -11,7 +11,7 @@ pub struct Wallet {
 }
 
 impl Wallet {
-    pub fn new(address: String, private_key: String) -> Self {
+    #[must_use] pub fn new(address: String, private_key: String) -> Self {
         Self {
             address,
             private_key: SecretString::from(private_key),
@@ -19,7 +19,7 @@ impl Wallet {
     }
     
     /// Get the private key. Use with extreme caution.
-    pub fn private_key(&self) -> &str {
+    #[must_use] pub fn private_key(&self) -> &str {
         self.private_key.expose_secret()
     }
 }
@@ -69,7 +69,7 @@ mod tests {
             "private_key_12345".to_string(),
         );
         
-        let debug_str = format!("{:?}", wallet);
+        let debug_str = format!("{wallet:?}");
         assert!(debug_str.contains("Wallet"));
         assert!(debug_str.contains("0x1234567890123456789012345678901234567890"));
         assert!(debug_str.contains(".."));  // finish_non_exhaustive adds ".."

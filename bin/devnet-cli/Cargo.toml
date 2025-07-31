@@ -1,0 +1,19 @@
+[package]
+name = "devnet-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "devnet"
+path = "src/main.rs"
+
+[dependencies]
+clap = {workspace = true}
+devnet = { workspace = true}
+tokio = { workspace = true}
+alloy = {workspace = true}
+tracing-subscriber = {workspace = true}
+snafu = {workspace = true}
+tracing = {workspace = true}
+common = {workspace = true}

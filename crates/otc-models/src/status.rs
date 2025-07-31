@@ -2,13 +2,15 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "sqlx", derive(sqlx::Type))]
+#[cfg_attr(feature = "sqlx", sqlx(type_name = "swap_status", rename_all = "snake_case"))]
 pub enum SwapStatus {
-    QuoteValidation,      // Checking with MM
-    QuoteRejected,        // MM won't fill
-    WaitingUserDeposit,   // Wallets created, waiting for user
-    WaitingMMDeposit,     // User deposited, notified MM
-    WaitingConfirmations, // Both deposited, waiting for confirms
-    Settling,             // Sending funds to user
-    Completed,            // User withdrawal tx broadcast
-    Refunding,            // Something went wrong, refunding user
+    WaitingUserDepositInitiated,
+    WaitingUserDepositConfirmed,
+    WaitingMMDepositInitiated,
+    WaitingMMDepositConfirmed,
+    Settled,
+    RefundingUser,
+    RefundingMM,
+    Failed,
 }

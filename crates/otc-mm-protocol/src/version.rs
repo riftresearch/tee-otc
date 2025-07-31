@@ -34,7 +34,7 @@ impl Default for VersionInfo {
 }
 
 /// Check if a version is compatible
-pub fn is_version_compatible(version: &str) -> bool {
+#[must_use] pub fn is_version_compatible(version: &str) -> bool {
     // Simple major version check for now
     // In production, use semver crate for proper version comparison
     version.starts_with("1.")

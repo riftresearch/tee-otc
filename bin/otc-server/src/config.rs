@@ -56,7 +56,7 @@ impl Settings {
         // Generate a random 64-byte master key
         let mut key_bytes = [0u8; 64];
         getrandom::getrandom(&mut key_bytes).expect("Failed to generate random bytes");
-        let master_key = hex::encode(&key_bytes);
+        let master_key = alloy::hex::encode(key_bytes);
         key_bytes.zeroize();
         
         let default = DefaultSettings { master_key };
@@ -70,8 +70,8 @@ impl Settings {
         Ok(())
     }
     
-    pub fn master_key_bytes(&self) -> Vec<u8> {
-        hex::decode(self.master_key.expose_secret())
+    #[must_use] pub fn master_key_bytes(&self) -> Vec<u8> {
+        alloy::hex::decode(self.master_key.expose_secret())
             .expect("Master key should be valid hex")
     }
 }

@@ -10,5 +10,5 @@ pub enum ChainType {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum TxStatus {
     NotFound,
-    Confirmed(u32), // 0 = in mempool, 1+ = confirmed blocks
+    Confirmed(u64), // 0 = in mempool, 1+ = confirmed blocks
 }

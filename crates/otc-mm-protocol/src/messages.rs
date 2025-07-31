@@ -4,6 +4,14 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use otc_models::{ChainType, TokenIdentifier};
 
+/// Response from OTC server confirming connection
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Connected {
+    pub session_id: Uuid,
+    pub server_version: String,
+    pub timestamp: DateTime<Utc>,
+}
+
 /// Messages sent from OTC server to Market Maker
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

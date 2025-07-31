@@ -1,31 +1,47 @@
 use crate::{ ChainOperations, Result, key_derivation};
 use alloy::primitives::{Address, U256};
-use alloy::providers::{Provider, ProviderBuilder};
+use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::signers::local::PrivateKeySigner;
-use alloy::network::{TransactionBuilder, EthereumWallet};
-use alloy::rpc::types::TransactionRequest;
+use alloy::sol;
 use async_trait::async_trait;
-use otc_models::{DepositInfo, TxStatus, Wallet};
+use evm_token_indexer_client::TokenIndexerClient;
+use otc_models::{Currency, TokenIdentifier, TransferInfo, TxStatus, Wallet};
 use std::str::FromStr;
-use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info};
 
+
+sol! {
+    event Transfer(address indexed from, address indexed to, uint256 value);
+}
+
+
+const ALLOWED_TOKEN: &str = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf";
+
 pub struct EthereumChain {
-    provider: Arc<dyn Provider<alloy::network::Ethereum>>,
+    provider: DynProvider,
+    evm_indexer_client: TokenIndexerClient,
     chain_id: u64,
+    allowed_token: Address,
 }
 
 impl EthereumChain {
-    pub async fn new(rpc_url: &str, chain_id: u64) -> Result<Self> {
+    pub async fn new(rpc_url: &str, evm_indexer_url: &str, chain_id: u64) -> Result<Self> {
         let provider = ProviderBuilder::new()
             .connect_http(rpc_url.parse().map_err(|_| crate::Error::Serialization {
                 message: "Invalid RPC URL".to_string(),
-            })?);
-            
+            })?).erased();
+
+        let evm_indexer_client = TokenIndexerClient::new(evm_indexer_url)?;
+        let allowed_token = Address::from_str(ALLOWED_TOKEN).map_err(|_| crate::Error::Serialization {
+            message: "Invalid allowed token address".to_string(),
+        })?;
+
         Ok(Self {
-            provider: Arc::new(provider),
+            provider,
+            evm_indexer_client,
             chain_id,
+            allowed_token,
         })
     }
 }
@@ -46,7 +62,7 @@ impl ChainOperations for EthereumChain {
         
         info!("Created new Ethereum wallet: {}", address);
         
-        let wallet = Wallet::new(format!("{:?}", address), format!("0x{}", private_key));
+        let wallet = Wallet::new(format!("{address:?}"), format!("0x{private_key}"));
         Ok((wallet, salt))
     }
     
@@ -65,116 +81,141 @@ impl ChainOperations for EthereumChain {
             })?;
         
         let address = format!("{:?}", signer.address());
-        let private_key = format!("0x{}", hex::encode(private_key_bytes));
+        let private_key = format!("0x{}", alloy::hex::encode(private_key_bytes));
         
         debug!("Derived Ethereum wallet: {}", address);
         
         Ok(Wallet::new(address, private_key))
     }
-    
-    async fn get_balance(&self, address: &str) -> Result<U256> {
-        let addr = Address::from_str(address)
-            .map_err(|_| crate::Error::InvalidAddress)?;
-        
-        let balance = self.provider
-            .get_balance(addr)
-            .await
-            .map_err(|_| crate::Error::Rpc {
-                message: "Failed to get balance".to_string(),
-            })?;
-        
-        debug!("Balance for {}: {} wei", address, balance);
-        Ok(balance)
-    }
-    
-    async fn get_tx_status(&self, txid: &str) -> Result<TxStatus> {
-        let txid = txid.parse()
-            .map_err(|_| crate::Error::Serialization {
-                message: "Invalid transaction hash".to_string(),
-            })?;
-        
-        // Get transaction receipt
-        match self.provider.get_transaction_receipt(txid).await {
-            Ok(Some(receipt)) => {
-                // Get current block number
-                let current_block = self.provider
-                    .get_block_number()
-                    .await
-                    .map_err(|_| crate::Error::Rpc {
-                        message: "Failed to get block number".to_string(),
-                    })?;
-                
-                let confirmations = current_block
-                    .saturating_sub(receipt.block_number.unwrap_or_default()) as u32;
-                
-                Ok(TxStatus::Confirmed(confirmations))
-            }
-            Ok(None) => {
-                // Check if transaction is in mempool
-                match self.provider.get_transaction_by_hash(txid).await {
-                    Ok(Some(_)) => Ok(TxStatus::Confirmed(0)), // In mempool
-                    _ => Ok(TxStatus::NotFound),
-                }
-            }
-            Err(_) => Ok(TxStatus::NotFound),
+
+
+    async fn get_tx_status(&self, tx_hash: &str) -> Result<TxStatus> {
+        let tx_hash_parsed = tx_hash.parse().map_err(|_| crate::Error::Serialization {
+            message: "Invalid transaction hash".to_string(),
+        })?;
+        let tx = self.provider.get_transaction_receipt(tx_hash_parsed).await?;
+
+        if tx.is_some() {
+            let current_block_height = self.provider.get_block_number().await?;
+            Ok(TxStatus::Confirmed(current_block_height - tx.unwrap().block_number.unwrap()))
+        } else {
+            Ok(TxStatus::NotFound)
         }
     }
-    
-    async fn check_deposit(
+    async fn search_for_transfer(
         &self,
         address: &str,
-        _expected_amount: U256,
-        _min_confirmations: u32,
-    ) -> Result<Option<DepositInfo>> {
-        // In production, would:
-        // 1. Get recent blocks
-        // 2. Filter for transactions to this address
-        // 3. Check amounts and confirmations
-        
-        debug!("Checking deposits for address: {}", address);
-        Ok(None)
-    }
-    
-    async fn send_funds(
-        &self,
-        private_key: &str,
-        to_address: &str,
-        amount: U256,
-    ) -> Result<String> {
-        let signer = PrivateKeySigner::from_str(private_key.trim_start_matches("0x"))
-            .map_err(|_| crate::Error::Serialization {
-                message: "Invalid private key".to_string(),
-            })?;
-            
-        let to = Address::from_str(to_address)
-            .map_err(|_| crate::Error::InvalidAddress)?;
-        
-        let _wallet = EthereumWallet::from(signer);
-        
-        // Create transaction
-        let _tx = TransactionRequest::default()
-            .with_to(to)
-            .with_value(amount)
-            .with_chain_id(self.chain_id);
-        
-        // In production, would:
-        // 1. Estimate gas
-        // 2. Set gas price
-        // 3. Sign and send transaction
-        
-        info!("Sending {} wei to {}", amount, to_address);
-        Ok("0x0000000000000000000000000000000000000000000000000000000000000000".to_string())
+        currency: &Currency,
+        embedded_nonce: Option<[u8; 16]>,
+        _from_block_height: Option<u64>
+    ) -> Result<Option<TransferInfo>> {
+        let token_address = match &currency.token {
+            TokenIdentifier::Address(address) => address,
+            TokenIdentifier::Native => return Ok(None),
+        };
+        let token_address = Address::from_str(&token_address).map_err(|_| crate::Error::Serialization {
+            message: "Invalid token address".to_string(),
+        })?;
+
+        if token_address != self.allowed_token {
+            debug!("Token address {} is not allowed", token_address);
+            return Ok(None);
+        }
+
+        let to_address = Address::from_str(address).map_err(|_| crate::Error::Serialization {
+            message: "Invalid address".to_string(),
+        })?;
+
+        let transfer_hint = self.get_transfer(&to_address, &currency.amount, embedded_nonce).await?;
+        if transfer_hint.is_none() {
+            return Ok(None);
+        }
+
+        Ok(Some(transfer_hint.unwrap()))
     }
     
     fn validate_address(&self, address: &str) -> bool {
         Address::from_str(address).is_ok()
     }
     
-    fn minimum_confirmations(&self) -> u32 {
-        12 // Standard for Ethereum
+    fn minimum_block_confirmations(&self) -> u32 {
+        4 // Standard for Ethereum
     }
     
     fn estimated_block_time(&self) -> Duration {
         Duration::from_secs(12) // ~12 seconds
     }
 }
+
+impl EthereumChain {
+    // Note this function's response is safe to trust, b/c it will validate the responses from the untrusted evm_indexer_client
+    async fn get_transfer(
+        &self,
+        address: &Address,
+        amount: &U256,
+        embedded_nonce: Option<[u8; 16]>,
+    ) -> Result<Option<TransferInfo>> {
+        // use the untrusted evm_indexer_client to get the transfer hint - this will only return 50 latest transfers (TODO: how to handle this?)
+        let transfers = self.evm_indexer_client.get_transfers_to(*address, None, Some(*amount)).await?;
+        if transfers.transfers.len() == 0 {
+            return Ok(None);
+        }
+
+        let mut transfer_hint: Option<TransferInfo> = None;
+        for transfer in transfers.transfers {
+            let transaction_receipt = self.provider.get_transaction_receipt(transfer.transaction_hash).await?;
+            if transaction_receipt.is_none() { 
+                continue;
+            }
+            let transaction_receipt = transaction_receipt.unwrap();
+            if !transaction_receipt.status() {
+                continue;
+            }
+
+            let transfer_log = transaction_receipt.decoded_log::<Transfer>();
+            if transfer_log.is_none() {
+                continue;
+            }
+            let transfer_log = transfer_log.unwrap();
+            // validate the recipient
+            if transfer_log.to != *address {
+                continue;
+            }
+            // validate the amount
+            if transfer_log.value < *amount {
+                continue;
+            }
+            // validate the embedded nonce
+            if let Some(embedded_nonce) = embedded_nonce {
+                let transaction = self.provider.get_raw_transaction_by_hash(transfer.transaction_hash).await?;
+                if transaction.is_none() {
+                    continue;
+                }
+                let transaction = transaction.unwrap();
+                let tx_hex = alloy::hex::encode(transaction);
+                let nonce_hex = alloy::hex::encode(embedded_nonce);
+                if !tx_hex.contains(&nonce_hex) {
+                    continue;
+                }
+            }
+            // get the current block height
+            let current_block_height = self.provider.get_block_number().await?;
+            let confirmations = current_block_height - transaction_receipt.block_number.unwrap();
+
+            // only return the transfer if it has more confirmations than the previous transfer hint
+            if transfer_hint.is_some() && transfer_hint.as_ref().unwrap().confirmations > confirmations {
+                continue;
+            }
+
+            transfer_hint = Some(TransferInfo{ 
+                tx_hash: alloy::hex::encode(transfer.transaction_hash),
+                detected_at: chrono::Utc::now(),
+                confirmations,
+                amount: transfer_log.value
+            });
+        }
+
+        Ok(transfer_hint)
+    }
+}
+

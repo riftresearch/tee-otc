@@ -1,13 +1,13 @@
 # tee-otc
-
-Cross-chain OTC swaps secured by Trusted Execution Environments (TEEs).
+Cross-chain OTC swap desk put inside a TEE
 
 ## Components
 
-- `otc-server` - Rust WebSocket server for deposit wallet creation and handling the full swap lifecycle, runs in a TEE
-- Bitcoin full node integration
-- Helios light client for Ethereum verification
-- TEE attestation and secure key management
+- `otc-server` - Server for deposit wallet creation and handling the full swap lifecycle, runs in a TEE
+- `market-maker` - Demo market making bot that responds to RFQs and fills orders
+- `rfq-server` - Offchain Server that acts as an entrypoint for connecting market makers to users sending RFQs
+- Bitcoin full node for Bitcoin state validation
+- Helios light client for EVM chain state validation
 
 ## Prerequisites
 
@@ -19,29 +19,13 @@ Cross-chain OTC swaps secured by Trusted Execution Environments (TEEs).
 
 ## Development Workflow
 
-1. **Start Development Database**:
-
-   _In a seperate terminal_
-
-   ```bash
-   docker compose -f compose.test-db.yml up
-   ```
-
-   This will automatically:
-
-   - Create the `otc_dev` database
-   - Apply the schema (embedded in compose file)
-
-   To check logs: `docker compose -f compose.test-db.yml logs`
-   To stop: `docker compose -f compose.test-db.yml down`
-
-2. **Build the project**:
+1. **Build the project**:
 
    ```bash
    cargo build
    ```
 
-3. **Run tests**:
+2. **Run tests**:
    ```bash
    make test-clean
    ```

@@ -1,6 +1,6 @@
 [package]
 name = "otc-chains"
-version = "0.1.0"
+version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -8,23 +8,26 @@ repository.workspace = true
 
 [dependencies]
 otc-models = { workspace = true }
-async-trait = "0.1"
 snafu = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
+async-trait = {workspace = true}
+chrono = {workspace = true}
+
 
 # Bitcoin dependencies
-bitcoin = "0.32"
-bitcoincore-rpc = "0.19"
+bitcoin = {workspace = true}
+bitcoincore-rpc-async = {workspace=true}
+esplora-client = {workspace = true}
 
 # Ethereum dependencies (using Alloy)
 alloy = { workspace = true }
+evm-token-indexer-client = {workspace=true}
 
 # Common
-rand = "0.8"
-hex = { workspace = true }
-sha2 = "0.10"
-hkdf = "0.12"
+rand = { workspace = true }
+sha2 = { workspace = true }
+hkdf = { workspace = true }
 getrandom = { workspace = true }
