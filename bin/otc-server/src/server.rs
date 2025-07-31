@@ -452,6 +452,10 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, market_maker_id: S
                                 // Handle error response
                                 error!("Received error response from market maker {}", mm_id);
                             }
+                            MMResponse::QuoteResponse { .. } => {
+                                // Handle quote response - will be implemented when needed
+                                info!("Received quote response from market maker {}", mm_id);
+                            }
                         }
                     }
                     Err(e) => {
