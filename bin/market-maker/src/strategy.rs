@@ -13,7 +13,7 @@ impl ValidationStrategy {
 
     /// Validate whether to accept a quote
     /// Returns (accepted, `rejection_reason`)
-    pub fn validate_quote(&self, quote_id: &Uuid, quote_hash: &[u8; 32], user_destination_address: &str) -> (bool, Option<String>) {
+    pub fn validate_quote(&self, quote_id: &Uuid, _quote_hash: &[u8; 32], _user_destination_address: &str) -> (bool, Option<String>) {
         if self.auto_accept {
             info!("Auto-accepting quote {} per configuration", quote_id);
             (true, None)

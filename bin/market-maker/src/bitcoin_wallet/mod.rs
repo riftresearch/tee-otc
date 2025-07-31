@@ -1,10 +1,10 @@
-use std::{collections::BTreeSet, future::Future, io::Write, pin::Pin};
+use std::{collections::BTreeSet, io::Write};
 
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
     bitcoin::{Amount, Network},
-    AsyncWalletPersister, ChangeSet, KeychainKind, SignOptions, Wallet,
+    KeychainKind, SignOptions, Wallet,
 };
 use snafu::{ResultExt, Whatever};
 

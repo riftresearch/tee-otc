@@ -182,6 +182,39 @@ impl MessageHandler {
                     payload: response,
                 })
             }
+
+            MMRequest::GetQuote {
+                request_id,
+                from_chain,
+                from_token,
+                from_amount,
+                to_chain,
+                to_token,
+                ..
+            } => {
+                info!(
+                    "Received quote request: {} {:?} on {:?} -> {:?} on {:?}",
+                    from_amount, from_token, from_chain, to_token, to_chain
+                );
+
+                // TODO: Implement actual quote generation logic
+                // For now, return a simple quote with a 1% spread
+                let to_amount = from_amount * alloy::primitives::U256::from(99) / alloy::primitives::U256::from(100);
+
+                let response = MMResponse::QuoteResponse {
+                    request_id: *request_id,
+                    quote_id: uuid::Uuid::new_v4(),
+                    to_amount,
+                    expires_at: Utc::now() + chrono::Duration::minutes(5),
+                    timestamp: Utc::now(),
+                };
+
+                Some(ProtocolMessage {
+                    version: msg.version.clone(),
+                    sequence: msg.sequence + 1,
+                    payload: response,
+                })
+            }
         }
     }
 }
