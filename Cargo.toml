@@ -10,6 +10,7 @@ members = [
 ]
 
 [workspace.package]
+version = "0.1.0"
 edition = "2021"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -43,6 +44,16 @@ toml = "0.8"
 bitcoin = "0.32"
 bitcoincore-rpc = "0.19"
 tokio-tungstenite = "0.21"
+dashmap = "6.1"
+jsonwebtoken = "9.3"
+validator = "0.18"
+sha2 = "0.10"
+rand = "0.8"
+tower = "0.4"
+tower-http = "0.5"
+parking_lot = "0.12"
+crossbeam = "0.8"
+futures = "0.3"
 
 
 [profile.dev.package.sqlx-macros]

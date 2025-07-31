@@ -1,19 +1,18 @@
-/// Fetch ETH->USD price from Uniswap v3 on Ethereum mainnet
-use crate::chains::RpcProvider;
-use crate::chains::{CHUNK_SIZE, RPC_TIMEOUT};
+use std::time::Duration;
+
+const RPC_TIMEOUT: Duration = Duration::from_secs(10);
 use alloy::{
-    primitives::{address, Address, U160, U256},
-    providers::{Provider, ProviderBuilder},
+    primitives::{address, Address, U160},
+    providers::ProviderBuilder,
     sol,
 };
-use rand::seq::SliceRandom;
+
 use std::collections::HashMap;
-use std::time::Duration;
+
 use tokio::time::timeout;
 use tracing::{info, error};
 
-pub const UNISWAP_V3_USDC_ETH_POOL_ADDRESS: Address =
-    address!("0x88e6A0c2dDD26FEEb64F039a2c41296FcB3f5640");
+
 
 #[derive(Debug, Clone, Copy)]
 struct ChainAddresses {
@@ -30,7 +29,7 @@ lazy_static::lazy_static! {
         });
         m.insert(8453, ChainAddresses {
             weth_address: address!("0x4200000000000000000000000000000000000006"),
-            weth_cbbtc_pool_address: address!("0x8c7080564B5A792A33Ef2FD473fbA6364d5495e5"),
+            weth_cbbtc_pool_address: address!("0x7AeA2E8A3843516afa07293a10Ac8E49906dabD1"),
         });
         m
     };
@@ -93,7 +92,7 @@ sol!(
         ],
         "stateMutability": "view",
         "type": "function"
-  }]"#
+    }]"#
 );
 
 sol!(
@@ -117,10 +116,7 @@ sol!(
     ]"#
 );
 
-#[async_trait::async_trait]
-pub trait FetchEthPrice {
-    async fn fetch_eth_price(&self) -> anyhow::Result<f64>;
-}
+
 
 #[derive(Debug, Clone, Copy)]
 pub struct ConversionRates {
@@ -128,19 +124,7 @@ pub struct ConversionRates {
     pub eth_per_cbbtc: f64,
 }
 
-#[async_trait::async_trait]
-impl FetchEthPrice for RpcProvider {
-    async fn fetch_eth_price(&self) -> anyhow::Result<f64> {
-        let pool = IUniswapV3PoolState::new(UNISWAP_V3_USDC_ETH_POOL_ADDRESS, self);
 
-        let slot0 = pool.slot0().call().await?;
-
-        let sqrt_price_float = q64_96_to_float(slot0.sqrtPriceX96);
-        let price_float = sqrt_price_float * sqrt_price_float;
-        let price_per_eth = 10f64.powi(12) / price_float;
-        Ok(price_per_eth)
-    }
-}
 
 pub async fn fetch_weth_cbbtc_conversion_rates(chain_id: u64) -> anyhow::Result<ConversionRates> {
     let rpcs = match chain_id {
@@ -226,5 +210,4 @@ pub fn q64_96_to_float(num: U160) -> f64 {
     full / 2f64.powi(96)
 }
 
-const CBBTC_DECIMALS: i32 = 8;
-const WETH_DECIMALS: i32 = 18;
+

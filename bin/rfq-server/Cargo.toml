@@ -26,7 +26,15 @@ chrono = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 clap = { workspace = true }
-tower-http = { version = "0.5", features = ["trace"] }
+tower-http = { version = "0.5", features = ["trace", "cors", "compression-br"] }
+tower = { version = "0.4", features = ["full"] }
 futures = "0.3"
 snafu = { workspace = true }
 crossbeam-channel = "0.5"
+dashmap = "6.1"
+jsonwebtoken = "9.3"
+validator = { version = "0.18", features = ["derive"] }
+sha2 = "0.10"
+hex = { workspace = true }
+lru = "0.12"
+arc-swap = "1.7"

@@ -1,7 +1,10 @@
 use snafu::prelude::*;
-pub mod server;
+
+pub mod fixed_point;
+pub mod price_feed;
 pub mod quote;
-pub mod chains;
+pub mod server;
+pub mod settlement;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -19,4 +22,4 @@ pub enum Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
-pub use server::{run_client, Args};
+pub use server::Args;

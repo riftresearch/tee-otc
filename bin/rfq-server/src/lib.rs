@@ -1,4 +1,5 @@
 use snafu::prelude::*;
+
 pub mod server;
 
 #[derive(Debug, Snafu)]
@@ -11,10 +12,8 @@ pub enum Error {
     
     #[snafu(display("WebSocket error: {}", message))]
     WebSocket { message: String },
-    
-    #[snafu(display("Serialization error: {}", source))]
-    Serialization { source: serde_json::Error },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
 pub use server::{run_server, Args};

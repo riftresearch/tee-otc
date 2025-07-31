@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use rfq_server::{run_server, Args};
 use snafu::prelude::*;
-use tracing::Level;
+use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 use clap::Parser;
 
@@ -18,11 +18,13 @@ async fn main() -> Result<(), MainError> {
     let args = Args::parse();
     
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
+        .with_max_level(Level::DEBUG)
         .finish();
     
     tracing::subscriber::set_global_default(subscriber)
         .context(SetGlobalSubscriberSnafu)?;
+    
+    info!("Starting RFQ server on {}:{}", args.host, args.port);
     
     let addr = SocketAddr::from((args.host, args.port));
     
