@@ -86,10 +86,13 @@ async fn test_bitcoin_wallet_basic_operations(
     };
 
     // This should return false since wallet has no funds
-    let can_fill_small = bitcoin_wallet.can_fill(&small_lot).await.unwrap();
+    let can_fill_small = bitcoin_wallet
+        .balance(&small_lot.currency.token)
+        .await
+        .unwrap();
     info!("Can fill 1 satoshi (unfunded wallet): {}", can_fill_small);
     assert!(
-        !can_fill_small,
+        can_fill_small == U256::from(0),
         "Unfunded wallet should not be able to fill any amount"
     );
 
@@ -105,8 +108,14 @@ async fn test_bitcoin_wallet_basic_operations(
         amount: U256::from(100_000u64),
     };
 
-    let can_fill_eth = bitcoin_wallet.can_fill(&eth_lot).await.unwrap();
-    assert!(!can_fill_eth, "Should return false for Ethereum currency");
+    let can_fill_eth = bitcoin_wallet
+        .balance(&eth_lot.currency.token)
+        .await
+        .unwrap();
+    assert!(
+        can_fill_eth == U256::from(0),
+        "Should return false for Ethereum currency"
+    );
 
     // Test Case 3: Test error handling for invalid address
     info!("Test Case 3: Testing invalid address handling");
@@ -286,28 +295,10 @@ async fn test_bitcoin_wallet_error_handling(
         amount: U256::from(100_000u64),
     };
 
-    let result = bitcoin_wallet.can_fill(&eth_lot).await;
-    assert_eq!(
-        result.unwrap(),
-        false,
-        "Should return false for unsupported currency"
-    );
-
-    // Test 3: Wrong number of decimals
-    let wrong_decimals = Lot {
-        currency: Currency {
-            chain: ChainType::Bitcoin,
-            token: TokenIdentifier::Native,
-            decimals: 18, // Bitcoin uses 8, not 18
-        },
-        amount: U256::from(100_000u64),
-    };
-
-    let result = bitcoin_wallet.can_fill(&wrong_decimals).await;
-    assert_eq!(
-        result.unwrap(),
-        false,
-        "Should return false for currency with wrong decimals"
+    let result = bitcoin_wallet.balance(&eth_lot.currency.token).await;
+    assert!(
+        result.is_err(),
+        "Should return error for unsupported currency"
     );
 
     // Clean up

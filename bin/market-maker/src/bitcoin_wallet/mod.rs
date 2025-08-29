@@ -2,6 +2,7 @@ pub mod transaction_broadcaster;
 
 use std::sync::Arc;
 
+use alloy::primitives::U256;
 use async_trait::async_trait;
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_wallet::rusqlite::Connection;
@@ -13,7 +14,7 @@ use bdk_wallet::{
 };
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
-use snafu::{ResultExt, Snafu};
+use snafu::{location, ResultExt, Snafu};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 use tracing::info;
@@ -88,6 +89,7 @@ pub struct BitcoinWallet {
     wallet: Arc<Mutex<PersistedWallet<Connection>>>,
     connection: Arc<Mutex<Connection>>,
     esplora_client: Arc<esplora_client::AsyncClient>,
+    receive_address: String,
 }
 
 impl BitcoinWallet {
@@ -115,7 +117,7 @@ impl BitcoinWallet {
             }
         })?;
 
-        let wallet = match wallet_opt {
+        let mut wallet = match wallet_opt {
             Some(wallet) => wallet,
             None => {
                 // Create new wallet
@@ -130,6 +132,11 @@ impl BitcoinWallet {
             }
         };
 
+        let receive_address = wallet
+            .next_unused_address(KeychainKind::External)
+            .address
+            .to_string();
+
         let esplora_client = esplora_client::Builder::new(esplora_url)
             .build_async()
             .context(BuildEsploraClientSnafu)?;
@@ -137,7 +144,7 @@ impl BitcoinWallet {
         let wallet = Arc::new(Mutex::new(wallet));
         let connection = Arc::new(Mutex::new(conn));
         let esplora_client = Arc::new(esplora_client);
-        
+
         // Log the wallet's address for debugging
         {
             let mut wallet_guard = wallet.lock().await;
@@ -158,48 +165,54 @@ impl BitcoinWallet {
             wallet,
             connection,
             esplora_client,
+            receive_address,
         })
     }
 
-    async fn check_balance(&self, lot: &Lot) -> Result<bool, BitcoinWalletError> {
+    async fn get_balance(&self) -> Result<u64, BitcoinWalletError> {
         // First sync the wallet to get the latest balance
         let mut wallet = self.wallet.lock().await;
-        
+
         // Do a full scan to get the latest balance from the blockchain
         let request = wallet.start_full_scan().build();
-        let update = self.esplora_client
+        let update = self
+            .esplora_client
             .full_scan(request, 10, 5)
             .await
             .map_err(|e| BitcoinWalletError::SyncWallet { source: e })?;
-        
-        wallet.apply_update(update)
+
+        wallet
+            .apply_update(update)
             .map_err(|_| BitcoinWalletError::ApplyUpdate)?;
-        
+
         // Persist the updated wallet state
         let mut conn = self.connection.lock().await;
-        wallet.persist(&mut conn)
+        wallet
+            .persist(&mut conn)
             .map_err(|e| BitcoinWalletError::PersistWallet { source: e })?;
         drop(conn);
-        
+
         let balance = wallet.balance();
-        info!("Bitcoin lot is valid: {:?}", lot);
 
-        let amount_sats = lot.amount.to::<u64>();
-        let required_balance = balance_with_buffer(amount_sats);
-        
-        info!(
-            "Bitcoin balance check: wallet_balance={} sats, required={} sats, required_with_buffer={} sats",
-            balance.total().to_sat(),
-            amount_sats,
-            required_balance
-        );
-
-        Ok(balance.total().to_sat() > required_balance)
+        Ok(balance.total().to_sat())
     }
 }
 
 #[async_trait]
 impl WalletTrait for BitcoinWallet {
+    fn chain_type(&self) -> ChainType {
+        ChainType::Bitcoin
+    }
+
+    async fn guarantee_confirmations(
+        &self,
+        tx_hash: &str,
+        confirmations: u64,
+    ) -> Result<(), WalletError> {
+        // TODO(high): implement this
+        Ok(())
+    }
+
     async fn create_payment(
         &self,
         lot: &Lot,
@@ -219,7 +232,10 @@ impl WalletTrait for BitcoinWallet {
             .await
             .map_err(|e| match e {
                 transaction_broadcaster::TransactionBroadcasterError::InvalidCurrency => {
-                    WalletError::UnsupportedLot { lot: lot.clone() }
+                    WalletError::UnsupportedToken {
+                        token: lot.currency.token.clone(),
+                        loc: location!(),
+                    }
                 }
                 transaction_broadcaster::TransactionBroadcasterError::InsufficientBalance => {
                     WalletError::InsufficientBalance {
@@ -236,16 +252,23 @@ impl WalletTrait for BitcoinWallet {
             })
     }
 
-    async fn can_fill(&self, lot: &Lot) -> wallet::Result<bool> {
-        if ensure_valid_lot(lot).is_err() {
-            return Ok(false);
+    async fn balance(&self, token: &TokenIdentifier) -> wallet::Result<U256> {
+        if token != &TokenIdentifier::Native {
+            return Err(WalletError::UnsupportedToken {
+                token: token.clone(),
+                loc: location!(),
+            });
         }
 
-        self.check_balance(lot)
-            .await
-            .map_err(|e| WalletError::BalanceCheckFailed {
-                reason: e.to_string(),
-            })
+        Ok(U256::from(self.get_balance().await.map_err(|_| {
+            wallet::WalletError::BalanceCheckFailed {
+                reason: "Failed to get balance".to_string(),
+            }
+        })?))
+    }
+
+    fn receive_address(&self, _token: &TokenIdentifier) -> String {
+        self.receive_address.clone()
     }
 }
 
@@ -253,12 +276,18 @@ fn ensure_valid_lot(lot: &Lot) -> Result<(), WalletError> {
     if !matches!(lot.currency.chain, ChainType::Bitcoin)
         || !matches!(lot.currency.token, TokenIdentifier::Native)
     {
-        return Err(WalletError::UnsupportedLot { lot: lot.clone() });
+        return Err(WalletError::UnsupportedToken {
+            token: lot.currency.token.clone(),
+            loc: location!(),
+        });
     }
 
     // Bitcoin has 8 decimals
     if lot.currency.decimals != 8 {
-        return Err(WalletError::UnsupportedLot { lot: lot.clone() });
+        return Err(WalletError::UnsupportedToken {
+            token: lot.currency.token.clone(),
+            loc: location!(),
+        });
     }
 
     info!("Bitcoin lot is valid: {:?}", lot);

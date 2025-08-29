@@ -73,6 +73,9 @@ bitcoin-coin-selection =  { version = "0.7.0", features = ["rand"]}
 sqlx = { version = "0.8",  features = ["runtime-tokio", "tls-native-tls", "postgres", "uuid", "chrono", "migrate"] }
 bdk_wallet = { version = "2.0.0", features=["rusqlite"] }
 bdk_esplora = { version = "0.22.0", features=["tokio","async"]}
+jsonwebtoken = {version="9.3.1", features=["use_pem"]}
+p256 = { version = "0.13", features = ["pem", "pkcs8"] }
+metrics = "0.24.2"
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3

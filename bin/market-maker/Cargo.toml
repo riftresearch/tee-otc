@@ -36,7 +36,11 @@ bdk_esplora = { workspace = true }
 sqlx = { workspace = true }
 esplora-client = {workspace=true}
 disperse-contract = {workspace=true}
+reqwest = {workspace=true}
+jsonwebtoken = {workspace=true}
 
+p256 = {workspace=true}
+metrics = {workspace=true}
 
 
 [dev-dependencies]

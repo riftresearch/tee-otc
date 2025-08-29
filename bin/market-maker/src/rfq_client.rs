@@ -45,22 +45,10 @@ pub struct RfqClient {
 }
 
 impl RfqClient {
-    pub fn new(
-        config: Config,
-        rfq_ws_url: String,
-        wrapped_bitcoin_quoter: WrappedBitcoinQuoter,
-        quote_storage: Arc<QuoteStorage>,
-        wallet_manager: WalletManager,
-    ) -> Self {
-        let handler = RFQMessageHandler::new(
-            config.market_maker_id.clone(),
-            wrapped_bitcoin_quoter,
-            quote_storage,
-            wallet_manager,
-        );
+    pub fn new(config: Config, rfq_handler: RFQMessageHandler, rfq_ws_url: String) -> Self {
         Self {
             config,
-            handler,
+            handler: rfq_handler,
             rfq_ws_url,
         }
     }

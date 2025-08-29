@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
+use crate::balance_strat::QuoteBalanceStrategy;
 use crate::quote_storage::QuoteStorage;
 use crate::wallet::WalletManager;
 use crate::wrapped_bitcoin_quoter::WrappedBitcoinQuoter;
@@ -14,6 +15,7 @@ pub struct RFQMessageHandler {
     wrapped_bitcoin_quoter: WrappedBitcoinQuoter,
     quote_storage: Arc<QuoteStorage>,
     wallet_manager: WalletManager,
+    balance_strategy: QuoteBalanceStrategy,
 }
 
 impl RFQMessageHandler {
@@ -22,12 +24,14 @@ impl RFQMessageHandler {
         wrapped_bitcoin_quoter: WrappedBitcoinQuoter,
         quote_storage: Arc<QuoteStorage>,
         wallet_manager: WalletManager,
+        balance_strategy: QuoteBalanceStrategy,
     ) -> Self {
         Self {
             market_maker_id,
             wrapped_bitcoin_quoter,
             quote_storage,
             wallet_manager,
+            balance_strategy,
         }
     }
 
@@ -58,32 +62,41 @@ impl RFQMessageHandler {
 
                 // Check if we have sufficient balance to fulfill the quote
                 if let RFQResult::Success(ref quote_with_fees) = rfq_result {
-                    let wallet = self.wallet_manager.get(quote_with_fees.quote.to.currency.chain);
-                    
-                    let can_fill = if let Some(wallet) = wallet {
-                        match wallet.can_fill(&quote_with_fees.quote.to).await {
-                            Ok(can_fill) => can_fill,
-                            Err(e) => {
-                                warn!("Failed to check wallet balance: {}", e);
-                                false
+                    let wallet = self
+                        .wallet_manager
+                        .get(quote_with_fees.quote.to.currency.chain);
+
+                    let validated_rfq_result = if let Some(wallet) = wallet {
+                        let balance = wallet
+                            .balance(&quote_with_fees.quote.to.currency.token)
+                            .await;
+
+                        if balance.is_err() {
+                            warn!("Failed to check wallet balance: {:?}", balance.err());
+                            RFQResult::MakerUnavailable(
+                                "Failed to check wallet balance".to_string(),
+                            )
+                        } else {
+                            let balance = balance.unwrap();
+                            if !self
+                                .balance_strategy
+                                .can_fill_quote(&quote_with_fees.quote, balance)
+                            {
+                                RFQResult::MakerUnavailable(
+                                    "Insufficient balance to fulfill quote".to_string(),
+                                )
+                            } else {
+                                RFQResult::Success(quote_with_fees.clone())
                             }
                         }
                     } else {
-                        warn!("No wallet configured for chain {:?}", quote_with_fees.quote.to.currency.chain);
-                        false
-                    };
-                    
-                    if !can_fill {
-                        info!(
-                            "Insufficient balance to fulfill quote {}: need {} on {:?}",
-                            quote_with_fees.quote.id,
-                            quote_with_fees.quote.to.amount,
+                        warn!(
+                            "No wallet configured for chain {:?}",
                             quote_with_fees.quote.to.currency.chain
                         );
-                        rfq_result = RFQResult::MakerUnavailable(
-                            "Insufficient balance to fulfill quote".to_string()
-                        );
-                    }
+                        RFQResult::MakerUnavailable("No wallet configured for chain".to_string())
+                    };
+                    rfq_result = validated_rfq_result;
                 }
 
                 let quote = match &rfq_result {

@@ -174,28 +174,6 @@ async fn test_evm_wallet_nonce_error_retry(
         retry_detected
     );
 
-    // Test Case 2: Verify balance checking with buffer works correctly
-    info!("Test Case 2: Testing balance checking with buffer");
-
-    let can_fill = evm_wallet.can_fill(&lot).await.unwrap();
-    assert!(can_fill, "Should be able to fill the currency amount");
-
-    // Try with an amount that exceeds balance + buffer
-    let large_lot = Lot {
-        currency: Currency {
-            chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(test_token.to_string()),
-            decimals: 18,
-        },
-        amount: U256::from(2_000_000) * U256::pow(U256::from(10), U256::from(18)), // 2M tokens (more than funded)
-    };
-
-    let can_fill_large = evm_wallet.can_fill(&large_lot).await.unwrap();
-    assert!(
-        !can_fill_large,
-        "Should not be able to fill amount exceeding balance + buffer"
-    );
-
     // Test Case 3: Verify transaction with custom nonce embedding
     info!("Test Case 3: Testing transaction with custom nonce");
 
@@ -403,12 +381,11 @@ async fn test_evm_wallet_error_handling(
         amount: U256::from(100000),
     };
 
-    let result = evm_wallet.can_fill(&btc_lot).await;
+    let result = evm_wallet.balance(&btc_lot.currency.token).await;
     info!("result: {:?}", result);
-    assert_eq!(
-        result.unwrap(),
-        false,
-        "Should return false for unsupported currency"
+    assert!(
+        result.is_err(),
+        "Should return error for unsupported currency"
     );
 
     // Clean up

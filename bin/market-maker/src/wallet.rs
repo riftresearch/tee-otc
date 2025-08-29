@@ -1,8 +1,11 @@
+use alloy::primitives::U256;
 use async_trait::async_trait;
+use chrono::Duration;
 use dashmap::DashMap;
 use otc_chains::traits::MarketMakerPaymentValidation;
+use otc_models::TokenIdentifier;
 use otc_models::{ChainType, Currency, Lot};
-use snafu::Snafu;
+use snafu::{Location, Snafu};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::oneshot;
 
@@ -20,8 +23,12 @@ pub enum WalletError {
     #[snafu(display("Balance check failed: {}", reason))]
     BalanceCheckFailed { reason: String },
 
-    #[snafu(display("Unsupported lot: {:?}", lot))]
-    UnsupportedLot { lot: Lot },
+    #[snafu(display("Unsupported token: {:?}", token))]
+    UnsupportedToken {
+        token: TokenIdentifier,
+        #[snafu(implicit)]
+        loc: Location,
+    },
 
     #[snafu(display("Failed to parse address: {}", context))]
     ParseAddressFailed { context: String },
@@ -55,16 +62,38 @@ pub type Result<T, E = WalletError> = std::result::Result<T, E>;
 #[async_trait]
 pub trait Wallet: Send + Sync {
     /// Create a transaction for the given currency to the specified address
-    /// Optional nonce must be embedded in the transaction somehow
+    /// Optionally handle market maker payment validation
     async fn create_payment(
         &self,
         lot: &Lot,
-        to_address: &str,
+        recipient: &str,
         mm_payment_validation: Option<MarketMakerPaymentValidation>,
     ) -> Result<String>;
 
-    /// Check if the wallet can fill the specified amount of currency
-    async fn can_fill(&self, lot: &Lot) -> Result<bool>;
+    /// Waits until the given transaction reaches the specified number of confirmations.
+    ///
+    /// Behavior:
+    /// - If the transaction does not have at least one confirmation by the time the next block
+    ///   is mined, this method will rebroadcast it and continue doing so until it is confirmed.
+    /// - This function only works for transactions originally broadcast by this wallet;
+    ///   externally-created transactions are not tracked.
+    ///
+    /// Guarantees:
+    /// - Returns once the transaction has the requested number of confirmations.
+    /// - May rebroadcast the transaction multiple times until confirmation is observed.
+    ///
+    /// Notes:
+    /// - Does not guarantee confirmation if the transaction is permanently invalid (e.g., double spend).
+    /// - Requires an active connection to a node that tracks the mempool and blockchain state.
+    async fn guarantee_confirmations(&self, tx_hash: &str, confirmations: u64) -> Result<()>;
+
+    /// Check if the wallet has enough balance of a specified amount of currency
+    async fn balance(&self, token: &TokenIdentifier) -> Result<U256>;
+
+    fn receive_address(&self, token: &TokenIdentifier) -> String;
+
+    /// Get the chain type of the wallet
+    fn chain_type(&self) -> ChainType;
 }
 
 #[derive(Clone)]
@@ -120,9 +149,7 @@ mod tests {
     use alloy::primitives::U256;
     use otc_models::TokenIdentifier;
 
-    struct MockWallet {
-        can_fill_response: bool,
-    }
+    struct MockWallet {}
 
     #[async_trait]
     impl Wallet for MockWallet {
@@ -135,17 +162,27 @@ mod tests {
             Ok("mock_txid_123".to_string())
         }
 
-        async fn can_fill(&self, _lot: &Lot) -> Result<bool> {
-            Ok(self.can_fill_response)
+        async fn balance(&self, _token: &TokenIdentifier) -> Result<U256> {
+            Ok(U256::from(1000000000000000000u64))
+        }
+
+        fn chain_type(&self) -> ChainType {
+            ChainType::Bitcoin
+        }
+
+        async fn guarantee_confirmations(&self, _tx_hash: &str, _confirmations: u64) -> Result<()> {
+            Ok(())
+        }
+
+        fn receive_address(&self, _token: &TokenIdentifier) -> String {
+            "mock_address_123".to_string()
         }
     }
 
     #[tokio::test]
     async fn test_wallet_registration() {
         let mut manager = WalletManager::new();
-        let mock_wallet = Arc::new(MockWallet {
-            can_fill_response: true,
-        });
+        let mock_wallet = Arc::new(MockWallet {});
 
         // Register wallet
         manager.register(ChainType::Bitcoin, mock_wallet.clone());
@@ -164,8 +201,8 @@ mod tests {
         };
 
         // Test wallet methods
-        let can_fill = wallet.can_fill(&lot).await.unwrap();
-        assert!(can_fill);
+        let bal = wallet.balance(&TokenIdentifier::Native).await.unwrap();
+        assert!(bal > U256::from(0));
 
         let txid = wallet.create_payment(&lot, "bc1q...", None).await.unwrap();
         assert_eq!(txid, "mock_txid_123");
@@ -179,9 +216,7 @@ mod tests {
     #[test]
     fn test_registered_chains() {
         let mut manager = WalletManager::new();
-        let mock_wallet = Arc::new(MockWallet {
-            can_fill_response: true,
-        });
+        let mock_wallet = Arc::new(MockWallet {});
 
         manager.register(ChainType::Bitcoin, mock_wallet.clone());
         manager.register(ChainType::Ethereum, mock_wallet);

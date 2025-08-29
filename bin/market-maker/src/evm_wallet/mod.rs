@@ -13,6 +13,7 @@ use blockchain_utils::{GenericERC20::GenericERC20Instance, WebsocketWalletProvid
 use disperse_contract::Disperse::DisperseInstance;
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
+use snafu::location;
 use tokio::task::JoinSet;
 use tracing::info;
 
@@ -94,7 +95,13 @@ impl Wallet for EVMWallet {
         to_address: &str,
         mm_payment_validation: Option<MarketMakerPaymentValidation>,
     ) -> wallet::Result<String> {
-        ensure_valid_lot(lot)?;
+        if lot.currency.chain != ChainType::Ethereum {
+            return Err(WalletError::UnsupportedToken {
+                token: lot.currency.token.clone(),
+                loc: location!(),
+            });
+        }
+        ensure_valid_token(&lot.currency.token)?;
         let transaction_request = create_evm_transfer_transaction(
             &self.provider,
             lot,
@@ -123,26 +130,53 @@ impl Wallet for EVMWallet {
         }
     }
 
-    async fn can_fill(&self, lot: &Lot) -> wallet::Result<bool> {
+    async fn balance(&self, token: &TokenIdentifier) -> wallet::Result<U256> {
         // TODO: This check should also include a check that we can pay for gas
-        if ensure_valid_lot(lot).is_err() {
-            return Ok(false);
+        if ensure_valid_token(token).is_err() {
+            return Err(WalletError::UnsupportedToken {
+                token: token.clone(),
+                loc: location!(),
+            });
         }
 
-        let token_address = match &lot.currency.token {
-            TokenIdentifier::Native => return Ok(false), // native tokens are not supported for now
+        let token_address = match token {
+            TokenIdentifier::Native => {
+                return Err(WalletError::UnsupportedToken {
+                    token: token.clone(),
+                    loc: location!(),
+                });
+            }
             TokenIdentifier::Address(address) => {
                 let res = address.parse::<Address>();
                 if res.is_err() {
-                    return Ok(false);
+                    return Err(WalletError::UnsupportedToken {
+                        token: token.clone(),
+                        loc: location!(),
+                    });
                 }
                 res.unwrap()
             }
         };
         let balance =
             get_erc20_balance(&self.provider, &token_address, &self.tx_broadcaster.sender).await?;
-        let required_balance = balance_with_buffer(lot.amount);
-        Ok(balance > required_balance)
+        Ok(balance)
+    }
+
+    fn chain_type(&self) -> ChainType {
+        ChainType::Ethereum
+    }
+
+    fn receive_address(&self, _token: &TokenIdentifier) -> String {
+        self.tx_broadcaster.sender.to_string()
+    }
+
+    async fn guarantee_confirmations(
+        &self,
+        tx_hash: &str,
+        confirmations: u64,
+    ) -> Result<(), WalletError> {
+        // TODO(high): implement this
+        Ok(())
     }
 }
 
@@ -226,16 +260,17 @@ fn create_evm_transfer_transaction(
     }
 }
 
-fn ensure_valid_lot(lot: &Lot) -> Result<(), WalletError> {
-    if !matches!(lot.currency.chain, ChainType::Ethereum)
-        || !otc_models::SUPPORTED_TOKENS_BY_CHAIN
-            .get(&lot.currency.chain)
-            .unwrap()
-            .contains(&lot.currency.token)
+fn ensure_valid_token(token: &TokenIdentifier) -> Result<(), WalletError> {
+    if !otc_models::SUPPORTED_TOKENS_BY_CHAIN
+        .get(&ChainType::Ethereum)
+        .unwrap()
+        .contains(token)
     {
-        return Err(WalletError::UnsupportedLot { lot: lot.clone() });
+        return Err(WalletError::UnsupportedToken {
+            token: token.clone(),
+            loc: location!(),
+        });
     }
-    info!("lot is valid: {:?}", lot);
     Ok(())
 }
 

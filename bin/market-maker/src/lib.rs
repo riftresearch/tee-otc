@@ -1,4 +1,6 @@
+mod balance_strat;
 pub mod bitcoin_wallet;
+pub mod cb_bitcoin_converter;
 mod config;
 pub mod evm_wallet;
 mod otc_client;
@@ -11,22 +13,27 @@ mod strategy;
 pub mod wallet;
 mod wrapped_bitcoin_quoter;
 
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use alloy::{primitives::Address, providers::Provider};
 use bdk_wallet::bitcoin;
-use clap::Parser;
 use blockchain_utils::{create_websocket_wallet_provider, handle_background_thread_result};
+use clap::Parser;
 use config::Config;
 use otc_models::ChainType;
+use reqwest::Url;
 use snafu::{prelude::*, ResultExt};
 use tokio::task::JoinSet;
 use tracing::info;
 use uuid::Uuid;
 
 use crate::{
-    bitcoin_wallet::BitcoinWallet, evm_wallet::EVMWallet, quote_storage::QuoteStorage,
-    wallet::WalletManager, wrapped_bitcoin_quoter::WrappedBitcoinQuoter,
+    bitcoin_wallet::BitcoinWallet,
+    cb_bitcoin_converter::{coinbase_client::CoinbaseClient, run_rebalancer, BandsParams},
+    evm_wallet::EVMWallet,
+    quote_storage::QuoteStorage,
+    wallet::WalletManager,
+    wrapped_bitcoin_quoter::WrappedBitcoinQuoter,
 };
 
 #[derive(Debug, Snafu)]
@@ -46,7 +53,9 @@ pub enum Error {
     GenericWallet { source: wallet::WalletError },
 
     #[snafu(display("Provider error: {}", source))]
-    Provider { source: blockchain_utils::ProviderError },
+    Provider {
+        source: blockchain_utils::ProviderError,
+    },
 
     #[snafu(display("Esplora client error: {}", source))]
     EsploraInitialization { source: esplora_client::Error },
@@ -59,6 +68,16 @@ pub enum Error {
     #[snafu(display("Quote storage error: {}", source))]
     QuoteStorage {
         source: quote_storage::QuoteStorageError,
+    },
+
+    #[snafu(display("Coinbase client error: {}", source))]
+    CoinbaseClientError {
+        source: cb_bitcoin_converter::coinbase_client::ConversionError,
+    },
+
+    #[snafu(display("Conversion actor error: {}", source))]
+    ConversionActor {
+        source: cb_bitcoin_converter::ConversionActorError,
     },
 }
 
@@ -86,6 +105,10 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[command(name = "market-maker")]
 #[command(about = "Market Maker client for TEE-OTC")]
 pub struct MarketMakerArgs {
+    /// Log level
+    #[arg(long, env = "RUST_LOG", default_value = "info")]
+    pub log_level: String,
+
     /// Market maker identifier
     #[arg(long, env = "MM_ID")]
     pub market_maker_id: String,
@@ -142,21 +165,56 @@ pub struct MarketMakerArgs {
     #[arg(long, env = "FEE_SAFETY_MULTIPLIER", default_value = "1.5")]
     pub fee_safety_multiplier: f64,
 
-    /// Log level
-    #[arg(long, env = "RUST_LOG", default_value = "info")]
-    pub log_level: String,
+    /// Max balance utilization for quote fills
+    #[arg(
+        long,
+        env = "BALANCE_UTILIZATION_THRESHOLD_BPS",
+        default_value = "7500"
+    )]
+    pub balance_utilization_threshold_bps: u16,
 
     /// Database URL for quote storage
     #[arg(long, env = "MM_DATABASE_URL")]
     pub database_url: String,
+
+    /// Coinbase API key
+    #[arg(long, env = "COINBASE_API_KEY")]
+    pub coinbase_api_key: String,
+
+    /// Coinbase API secret
+    #[arg(long, env = "COINBASE_API_SECRET")]
+    pub coinbase_api_secret: String,
+
+    /// Coinbase API base URL
+    #[arg(
+        long,
+        env = "COINBASE_API_BASE_URL",
+        default_value = "https://api.coinbase.com",
+        value_parser = parse_url
+    )]
+    pub coinbase_api_base_url: Url,
+
+    /// Target BTC allocation as percentage of total inventory (in basis points)
+    /// Default 5000 = 50% BTC, 50% cbBTC
+    #[arg(long, env = "INVENTORY_TARGET_RATIO_BPS", default_value = "5000")]
+    pub inventory_target_ratio_bps: u64,
+
+    /// Rebalancing tolerance - triggers rebalance when allocation drifts beyond this threshold
+    /// Default 2500 = ±25% deviation from target triggers rebalancing
+    #[arg(long, env = "REBALANCE_TOLERANCE_BPS", default_value = "2500")]
+    pub rebalance_tolerance_bps: u64,
 }
 
 fn parse_hex_string(s: &str) -> std::result::Result<[u8; 32], String> {
     let bytes = alloy::hex::decode(s).map_err(|e| e.to_string())?;
     if bytes.len() != 32 {
-        return Err(format!("Expected 32 bytes, got {}", bytes.len()).into());
+        return Err(format!("Expected 32 bytes, got {bytes:#?}"));
     }
     Ok(bytes.try_into().unwrap())
+}
+
+fn parse_url(s: &str) -> std::result::Result<Url, String> {
+    Url::parse(s).map_err(|e| e.to_string())
 }
 
 pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
@@ -181,20 +239,16 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         .build_async()
         .context(EsploraInitializationSnafu)?;
 
-    let mut wallet_manager = WalletManager::new();
-    wallet_manager.register(
-        ChainType::Bitcoin,
-        Arc::new(
-            BitcoinWallet::new(
-                &args.bitcoin_wallet_db_file,
-                &args.bitcoin_wallet_descriptor,
-                args.bitcoin_wallet_network,
-                &args.bitcoin_wallet_esplora_url,
-                &mut join_set,
-            )
-            .await
-            .context(BitcoinWalletSnafu)?,
-        ),
+    let bitcoin_wallet = Arc::new(
+        BitcoinWallet::new(
+            &args.bitcoin_wallet_db_file,
+            &args.bitcoin_wallet_descriptor,
+            args.bitcoin_wallet_network,
+            &args.bitcoin_wallet_esplora_url,
+            &mut join_set,
+        )
+        .await
+        .context(BitcoinWalletSnafu)?,
     );
 
     let provider = Arc::new(
@@ -219,7 +273,11 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         .await
         .expect("Failed to ensure inf approval on disperse contract");
 
+    let mut wallet_manager = WalletManager::new();
+
+    wallet_manager.register(ChainType::Bitcoin, bitcoin_wallet.clone());
     wallet_manager.register(ChainType::Ethereum, evm_wallet.clone());
+
     let btc_eth_price_oracle = price_oracle::BitcoinEtherPriceOracle::new(&mut join_set);
 
     let wrapped_bitcoin_quoter = WrappedBitcoinQuoter::new(
@@ -244,6 +302,17 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     );
     join_set.spawn(async move { otc_fill_client.run().await.map_err(Error::from) });
 
+    let balance_strategy =
+        balance_strat::QuoteBalanceStrategy::new(args.balance_utilization_threshold_bps);
+
+    let rfq_handler = rfq_handler::RFQMessageHandler::new(
+        market_maker_id,
+        wrapped_bitcoin_quoter,
+        quote_storage,
+        wallet_manager,
+        balance_strategy,
+    );
+
     // Add RFQ client for handling quote requests
     let rfq_client = rfq_client::RfqClient::new(
         Config {
@@ -254,10 +323,8 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
             reconnect_interval_secs: 5,
             max_reconnect_attempts: 5,
         },
+        rfq_handler,
         args.rfq_ws_url,
-        wrapped_bitcoin_quoter,
-        quote_storage,
-        wallet_manager,
     );
     join_set.spawn(async move {
         rfq_client.run().await.map_err(|e| Error::Client {
@@ -266,6 +333,26 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
             },
         })
     });
+
+    let coinbase_client = CoinbaseClient::new(
+        args.coinbase_api_base_url,
+        args.coinbase_api_key,
+        args.coinbase_api_secret,
+    )
+    .context(CoinbaseClientSnafu)?;
+
+    let conversion_actor = run_rebalancer(
+        coinbase_client,
+        bitcoin_wallet.clone(),
+        evm_wallet.clone(),
+        BandsParams {
+            target_bps: args.inventory_target_ratio_bps,
+            band_width_bps: args.rebalance_tolerance_bps,
+            poll_interval: Duration::from_secs(60),
+        },
+    );
+
+    join_set.spawn(async move { conversion_actor.await.context(ConversionActorSnafu) });
 
     handle_background_thread_result(join_set.join_next().await).context(BackgroundThreadSnafu)?;
 
