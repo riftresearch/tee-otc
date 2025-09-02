@@ -224,10 +224,12 @@ pub async fn build_mm_test_args(
         database_url: db_url,
         inventory_target_ratio_bps: 5000,
         rebalance_tolerance_bps: 2500,
-        balance_utilization_threshold_bps: 10000, // 100%, we dont care if an order consumes 100% of our available balance
-        coinbase_api_base_url: "https://api.coinbase.com".parse().unwrap(), // TODO: This needs to be a test server url
-        coinbase_api_key: "".to_string(),
-        coinbase_api_secret: "".to_string(),
+        balance_utilization_threshold_bps: 9500, // 95%, require headroom so 100% utilization is rejected in tests
+        coinbase_exchange_api_base_url: "https://api.coinbase.com".parse().unwrap(), // TODO: This needs to be a test server url
+        coinbase_exchange_api_key: "".to_string(),
+        coinbase_exchange_api_passphrase: "".to_string(),
+        coinbase_exchange_api_secret: "".to_string(),
+        auto_manage_inventory: false,
     }
 }
 

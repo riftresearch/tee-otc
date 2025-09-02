@@ -87,7 +87,7 @@ pub trait Wallet: Send + Sync {
     /// - Requires an active connection to a node that tracks the mempool and blockchain state.
     async fn guarantee_confirmations(&self, tx_hash: &str, confirmations: u64) -> Result<()>;
 
-    /// Check if the wallet has enough balance of a specified amount of currency
+    /// Return the available balance for the given token
     async fn balance(&self, token: &TokenIdentifier) -> Result<U256>;
 
     fn receive_address(&self, token: &TokenIdentifier) -> String;
@@ -201,7 +201,7 @@ mod tests {
         };
 
         // Test wallet methods
-        let bal = wallet.balance(&TokenIdentifier::Native).await.unwrap();
+        let bal = wallet.balance(&lot.currency.token).await.unwrap();
         assert!(bal > U256::from(0));
 
         let txid = wallet.create_payment(&lot, "bc1q...", None).await.unwrap();

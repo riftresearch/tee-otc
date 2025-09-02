@@ -296,9 +296,11 @@ async fn test_bitcoin_wallet_error_handling(
     };
 
     let result = bitcoin_wallet.balance(&eth_lot.currency.token).await;
-    assert!(
-        result.is_err(),
-        "Should return error for unsupported currency"
+    assert!(result.is_ok(), "Should return Ok for unsupported currency");
+    assert_eq!(
+        result.unwrap(),
+        U256::from(0u64),
+        "Should return zero balance for unsupported currency"
     );
 
     // Clean up

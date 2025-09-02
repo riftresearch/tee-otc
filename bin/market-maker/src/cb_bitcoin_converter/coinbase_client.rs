@@ -1,14 +1,14 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use alloy::primitives::U256;
-use jsonwebtoken::{encode, Algorithm, Header};
+use base64::{engine::general_purpose, Engine};
+use hmac::{Hmac, Mac};
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier, CB_BTC_CONTRACT_ADDRESS};
-use p256::pkcs8::EncodePrivateKey;
-use p256::SecretKey;
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use tracing::info;
+use sha2::Sha256;
+use tracing::{info, warn};
 
 use snafu::prelude::*;
 
@@ -16,17 +16,9 @@ use crate::wallet::Wallet;
 
 #[derive(Debug, Snafu)]
 pub enum ConversionError {
-    // Config / construction
     #[snafu(display("Failed to build HTTP client: {source}"))]
     HttpClientBuild { source: reqwest::Error },
 
-    #[snafu(display("Failed to parse Coinbase API private key: {parse_step}"))]
-    JwtKeyParse { parse_step: String },
-
-    #[snafu(display("Failed to encode JWT: {source}"))]
-    JwtEncode { source: jsonwebtoken::errors::Error },
-
-    // Network / HTTP
     #[snafu(display("HTTP request failed: {source}"))]
     HttpRequest { source: reqwest::Error },
 
@@ -36,37 +28,6 @@ pub enum ConversionError {
     #[snafu(display("Invalid request: {reason}"))]
     InvalidRequest {
         reason: String,
-        #[snafu(implicit)]
-        loc: snafu::Location,
-    },
-
-    #[snafu(display("Transaction failed on-chain"))]
-    TxFailed,
-
-    #[snafu(display("Invalid Ethereum address: {addr}"))]
-    InvalidEthAddress { addr: String },
-
-    // Logic & conversions
-    #[snafu(display("Overflow or invalid amount conversion from U256"))]
-    AmountConversion,
-
-    #[snafu(display("Provider error: {source}"))]
-    AlloyContractError {
-        source: alloy::contract::Error,
-        #[snafu(implicit)]
-        loc: snafu::Location,
-    },
-
-    #[snafu(display("Alloy transport error: {source}"))]
-    AlloyTransportError {
-        source: alloy::transports::TransportError,
-        #[snafu(implicit)]
-        loc: snafu::Location,
-    },
-
-    #[snafu(display("Alloy pending transaction error: {source}"))]
-    AlloyPendingTransactionError {
-        source: alloy::providers::PendingTransactionError,
         #[snafu(implicit)]
         loc: snafu::Location,
     },
@@ -89,257 +50,177 @@ pub enum ConversionError {
         #[snafu(implicit)]
         loc: snafu::Location,
     },
-
-    // Async plumbing
-    #[snafu(display("Trigger channel closed"))]
-    TriggerChannelClosed,
 }
 
 pub type Result<T> = std::result::Result<T, ConversionError>;
 
-#[derive(Debug, Serialize, Deserialize)]
-struct JwtClaims {
-    sub: String,
-    iss: String,
-    nbf: i64,
-    exp: i64,
-    uri: String,
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct CoinbaseAuthHeaders {
+    access_key: String,
+    access_passphrase: String,
+    access_signature: String,
+    access_timestamp: String,
 }
 
 #[derive(Debug, Clone)]
 pub struct CoinbaseClient {
     http_client: Client,
     api_key: String,
-    api_secret: String,
+    api_secret_bytes: Vec<u8>,
+    api_passphrase: String,
     coinbase_base_url: Url,
+}
+
+const USER_AGENT: &str = "rift-tee-otc-market-maker/1.0";
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WithdrawalStatus {
+    Pending,
+    Completed(String),
+    Cancelled,
 }
 
 impl CoinbaseClient {
     /// Create a new CoinbaseClient with the given base URL
-    /// Default would be https://api.coinbase.com
-    pub fn new(coinbase_base_url: Url, api_key: String, api_secret: String) -> Result<Self> {
+    /// Default would be https://api.exchange.coinbase.com
+    pub fn new(
+        coinbase_base_url: Url,
+        api_key: String,
+        api_passphrase: String,
+        api_secret: String,
+    ) -> Result<Self> {
         let http_client = Client::builder()
             .timeout(Duration::from_secs(30))
             .build()
             .context(HttpClientBuildSnafu)?;
 
+        // Decode the API secret from base64 once in constructor
+        let api_secret_bytes = general_purpose::STANDARD.decode(&api_secret).map_err(|_| {
+            InvalidRequestSnafu {
+                reason: "Failed to decode API secret".to_string(),
+            }
+            .build()
+        })?;
+
         Ok(Self {
             http_client,
             api_key,
-            api_secret,
+            api_secret_bytes,
+            api_passphrase,
             coinbase_base_url,
         })
     }
 
-    fn build_jwt(&self, uri: &str) -> Result<String> {
-        let now = chrono::Utc::now().timestamp();
+    /// Build the Coinbase Exchange signature
+    /// prehash = timestamp + METHOD + requestPath + body_json
+    /// key = base64-decoded `secret`
+    /// sig = base64(HMAC-SHA256(prehash, key))
+    fn create_coinbase_auth_headers(
+        &self,
+        method: &str,   // the HTTP method (e.g. "POST")
+        path: &str,     // the request path (e.g. "/orders")
+        body_str: &str, // json stringified body
+    ) -> Result<CoinbaseAuthHeaders> {
+        let access_timestamp = chrono::Utc::now().timestamp();
 
-        let claims = JwtClaims {
-            sub: self.api_key.clone(),
-            iss: "cdp".into(),
-            nbf: now,
-            exp: now + 120,
-            uri: uri.to_string(),
-        };
+        let method_up = method.to_ascii_uppercase();
 
-        let header = Header {
-            kid: Some(self.api_key.clone()),
-            alg: Algorithm::ES256,
-            ..Default::default()
-        };
+        let prehash = format!("{access_timestamp}{method_up}{path}{body_str}");
 
-        let sk = SecretKey::from_sec1_pem(&self.api_secret).map_err(|_| {
-            ConversionError::JwtKeyParse {
-                parse_step: "from_sec1_pem".to_string(),
-            }
-        })?;
+        let mut hmac = Hmac::<Sha256>::new_from_slice(&self.api_secret_bytes).unwrap();
+        hmac.update(prehash.as_bytes());
+        let sig = hmac.finalize().into_bytes();
+        let b64_sig = general_purpose::STANDARD.encode(sig);
 
-        let pkcs8_pem =
-            sk.to_pkcs8_pem(Default::default())
-                .map_err(|_| ConversionError::JwtKeyParse {
-                    parse_step: "to_pkcs8_pem".to_string(),
-                })?;
-
-        let jwt_key =
-            jsonwebtoken::EncodingKey::from_ec_pem(pkcs8_pem.as_bytes()).map_err(|_| {
-                ConversionError::JwtKeyParse {
-                    parse_step: "from_ec_pem".to_string(),
-                }
-            })?;
-
-        encode(&header, &claims, &jwt_key).context(JwtEncodeSnafu)
+        Ok(CoinbaseAuthHeaders {
+            access_key: self.api_key.to_string(),
+            access_passphrase: self.api_passphrase.to_string(),
+            access_signature: b64_sig,
+            access_timestamp: access_timestamp.to_string(),
+        })
     }
 
     async fn get_btc_account_id(&self) -> Result<String> {
-        let endpoint_url = self.coinbase_base_url.join("/v2/accounts").map_err(|_| {
+        let endpoint_path = "/coinbase-accounts";
+        let endpoint_url = self.coinbase_base_url.join(endpoint_path).map_err(|_| {
             InvalidRequestSnafu {
-                reason: "Failed to construct accounts URL".to_string(),
+                reason: "Failed to construct coinbase-accounts URL".to_string(),
             }
             .build()
         })?;
-        let uri = format!("GET {}", endpoint_url.path());
-        let jwt = self.build_jwt(&uri)?;
 
-        let text = self
+        let empty_body = "";
+        let auth_headers = self.create_coinbase_auth_headers("GET", endpoint_path, empty_body)?;
+
+        let response = self
             .http_client
             .get(endpoint_url)
-            .header("Authorization", format!("Bearer {jwt}"))
+            .header("User-Agent", USER_AGENT)
+            .header("CB-ACCESS-KEY", &auth_headers.access_key)
+            .header("CB-ACCESS-PASSPHRASE", &auth_headers.access_passphrase)
+            .header("CB-ACCESS-SIGN", &auth_headers.access_signature)
+            .header("CB-ACCESS-TIMESTAMP", &auth_headers.access_timestamp)
             .send()
-            .await
-            .context(HttpRequestSnafu)?
-            .text()
             .await
             .context(HttpRequestSnafu)?;
 
-        let v: serde_json::Value = serde_json::from_str(&text).context(JsonDecodeSnafu)?;
+        let text = response.text().await.context(HttpRequestSnafu)?;
+        let wallets: serde_json::Value = serde_json::from_str(&text).context(JsonDecodeSnafu)?;
 
-        let data = v["data"].as_array().context(InvalidRequestSnafu {
-            reason: "accounts.data is not an array",
+        let wallets_array = wallets.as_array().context(InvalidRequestSnafu {
+            reason: "Response is not an array",
         })?;
 
-        let btc = data
+        let btc_wallet = wallets_array
             .iter()
-            .find(|a| a["currency"]["code"] == "BTC")
+            .find(|wallet| wallet["currency"] == "BTC")
             .context(InvalidRequestSnafu {
-                reason: "No BTC account found",
+                reason: "No BTC wallet found",
             })?;
 
-        let id = btc["id"]
+        let id = btc_wallet["id"]
             .as_str()
             .context(InvalidRequestSnafu {
-                reason: "BTC account id missing or not string",
+                reason: "BTC wallet id missing or not string",
             })?
             .to_string();
 
         Ok(id)
     }
 
-    async fn get_cbbtc_deposit_address(&self, btc_account_id: &str) -> Result<String> {
-        let endpoint_path = format!("/v2/accounts/{btc_account_id}/addresses");
-        let endpoint_url = self.coinbase_base_url.join(&endpoint_path).map_err(|_| {
-            InvalidRequestSnafu {
-                reason: "Failed to construct addresses URL".to_string(),
-            }
-            .build()
-        })?;
-        let uri = format!("GET {}", endpoint_url.path());
-        let jwt = self.build_jwt(&uri)?;
-
-        let text = self
-            .http_client
-            .get(endpoint_url)
-            .header("Authorization", format!("Bearer {jwt}"))
-            .send()
-            .await
-            .context(HttpRequestSnafu)?
-            .text()
-            .await
-            .context(HttpRequestSnafu)?;
-
-        let v: serde_json::Value = serde_json::from_str(&text).context(JsonDecodeSnafu)?;
-
-        let data = v["data"].as_array().context(InvalidRequestSnafu {
-            reason: "addresses.data is not an array",
-        })?;
-
-        let eth = data
-            .iter()
-            .find(|addr| addr["network"] == "ethereum")
-            .context(InvalidRequestSnafu {
-                reason: "No Ethereum address found",
-            })?;
-
-        let addr = eth["address"]
-            .as_str()
-            .context(InvalidRequestSnafu {
-                reason: "Ethereum address missing or not string",
-            })?
-            .to_string();
-
-        Ok(addr)
-    }
-
-    async fn get_btc_deposit_address(&self, btc_account_id: &str) -> Result<String> {
-        let endpoint_path = format!("/v2/accounts/{btc_account_id}/addresses");
-        let endpoint_url = self.coinbase_base_url.join(&endpoint_path).map_err(|_| {
-            InvalidRequestSnafu {
-                reason: "Failed to construct addresses URL".to_string(),
-            }
-            .build()
-        })?;
-        let uri = format!("GET {}", endpoint_url.path());
-        let jwt = self.build_jwt(&uri)?;
-
-        let text = self
-            .http_client
-            .get(endpoint_url)
-            .header("Authorization", format!("Bearer {jwt}"))
-            .send()
-            .await
-            .context(HttpRequestSnafu)?
-            .text()
-            .await
-            .context(HttpRequestSnafu)?;
-
-        let v: serde_json::Value = serde_json::from_str(&text).context(JsonDecodeSnafu)?;
-
-        let data = v["data"].as_array().context(InvalidRequestSnafu {
-            reason: "addresses.data is not an array",
-        })?;
-
-        let btc = data
-            .iter()
-            .find(|addr| addr["network"] == "bitcoin")
-            .context(InvalidRequestSnafu {
-                reason: "No Bitcoin address found",
-            })?;
-
-        let addr = btc["address"]
-            .as_str()
-            .context(InvalidRequestSnafu {
-                reason: "Bitcoin address missing or not string",
-            })?
-            .to_string();
-
-        Ok(addr)
-    }
-
-    async fn send_bitcoin(
+    async fn get_btc_deposit_address(
         &self,
-        recipient_address: &str,
-        amount: &u64,
-        network: ChainType,
         btc_account_id: &str,
+        network: ChainType,
     ) -> Result<String> {
-        let endpoint_path = format!("/v2/accounts/{btc_account_id}/transactions");
-        let endpoint_url = self.coinbase_base_url.join(&endpoint_path).map_err(|_| {
-            InvalidRequestSnafu {
-                reason: "Failed to construct transactions URL".to_string(),
-            }
-            .build()
-        })?;
-        let uri = format!("POST {}", endpoint_url.path());
-        let jwt = self.build_jwt(&uri)?;
-
         let network = match network {
             ChainType::Bitcoin => "bitcoin",
             ChainType::Ethereum => "ethereum",
         };
 
-        let payload = json!({
-            "type": "send",
-            "to": recipient_address,
-            "amount": amount,
-            "currency": "BTC",
-            "network": network,
+        let endpoint_path = format!("/coinbase-accounts/{btc_account_id}/addresses");
+        let endpoint_url = self.coinbase_base_url.join(&endpoint_path).map_err(|_| {
+            InvalidRequestSnafu {
+                reason: "Failed to construct addresses URL".to_string(),
+            }
+            .build()
+        })?;
+        let body = json!({
+            "network": network
         });
+        let body_str = serde_json::to_string(&body).unwrap();
+        let auth_headers = self.create_coinbase_auth_headers("POST", &endpoint_path, &body_str)?;
 
         let text = self
             .http_client
             .post(endpoint_url)
-            .header("Authorization", format!("Bearer {jwt}"))
+            .body(body_str)
             .header("Content-Type", "application/json")
-            .json(&payload)
+            .header("User-Agent", USER_AGENT)
+            .header("CB-ACCESS-KEY", &auth_headers.access_key)
+            .header("CB-ACCESS-PASSPHRASE", &auth_headers.access_passphrase)
+            .header("CB-ACCESS-SIGN", &auth_headers.access_signature)
+            .header("CB-ACCESS-TIMESTAMP", &auth_headers.access_timestamp)
             .send()
             .await
             .context(HttpRequestSnafu)?
@@ -347,16 +228,135 @@ impl CoinbaseClient {
             .await
             .context(HttpRequestSnafu)?;
 
-        let v: serde_json::Value = serde_json::from_str(&text).context(JsonDecodeSnafu)?;
+        let response_data: serde_json::Value =
+            serde_json::from_str(&text).context(JsonDecodeSnafu)?;
 
-        let tx_id = v["data"]["id"]
+        let addr = response_data["address"]
             .as_str()
             .context(InvalidRequestSnafu {
-                reason: "transaction id missing or not string",
+                reason: "Address missing or not string",
             })?
             .to_string();
 
-        Ok(tx_id)
+        let response_network = response_data["network"]
+            .as_str()
+            .context(InvalidRequestSnafu {
+                reason: "Response network missing or not string",
+            })?
+            .to_string();
+
+        if response_network != network {
+            return InvalidRequestSnafu {
+                reason: "Response network is not the same as the request network",
+            }
+            .fail();
+        }
+
+        Ok(addr)
+    }
+
+    async fn withdraw_bitcoin(
+        &self,
+        recipient_address: &str,
+        amount_sats: &u64,
+        network: ChainType,
+    ) -> Result<String> {
+        let endpoint_path = "/withdrawals/crypto";
+        let endpoint_url = self.coinbase_base_url.join(endpoint_path).map_err(|_| {
+            InvalidRequestSnafu {
+                reason: "Failed to construct withdrawals/crypto URL".to_string(),
+            }
+            .build()
+        })?;
+
+        let network_str = match network {
+            ChainType::Bitcoin => "bitcoin",
+            ChainType::Ethereum => "ethereum",
+        };
+
+        // Convert satoshis to BTC (8 decimal places)
+        let btc_amount = format!("{:.8}", *amount_sats as f64 / 100_000_000.0);
+
+        let body = json!({
+            "amount": btc_amount,
+            "currency": "BTC",
+            "crypto_address": recipient_address,
+            "network": network_str
+        });
+
+        let body_str = serde_json::to_string(&body).unwrap();
+        let auth_headers = self.create_coinbase_auth_headers("POST", endpoint_path, &body_str)?;
+
+        let response = self
+            .http_client
+            .post(endpoint_url)
+            .body(body_str)
+            .header("Content-Type", "application/json")
+            .header("User-Agent", USER_AGENT)
+            .header("CB-ACCESS-KEY", &auth_headers.access_key)
+            .header("CB-ACCESS-PASSPHRASE", &auth_headers.access_passphrase)
+            .header("CB-ACCESS-SIGN", &auth_headers.access_signature)
+            .header("CB-ACCESS-TIMESTAMP", &auth_headers.access_timestamp)
+            .send()
+            .await
+            .context(HttpRequestSnafu)?;
+
+        let text = response.text().await.context(HttpRequestSnafu)?;
+        let response_data: serde_json::Value =
+            serde_json::from_str(&text).context(JsonDecodeSnafu)?;
+
+        let withdrawal_id = response_data["id"]
+            .as_str()
+            .context(InvalidRequestSnafu {
+                reason: "Withdrawal id missing or not string",
+            })?
+            .to_string();
+
+        Ok(withdrawal_id)
+    }
+
+    /// Get the status and details of a single transfer/withdrawal
+    async fn get_withdrawal_status(&self, withdrawal_id: &str) -> Result<WithdrawalStatus> {
+        let endpoint_path = format!("/transfers/{withdrawal_id}");
+        let endpoint_url = self.coinbase_base_url.join(&endpoint_path).map_err(|_| {
+            InvalidRequestSnafu {
+                reason: "Failed to construct transfer status URL".to_string(),
+            }
+            .build()
+        })?;
+
+        // Create authentication headers for GET request with empty body
+        let empty_body = "";
+        let auth_headers = self.create_coinbase_auth_headers("GET", &endpoint_path, empty_body)?;
+
+        let response = self
+            .http_client
+            .get(endpoint_url)
+            .header("User-Agent", USER_AGENT)
+            .header("CB-ACCESS-KEY", &auth_headers.access_key)
+            .header("CB-ACCESS-PASSPHRASE", &auth_headers.access_passphrase)
+            .header("CB-ACCESS-SIGN", &auth_headers.access_signature)
+            .header("CB-ACCESS-TIMESTAMP", &auth_headers.access_timestamp)
+            .send()
+            .await
+            .context(HttpRequestSnafu)?;
+
+        let text = response.text().await.context(HttpRequestSnafu)?;
+        let withdrawal_data: serde_json::Value =
+            serde_json::from_str(&text).context(JsonDecodeSnafu)?;
+
+        if withdrawal_data["cancelled"].is_null() {
+            Ok(WithdrawalStatus::Cancelled)
+        } else if withdrawal_data["completed_at"].is_null() {
+            Ok(WithdrawalStatus::Pending)
+        } else {
+            Ok(WithdrawalStatus::Completed(
+                withdrawal_data["details"]["crypto_transaction_hash"]
+                    .as_str()
+                    .unwrap()
+                    .to_string(),
+            ))
+        }
     }
 }
 
@@ -402,38 +402,53 @@ pub async fn convert_btc_to_cbbtc(
 
     // get btc deposit address
     let btc_deposit_address = coinbase_client
-        .get_btc_deposit_address(&btc_account_id)
+        .get_btc_deposit_address(&btc_account_id, ChainType::Bitcoin)
         .await?;
 
     // send btc to the deposit address
     let btc_tx_hash = coinbase_client
-        .send_bitcoin(
-            &btc_deposit_address,
-            &amount_sats,
-            ChainType::Bitcoin,
-            &btc_account_id,
-        )
+        .withdraw_bitcoin(&btc_deposit_address, &amount_sats, ChainType::Bitcoin)
         .await?;
 
     // wait for the btc to be confirmed
     sender_wallet
-        .guarantee_confirmations(&btc_tx_hash, 2) // coinbase needs 3 confirmations for btc transactions to credit
+        .guarantee_confirmations(&btc_tx_hash, 3) // 2 confirmations for btc transactions to credit on coinbase we do + 1 to be safe
         .await
         .context(WalletSnafu)?;
 
     // at this point, the btc is confirmed and should be credited to our coinbase btc account
     // now we can send the btc to eth which will implicitly convert it to cbbtc
 
-    let evm_tx_hash = coinbase_client
-        .send_bitcoin(
-            recipient_address,
-            &amount_sats,
-            ChainType::Ethereum,
-            &btc_account_id,
-        )
+    let withdrawal_id = coinbase_client
+        .withdraw_bitcoin(recipient_address, &amount_sats, ChainType::Ethereum)
         .await?;
 
-    Ok(evm_tx_hash)
+    let start_time = Instant::now();
+    loop {
+        let withdrawal_status = coinbase_client
+            .get_withdrawal_status(&withdrawal_id)
+            .await?;
+        match withdrawal_status {
+            WithdrawalStatus::Completed(tx_hash) => {
+                return Ok(tx_hash);
+            }
+            WithdrawalStatus::Pending => {
+                if start_time.elapsed() > Duration::from_secs(60 * 60) {
+                    warn!(
+                        "Coinbase withdrawal with id {} has been pending for more than 1 hour",
+                        withdrawal_id
+                    );
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            WithdrawalStatus::Cancelled => {
+                return InvalidRequestSnafu {
+                    reason: "Withdrawal cancelled".to_string(),
+                }
+                .fail();
+            }
+        }
+    }
 }
 
 pub async fn convert_cbbtc_to_btc(
@@ -462,7 +477,10 @@ pub async fn convert_cbbtc_to_btc(
         amount: U256::from(amount_sats),
     };
 
-    let available_balance = sender_wallet.balance(&cbbtc).await.context(WalletSnafu)?;
+    let available_balance = sender_wallet
+        .balance(&cbbtc)
+        .await
+        .context(WalletSnafu)?;
 
     if available_balance < lot.amount {
         return InsufficientBalanceSnafu {
@@ -476,7 +494,7 @@ pub async fn convert_cbbtc_to_btc(
 
     // get the cbbtc deposit address
     let cbbtc_deposit_address = coinbase_client
-        .get_cbbtc_deposit_address(&btc_account_id)
+        .get_btc_deposit_address(&btc_account_id, ChainType::Ethereum)
         .await?;
 
     // send the cbbtc to the deposit address
@@ -487,23 +505,41 @@ pub async fn convert_cbbtc_to_btc(
 
     // wait for the cbbtc to be confirmed
     sender_wallet
-        .guarantee_confirmations(&cbbtc_tx_hash, 14) // coinbase needs 3 confirmations for cbbtc transactions to credit
+        .guarantee_confirmations(&cbbtc_tx_hash, 36) // 35 confirmations for cbbtc transactions to credit on coinbase we do + 1 to be safe
         .await
         .context(WalletSnafu)?;
 
     // at this point, the cbbtc is confirmed and should be credited to our coinbase btc account
     // now we can send the btc to eth which will implicitly convert it to cbbtc
-
-    let evm_tx_hash = coinbase_client
-        .send_bitcoin(
-            recipient_address,
-            &amount_sats,
-            ChainType::Bitcoin,
-            &btc_account_id,
-        )
+    let withdrawal_id = coinbase_client
+        .withdraw_bitcoin(recipient_address, &amount_sats, ChainType::Bitcoin)
         .await?;
-
-    Ok(evm_tx_hash)
+    let start_time = Instant::now();
+    loop {
+        let withdrawal_status = coinbase_client
+            .get_withdrawal_status(&withdrawal_id)
+            .await?;
+        match withdrawal_status {
+            WithdrawalStatus::Completed(tx_hash) => {
+                return Ok(tx_hash);
+            }
+            WithdrawalStatus::Pending => {
+                if start_time.elapsed() > Duration::from_secs(60 * 60) {
+                    warn!(
+                        "Coinbase withdrawal with id {} has been pending for more than 1 hour",
+                        withdrawal_id
+                    );
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            WithdrawalStatus::Cancelled => {
+                return InvalidRequestSnafu {
+                    reason: "Withdrawal cancelled".to_string(),
+                }
+                .fail();
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -512,21 +548,128 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn test_get_portfolio() {
-        let coinbase_api_key = std::env::var("COINBASE_API_KEY").unwrap();
-        let coinbase_api_secret = std::env::var("COINBASE_API_SECRET").unwrap();
-        let coinbase_base_url = Url::parse("https://api.coinbase.com").unwrap();
+    #[ignore = "requires COINBASE_* environment variables and live API access"]
+    async fn test_cb_account_api_coverage() {
+        let coinbase_exchange_api_key = std::env::var("COINBASE_EXCHANGE_API_KEY").unwrap();
+        let coinbase_exchange_api_passphrase =
+            std::env::var("COINBASE_EXCHANGE_API_PASSPHRASE").unwrap();
+        let coinbase_exchange_api_secret = std::env::var("COINBASE_EXCHANGE_API_SECRET").unwrap();
+        let coinbase_base_url = Url::parse("https://api.exchange.coinbase.com").unwrap();
 
-        let coinbase_client =
-            CoinbaseClient::new(coinbase_base_url, coinbase_api_key, coinbase_api_secret).unwrap();
+        let coinbase_client = CoinbaseClient::new(
+            coinbase_base_url,
+            coinbase_exchange_api_key,
+            coinbase_exchange_api_passphrase,
+            coinbase_exchange_api_secret,
+        )
+        .unwrap();
 
         let btc_account_id = coinbase_client.get_btc_account_id().await.unwrap();
         println!("btc_account_id: {btc_account_id}");
 
+        // now test the btc deposit address
         let btc_deposit_address = coinbase_client
-            .get_btc_deposit_address(&btc_account_id)
+            .get_btc_deposit_address(&btc_account_id, ChainType::Bitcoin)
             .await
             .unwrap();
         println!("btc_deposit_address: {btc_deposit_address}");
+
+        // now test the cbbtc deposit address
+        let cbbtc_deposit_address = coinbase_client
+            .get_btc_deposit_address(&btc_account_id, ChainType::Ethereum)
+            .await
+            .unwrap();
+        println!("cbbtc_deposit_address: {cbbtc_deposit_address}");
+    }
+
+    #[tokio::test]
+    #[ignore = "requires COINBASE_* environment variables and Node.js runtime"]
+    async fn test_javascript_hmac_signature() {
+        use std::fs;
+        use std::process::Command;
+
+        // Extract API credentials from environment variables like test_get_portfolio
+        let coinbase_exchange_api_passphrase =
+            std::env::var("COINBASE_EXCHANGE_API_PASSPHRASE").unwrap();
+        let coinbase_exchange_api_secret = std::env::var("COINBASE_EXCHANGE_API_SECRET").unwrap();
+        let coinbase_base_url = Url::parse("https://api.exchange.coinbase.com").unwrap();
+        let coinbase_exchange_api_key = std::env::var("COINBASE_EXCHANGE_API_KEY").unwrap();
+
+        let coinbase_client = CoinbaseClient::new(
+            coinbase_base_url,
+            coinbase_exchange_api_key,
+            coinbase_exchange_api_passphrase.clone(),
+            coinbase_exchange_api_secret.clone(),
+        )
+        .unwrap();
+
+        let body = json!({"hello": "world"});
+        let body_str = serde_json::to_string(&body).unwrap();
+        let request_path = "/orders";
+        let method = "POST";
+
+        let auth_headers_rust = coinbase_client
+            .create_coinbase_auth_headers(method, request_path, &body_str)
+            .unwrap();
+        println!("auth_headers_rust: {auth_headers_rust:?}");
+
+        let access_timestamp = auth_headers_rust.access_timestamp;
+
+        // Create a temporary JavaScript file with real API credentials
+        let js_code = format!(
+            r#"
+// import crypto library
+var crypto = require("crypto");
+
+// create the json request object
+var cb_access_timestamp = {access_timestamp}; 
+var cb_access_passphrase = "{coinbase_exchange_api_passphrase}";
+var secret = "{coinbase_exchange_api_secret}";
+var requestPath = "{request_path}";
+var body = JSON.stringify({body_str});
+var method = "{method}";
+
+// create the prehash string by concatenating required parts
+var message = cb_access_timestamp + method + requestPath + body;
+
+// decode the base64 secret
+var key = Buffer.from(secret, "base64");
+
+// create a sha256 hmac with the secret
+var hmac = crypto.createHmac("sha256", key);
+
+// sign the require message with the hmac and base64 encode the result
+var cb_access_sign = hmac.update(message).digest("base64");
+
+// Print out the signature
+console.log("cb_access_sign:", cb_access_sign);
+console.log("timestamp:", cb_access_timestamp);
+console.log("message:", message);
+"#
+        );
+
+        // Write JavaScript to a temporary file
+        fs::write("/tmp/coinbase_hmac_test.js", js_code).expect("Failed to write JS file");
+
+        // Execute the JavaScript file with Node.js
+        let output = Command::new("node")
+            .arg("/tmp/coinbase_hmac_test.js")
+            .output()
+            .expect("Failed to execute Node.js");
+
+        // Print the output
+        println!("JavaScript execution stdout:");
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+
+        if !output.stderr.is_empty() {
+            println!("JavaScript execution stderr:");
+            println!("{}", String::from_utf8_lossy(&output.stderr));
+        }
+
+        // Clean up the temporary file
+        let _ = fs::remove_file("/tmp/coinbase_hmac_test.js");
+
+        // Ensure the command executed successfully
+        assert!(output.status.success(), "JavaScript execution failed");
     }
 }

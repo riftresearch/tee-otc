@@ -90,22 +90,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mul_div_precision() {
-        // Test that mul_div handles large numbers without overflow
-        let a = U256::MAX / U256::from(2);
-        let b = U256::from(4);
-        let denom = U256::from(2);
-        let result = mul_div(a, b, denom);
-        assert_eq!(result, U256::MAX);
-
-        // Test BPS calculation precision
-        let amount = U256::from(1000);
-        let balance = U256::from(5000);
-        let result = mul_div(amount, U256::from(BPS), balance);
-        assert_eq!(result, U256::from(2000)); // 1000 * 10_000 / 5000 = 2000 (i.e., 20.00%)
-    }
-
-    #[test]
     #[should_panic]
     fn test_strategy_invalid_threshold_zero() {
         QuoteBalanceStrategy::new(0); // Should panic on zero

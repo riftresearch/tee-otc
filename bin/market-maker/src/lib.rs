@@ -178,21 +178,25 @@ pub struct MarketMakerArgs {
     pub database_url: String,
 
     /// Coinbase API key
-    #[arg(long, env = "COINBASE_API_KEY")]
-    pub coinbase_api_key: String,
+    #[arg(long, env = "COINBASE_EXCHANGE_API_KEY")]
+    pub coinbase_exchange_api_key: String,
+
+    /// Coinbase API passphrase
+    #[arg(long, env = "COINBASE_EXCHANGE_API_PASSPHRASE")]
+    pub coinbase_exchange_api_passphrase: String,
 
     /// Coinbase API secret
-    #[arg(long, env = "COINBASE_API_SECRET")]
-    pub coinbase_api_secret: String,
+    #[arg(long, env = "COINBASE_EXCHANGE_API_SECRET")]
+    pub coinbase_exchange_api_secret: String,
 
     /// Coinbase API base URL
     #[arg(
         long,
-        env = "COINBASE_API_BASE_URL",
-        default_value = "https://api.coinbase.com",
+        env = "COINBASE_EXCHANGE_API_BASE_URL",
+        default_value = "https://api.exchange.coinbase.com",
         value_parser = parse_url
     )]
-    pub coinbase_api_base_url: Url,
+    pub coinbase_exchange_api_base_url: Url,
 
     /// Target BTC allocation as percentage of total inventory (in basis points)
     /// Default 5000 = 50% BTC, 50% cbBTC
@@ -203,6 +207,10 @@ pub struct MarketMakerArgs {
     /// Default 2500 = ±25% deviation from target triggers rebalancing
     #[arg(long, env = "REBALANCE_TOLERANCE_BPS", default_value = "2500")]
     pub rebalance_tolerance_bps: u64,
+
+    /// Auto manage inventory, based on inventory target ratio and rebalance tolerance and using coinbase exchange to facilitate the conversion between BTC and cbBTC
+    #[arg(long, env = "AUTO_MANAGE_INVENTORY", default_value = "false")]
+    pub auto_manage_inventory: bool,
 }
 
 fn parse_hex_string(s: &str) -> std::result::Result<[u8; 32], String> {
@@ -334,25 +342,28 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         })
     });
 
-    let coinbase_client = CoinbaseClient::new(
-        args.coinbase_api_base_url,
-        args.coinbase_api_key,
-        args.coinbase_api_secret,
-    )
-    .context(CoinbaseClientSnafu)?;
+    if args.auto_manage_inventory {
+        let coinbase_client = CoinbaseClient::new(
+            args.coinbase_exchange_api_base_url,
+            args.coinbase_exchange_api_key,
+            args.coinbase_exchange_api_passphrase,
+            args.coinbase_exchange_api_secret,
+        )
+        .context(CoinbaseClientSnafu)?;
 
-    let conversion_actor = run_rebalancer(
-        coinbase_client,
-        bitcoin_wallet.clone(),
-        evm_wallet.clone(),
-        BandsParams {
-            target_bps: args.inventory_target_ratio_bps,
-            band_width_bps: args.rebalance_tolerance_bps,
-            poll_interval: Duration::from_secs(60),
-        },
-    );
+        let conversion_actor = run_rebalancer(
+            coinbase_client,
+            bitcoin_wallet.clone(),
+            evm_wallet.clone(),
+            BandsParams {
+                target_bps: args.inventory_target_ratio_bps,
+                band_width_bps: args.rebalance_tolerance_bps,
+                poll_interval: Duration::from_secs(60),
+            },
+        );
 
-    join_set.spawn(async move { conversion_actor.await.context(ConversionActorSnafu) });
+        join_set.spawn(async move { conversion_actor.await.context(ConversionActorSnafu) });
+    }
 
     handle_background_thread_result(join_set.join_next().await).context(BackgroundThreadSnafu)?;
 
