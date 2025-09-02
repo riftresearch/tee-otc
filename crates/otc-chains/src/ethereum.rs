@@ -1,8 +1,8 @@
 use crate::traits::MarketMakerPaymentValidation;
 use crate::{key_derivation, ChainOperations, Result};
-use alloy::primitives::{Address, Log, U256};
+use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
-use alloy::rpc::types::TransactionReceipt;
+use alloy::rpc::types::{Log as RpcLog, TransactionReceipt};
 use alloy::signers::local::PrivateKeySigner;
 use alloy::sol;
 use async_trait::async_trait;
@@ -206,17 +206,13 @@ impl EthereumChain {
             let intra_tx_transfers =
                 extract_all_transfers_from_transaction_receipt(&transaction_receipt);
 
-            // TODO: There's a security issue with handling more than 1 swap per tx, so for now we force there to be no more than 2 transfers per tx (1 for the swap, 1 for the fee)
-            if intra_tx_transfers.len() > 2 {
-                debug!("More than 2 transfers in transaction",);
-                for transfer_log in intra_tx_transfers {
-                    debug!("Transfer: {:?}", transfer_log);
-                }
-                continue;
-            }
             for (index, transfer_log) in intra_tx_transfers.iter().enumerate() {
+                // Ensure this transfer is for the allowed token (same contract)
+                if transfer_log.address() != self.allowed_token {
+                    continue;
+                }
                 // validate the recipient
-                if transfer_log.to != *recipient_address {
+                if transfer_log.inner.data.to != *recipient_address {
                     debug!(
                         "Transfer recipient is not the expected address: {:?}",
                         transfer
@@ -224,7 +220,7 @@ impl EthereumChain {
                     continue;
                 }
                 // validate the amount
-                if transfer_log.value < *amount {
+                if transfer_log.inner.data.value < *amount {
                     debug!("Transfer amount is less than expected: {:?}", transfer);
                     continue;
                 }
@@ -257,15 +253,22 @@ impl EthereumChain {
                         message: "Invalid fee address".to_string(),
                     })?;
 
-                    // NOTE: This is only works b/c we force there to be 2 transfers IF it's a MM payment
-                    let fee_log_index = if index == 0 { 1 } else { 0 };
-                    let fee_log = intra_tx_transfers[fee_log_index].clone();
-                    if fee_log.to != fee_address {
-                        info!("Fee address is not the expected address");
+                    // Enforce invariant: the next transfer log must be the fee transfer
+                    let Some(next_log) = intra_tx_transfers.get(index + 1) else {
+                        debug!("Missing next transfer log for fee validation");
+                        continue;
+                    };
+                    // Same token and correct recipient
+                    if next_log.address() != self.allowed_token {
+                        debug!("Next transfer not from allowed token contract");
                         continue;
                     }
-                    if fee_log.value < mm_payment.fee_amount {
-                        info!("Fee amount is less than expected");
+                    if next_log.inner.data.to != fee_address {
+                        info!("Fee address is not the expected address in next log");
+                        continue;
+                    }
+                    if next_log.inner.data.value < mm_payment.fee_amount {
+                        info!("Fee amount in next log is less than expected");
                         continue;
                     }
                 }
@@ -289,7 +292,7 @@ impl EthereumChain {
                     tx_hash: alloy::hex::encode(transfer.transaction_hash),
                     detected_at: chrono::Utc::now(),
                     confirmations,
-                    amount: transfer_log.value,
+                    amount: transfer_log.inner.data.value,
                 });
             }
         }
@@ -300,16 +303,14 @@ impl EthereumChain {
 
 fn extract_all_transfers_from_transaction_receipt(
     transaction_receipt: &TransactionReceipt,
-) -> Vec<Log<Transfer>> {
+) -> Vec<RpcLog<Transfer>> {
     let mut transfers = Vec::new();
     for log in transaction_receipt.logs() {
-        let transfer_log = log.log_decode::<Transfer>();
-        if transfer_log.is_err() {
-            // This log is not a transfer log, so skip it
-            continue;
+        let decoded = log.log_decode::<Transfer>();
+        if let Ok(decoded) = decoded {
+            // Preserve full decoded log to keep contract address and event fields
+            transfers.push(decoded);
         }
-        let transfer_log = transfer_log.unwrap().inner;
-        transfers.push(transfer_log);
     }
     transfers
 }
