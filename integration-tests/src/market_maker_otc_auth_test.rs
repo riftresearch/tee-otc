@@ -1,3 +1,4 @@
+use alloy::primitives::U256;
 use market_maker::{run_market_maker, MarketMakerArgs};
 use otc_server::{server::run_server, OtcServerArgs};
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
@@ -24,6 +25,15 @@ async fn test_market_maker_otc_auth(
         .await
         .unwrap()
         .0;
+
+    devnet
+        .ethereum
+        .fund_eth_address(
+            market_maker_account.ethereum_address,
+            U256::from(100_000_000_000_000_000_000i128),
+        )
+        .await
+        .unwrap();
 
     let mut join_set = JoinSet::new();
     let otc_port = get_free_port().await;

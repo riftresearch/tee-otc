@@ -1,4 +1,5 @@
-use alloy::primitives::U256;
+use alloy::primitives::{Address, U256};
+use alloy::providers::PendingTransactionError;
 use async_trait::async_trait;
 use chrono::Duration;
 use dashmap::DashMap;
@@ -11,6 +12,12 @@ use tokio::sync::oneshot;
 
 #[derive(Debug, Snafu)]
 pub enum WalletError {
+    #[snafu(display("Failed to sign hash: {}", source))]
+    SignatureFailed { source: alloy::signers::Error },
+
+    #[snafu(display("Invalid sender: expected {}, actual {}", expected, actual))]
+    InvalidSender { expected: Address, actual: Address },
+
     #[snafu(display("Wallet not registered for chain type: {:?}", chain_type))]
     WalletNotRegistered { chain_type: ChainType },
 
@@ -55,9 +62,23 @@ pub enum WalletError {
 
     #[snafu(display("Failed to receive transaction result: {}", source))]
     ReceiveResult { source: oneshot::error::RecvError },
+
+    #[snafu(display("Failed to get code: {}", source))]
+    RpcCallError {
+        source: alloy::transports::RpcError<alloy::transports::TransportErrorKind>,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
+    #[snafu(display("Failed to send transaction: {}", source))]
+    PendingTransactionError {
+        source: PendingTransactionError,
+        #[snafu(implicit)]
+        loc: Location,
+    },
 }
 
-pub type Result<T, E = WalletError> = std::result::Result<T, E>;
+pub type WalletResult<T, E = WalletError> = std::result::Result<T, E>;
 
 #[async_trait]
 pub trait Wallet: Send + Sync {
@@ -68,7 +89,7 @@ pub trait Wallet: Send + Sync {
         lot: &Lot,
         recipient: &str,
         mm_payment_validation: Option<MarketMakerPaymentValidation>,
-    ) -> Result<String>;
+    ) -> WalletResult<String>;
 
     /// Waits until the given transaction reaches the specified number of confirmations.
     ///
@@ -85,10 +106,10 @@ pub trait Wallet: Send + Sync {
     /// Notes:
     /// - Does not guarantee confirmation if the transaction is permanently invalid (e.g., double spend).
     /// - Requires an active connection to a node that tracks the mempool and blockchain state.
-    async fn guarantee_confirmations(&self, tx_hash: &str, confirmations: u64) -> Result<()>;
+    async fn guarantee_confirmations(&self, tx_hash: &str, confirmations: u64) -> WalletResult<()>;
 
     /// Return the available balance for the given token
-    async fn balance(&self, token: &TokenIdentifier) -> Result<U256>;
+    async fn balance(&self, token: &TokenIdentifier) -> WalletResult<U256>;
 
     fn receive_address(&self, token: &TokenIdentifier) -> String;
 
@@ -158,11 +179,11 @@ mod tests {
             _lot: &Lot,
             _to_address: &str,
             _mm_payment_validation: Option<MarketMakerPaymentValidation>,
-        ) -> Result<String> {
+        ) -> WalletResult<String> {
             Ok("mock_txid_123".to_string())
         }
 
-        async fn balance(&self, _token: &TokenIdentifier) -> Result<U256> {
+        async fn balance(&self, _token: &TokenIdentifier) -> WalletResult<U256> {
             Ok(U256::from(1000000000000000000u64))
         }
 
@@ -170,7 +191,11 @@ mod tests {
             ChainType::Bitcoin
         }
 
-        async fn guarantee_confirmations(&self, _tx_hash: &str, _confirmations: u64) -> Result<()> {
+        async fn guarantee_confirmations(
+            &self,
+            _tx_hash: &str,
+            _confirmations: u64,
+        ) -> WalletResult<()> {
             Ok(())
         }
 

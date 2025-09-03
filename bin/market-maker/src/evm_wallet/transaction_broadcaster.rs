@@ -19,7 +19,7 @@ use tokio::{
     },
     task::JoinSet,
 };
-use tracing;
+use tracing::{self, info};
 
 #[derive(Debug, Clone)]
 pub struct RevertInfo {
@@ -158,7 +158,7 @@ impl EVMTransactionBroadcaster {
         &self,
         transaction_request: AlloyTransactionRequest,
         preflight_check: PreflightCheck,
-    ) -> crate::wallet::Result<TransactionExecutionResult> {
+    ) -> crate::wallet::WalletResult<TransactionExecutionResult> {
         let (tx, rx) = oneshot::channel();
         let request = Request {
             transaction_request,
@@ -171,11 +171,11 @@ impl EVMTransactionBroadcaster {
         self.request_sender
             .send(request)
             .await
-            .map_err(|_| crate::wallet::WalletError::EnqueueFailed.into())?;
+            .map_err(|_| crate::wallet::WalletError::EnqueueFailed)?;
 
         // If there's an unhandled error, this will just get bubbled
         rx.await
-            .map_err(|e| crate::wallet::WalletError::ReceiveResult { source: e }.into())
+            .map_err(|e| crate::wallet::WalletError::ReceiveResult { source: e })
     }
 
     // Transaction broadcast flow:
@@ -222,7 +222,7 @@ impl EVMTransactionBroadcaster {
                 "cast call {} --from {} --data {} --trace --block {} --rpc-url {}",
                 transaction_request.to.unwrap().to().unwrap(),
                 signer_address,
-                transaction_request.input.input().unwrap(),
+                transaction_request.input.input().unwrap_or_default(),
                 block_height,
                 debug_rpc_url
             );

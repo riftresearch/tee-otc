@@ -13,9 +13,12 @@ mod strategy;
 pub mod wallet;
 mod wrapped_bitcoin_quoter;
 
+pub use wallet::WalletError;
+pub use wallet::WalletResult;
+
 use std::{str::FromStr, sync::Arc, time::Duration};
 
-use alloy::{primitives::Address, providers::Provider};
+use alloy::{primitives::Address, providers::Provider, signers::local::PrivateKeySigner};
 use bdk_wallet::bitcoin;
 use blockchain_utils::{create_websocket_wallet_provider, handle_background_thread_result};
 use clap::Parser;
@@ -273,13 +276,12 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         &mut join_set,
     ));
 
-    // TODO: something better than adhoc approval?
     evm_wallet
-        .ensure_inf_approval_on_disperse(
-            &Address::from_str("0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf").unwrap(),
+        .ensure_eip7702_delegation(
+            PrivateKeySigner::from_slice(&args.ethereum_wallet_private_key).unwrap(),
         )
         .await
-        .expect("Failed to ensure inf approval on disperse contract");
+        .expect("Should have been able to ensure EIP-7702 delegation");
 
     let mut wallet_manager = WalletManager::new();
 

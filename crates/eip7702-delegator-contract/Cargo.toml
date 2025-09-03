@@ -1,5 +1,5 @@
 [package]
-name = "disperse-contract"
+name = "eip7702-delegator-contract"
 version = "0.1.0"
 edition = "2021"
 

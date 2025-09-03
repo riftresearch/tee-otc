@@ -20,6 +20,7 @@ use tokio::task::JoinSet;
 use tracing::info;
 
 use crate::wallet::{self, Wallet as WalletTrait, WalletError};
+use crate::WalletResult;
 
 const STOP_GAP: usize = 50;
 const PARALLEL_REQUESTS: usize = 5;
@@ -218,7 +219,7 @@ impl WalletTrait for BitcoinWallet {
         lot: &Lot,
         to_address: &str,
         mm_payment_validation: Option<MarketMakerPaymentValidation>,
-    ) -> wallet::Result<String> {
+    ) -> WalletResult<String> {
         ensure_valid_lot(lot)?;
 
         info!(
@@ -252,7 +253,7 @@ impl WalletTrait for BitcoinWallet {
             })
     }
 
-    async fn balance(&self, token: &TokenIdentifier) -> wallet::Result<U256> {
+    async fn balance(&self, token: &TokenIdentifier) -> WalletResult<U256> {
         if token != &TokenIdentifier::Native {
             return Err(WalletError::UnsupportedToken {
                 token: token.clone(),

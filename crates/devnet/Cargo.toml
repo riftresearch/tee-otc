@@ -23,7 +23,7 @@ bip39 = {workspace = true}
 snafu = {workspace = true}
 reqwest = {workspace = true}
 uuid = {workspace= true}
-disperse-contract = {workspace=true}
+eip7702-delegator-contract = {workspace=true}
 
 # these dependences below here should be removed to be replaced with the project preferred crates of tracing and snafu respectively
 log = "0.4.27"

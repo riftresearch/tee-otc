@@ -1,5 +1,6 @@
 use alloy::primitives::TxHash;
 use alloy::providers::ext::AnvilApi;
+use alloy::signers::local::PrivateKeySigner;
 use alloy::{primitives::U256, providers::Provider};
 
 use bitcoincore_rpc_async::RpcApi;
@@ -308,7 +309,9 @@ async fn test_swap_from_ethereum_to_bitcoin(
         .unwrap();
 
     user_ethereum_wallet
-        .ensure_inf_approval_on_disperse(devnet.ethereum.cbbtc_contract.address())
+        .ensure_eip7702_delegation(
+            PrivateKeySigner::from_slice(&user_account.secret_bytes).unwrap(),
+        )
         .await
         .unwrap();
 

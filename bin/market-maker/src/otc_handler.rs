@@ -2,8 +2,8 @@ use crate::quote_storage::QuoteStorage;
 use crate::strategy::ValidationStrategy;
 use crate::{config::Config, wallet::WalletManager};
 use alloy::primitives::U256;
-use chrono::Utc;
 use blockchain_utils::FeeCalcFromLot;
+use chrono::Utc;
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_protocols::mm::{MMErrorCode, MMRequest, MMResponse, MMStatus, ProtocolMessage};
 use std::sync::Arc;
@@ -142,6 +142,7 @@ impl OTCMessageHandler {
                 let wallet = self.wallet_manager.get(expected_lot.currency.chain);
                 let response: MMResponse = {
                     if let Some(wallet) = wallet {
+                        info!("Creating payment for swap {swap_id}");
                         let tx_result = wallet
                             .create_payment(
                                 expected_lot,
@@ -152,7 +153,7 @@ impl OTCMessageHandler {
                                 }),
                             )
                             .await;
-
+                        info!("Payment created for swap {swap_id} {tx_result:?}");
                         match tx_result {
                             Ok(txid) => MMResponse::DepositInitiated {
                                 request_id: *request_id,

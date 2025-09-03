@@ -3,21 +3,27 @@ pub mod transaction_broadcaster;
 use std::{str::FromStr, sync::Arc};
 
 use alloy::{
-    network::TransactionBuilder,
+    hex,
+    network::{TransactionBuilder, TransactionBuilder7702},
     primitives::{Address, U256},
-    providers::Provider,
-    rpc::types::TransactionRequest,
+    providers::{Provider, WalletProvider},
+    rpc::types::{Authorization, TransactionRequest},
+    signers::{local::PrivateKeySigner, SignerSync},
+    sol_types::SolValue,
 };
 use async_trait::async_trait;
 use blockchain_utils::{GenericERC20::GenericERC20Instance, WebsocketWalletProvider};
-use disperse_contract::Disperse::DisperseInstance;
+use eip7702_delegator_contract::{
+    EIP7702Delegator::{EIP7702DelegatorInstance, Execution},
+    ModeCode, EIP7702_DELEGATOR_CROSSCHAIN_ADDRESS,
+};
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
-use snafu::location;
+use snafu::{location, ResultExt};
 use tokio::task::JoinSet;
-use tracing::info;
+use tracing::{error, info};
 
-use crate::wallet::{self, Wallet, WalletError};
+use crate::{wallet::Wallet, WalletError, WalletResult};
 
 pub struct EVMWallet {
     pub tx_broadcaster: transaction_broadcaster::EVMTransactionBroadcaster,
@@ -25,7 +31,6 @@ pub struct EVMWallet {
 }
 
 const BALANCE_BUFFER_PERCENT: u8 = 25; // 25% buffer
-const DISPERSE_CONTRACT_ADDRESS: &str = "0xd152f549545093347A162DCE210e7293f1452150";
 
 impl EVMWallet {
     pub fn new(
@@ -45,44 +50,95 @@ impl EVMWallet {
             provider,
         }
     }
-    pub async fn ensure_inf_approval_on_disperse(
+    pub async fn ensure_eip7702_delegation(
         &self,
-        token_address: &Address,
-    ) -> wallet::Result<()> {
-        let disperse_contract_address = Address::from_str(DISPERSE_CONTRACT_ADDRESS).unwrap();
-        let token_contract = GenericERC20Instance::new(*token_address, self.provider.clone());
-        let min_approval = U256::MAX / U256::from(2);
-        let current_approval = token_contract
-            .allowance(self.tx_broadcaster.sender, disperse_contract_address)
-            .call()
-            .await
-            .map_err(|e| WalletError::GetErc20BalanceFailed {
-                context: e.to_string(),
-            })?;
-        if min_approval > current_approval {
-            info!(
-                "Allowance on disperse contract is insufficient for token {token_address}, approving inf allowance...",
-            );
-            // Ensure at least
-            let approve = token_contract.approve(
-                Address::from_str(DISPERSE_CONTRACT_ADDRESS).unwrap(),
-                U256::MAX,
-            );
-            let approve_tx = approve.into_transaction_request();
-            let approve_tx_hash = self
-                .tx_broadcaster
-                .broadcast_transaction(
-                    approve_tx,
-                    transaction_broadcaster::PreflightCheck::Simulate,
-                )
-                .await?;
-            info!(
-                "Allowance increased to inf for contract: {token_address} for disperse contract tx hash: {:?}",
-                approve_tx_hash
-            );
-        } else {
-            info!("Allowance on disperse contract is sufficient for token {token_address}",);
+        sender_signer: PrivateKeySigner,
+    ) -> WalletResult<()> {
+        let derived_address = sender_signer.address();
+        if derived_address != self.tx_broadcaster.sender {
+            return Err(WalletError::InvalidSender {
+                expected: self.tx_broadcaster.sender,
+                actual: derived_address,
+            });
         }
+        let sender = derived_address;
+        let delegator_contract_address =
+            Address::from_str(EIP7702_DELEGATOR_CROSSCHAIN_ADDRESS).unwrap();
+
+        let code =
+            self.provider
+                .get_code_at(sender)
+                .await
+                .map_err(|e| WalletError::RpcCallError {
+                    source: e,
+                    loc: location!(),
+                })?;
+
+        let mut delegation_pattern = hex!("ef0100").to_vec();
+        delegation_pattern.extend_from_slice(&delegator_contract_address.0 .0);
+
+        if code.starts_with(&delegation_pattern) {
+            info!("EOA already has the proper delegation, skipping");
+            // if the EOA already has the proper delegation, return
+            return Ok(());
+        }
+
+        info!("EOA does not have the proper delegation, deploying");
+
+        let nonce = self
+            .provider
+            .get_transaction_count(sender)
+            .await
+            .map_err(|e| WalletError::RpcCallError {
+                source: e,
+                loc: location!(),
+            })?;
+
+        let chain_id = U256::from(self.provider.get_chain_id().await.map_err(|e| {
+            WalletError::RpcCallError {
+                source: e,
+                loc: location!(),
+            }
+        })?);
+
+        let authorization = Authorization {
+            chain_id,
+            address: delegator_contract_address,
+            nonce: nonce + 1, // The +1 is important, otherwise nonce will be incorrect but the tx will still succeed
+        };
+        info!("Delegation is for EOA: {:?}", sender);
+        info!("Authorization: {:?}", authorization);
+
+        let signature = sender_signer
+            .sign_hash_sync(&authorization.signature_hash())
+            .map_err(|e| WalletError::SignatureFailed { source: e })?;
+
+        let signed_authorization = authorization.into_signed(signature);
+        let tx = TransactionRequest::default()
+            .with_to(sender)
+            .with_authorization_list(vec![signed_authorization]);
+
+        // Send the transaction and wait for the broadcast.
+        let pending_tx =
+            self.provider
+                .send_transaction(tx)
+                .await
+                .map_err(|e| WalletError::RpcCallError {
+                    source: e,
+                    loc: location!(),
+                })?;
+
+        // Wait for the transaction to be included and get the receipt.
+        let receipt =
+            pending_tx
+                .get_receipt()
+                .await
+                .map_err(|e| WalletError::PendingTransactionError {
+                    source: e,
+                    loc: location!(),
+                })?;
+        info!("Receipt: {:?}", receipt);
+
         Ok(())
     }
 }
@@ -94,7 +150,7 @@ impl Wallet for EVMWallet {
         lot: &Lot,
         to_address: &str,
         mm_payment_validation: Option<MarketMakerPaymentValidation>,
-    ) -> wallet::Result<String> {
+    ) -> WalletResult<String> {
         if lot.currency.chain != ChainType::Ethereum {
             return Err(WalletError::UnsupportedToken {
                 token: lot.currency.token.clone(),
@@ -103,6 +159,7 @@ impl Wallet for EVMWallet {
         }
         ensure_valid_token(&lot.currency.token)?;
         let transaction_request = create_evm_transfer_transaction(
+            &self.tx_broadcaster.sender,
             &self.provider,
             lot,
             to_address,
@@ -122,6 +179,7 @@ impl Wallet for EVMWallet {
         // we need a method to get some erc20 calldata
         match broadcast_result {
             transaction_broadcaster::TransactionExecutionResult::Success(tx_receipt) => {
+                info!("Payment created for swap [evm_wallet] {tx_receipt:?}");
                 Ok(tx_receipt.transaction_hash.to_string())
             }
             _ => Err(WalletError::TransactionCreationFailed {
@@ -130,7 +188,7 @@ impl Wallet for EVMWallet {
         }
     }
 
-    async fn balance(&self, token: &TokenIdentifier) -> wallet::Result<U256> {
+    async fn balance(&self, token: &TokenIdentifier) -> WalletResult<U256> {
         // TODO: This check should also include a check that we can pay for gas
         if ensure_valid_token(token).is_err() {
             return Err(WalletError::UnsupportedToken {
@@ -184,7 +242,7 @@ async fn get_erc20_balance(
     provider: &Arc<WebsocketWalletProvider>,
     token_address: &Address,
     address: &Address,
-) -> wallet::Result<U256> {
+) -> WalletResult<U256> {
     let token_contract = GenericERC20Instance::new(*token_address, provider.clone());
     let balance = token_contract
         .balanceOf(*address)
@@ -197,6 +255,7 @@ async fn get_erc20_balance(
 }
 
 fn create_evm_transfer_transaction(
+    sender: &Address,
     provider: &Arc<WebsocketWalletProvider>,
     lot: &Lot,
     to_address: &str,
@@ -222,10 +281,7 @@ fn create_evm_transfer_transaction(
                 Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Ethereum])
                     .unwrap();
 
-            let token_contract = DisperseInstance::new(
-                Address::from_str(DISPERSE_CONTRACT_ADDRESS).unwrap(),
-                provider,
-            );
+            let token_contract = GenericERC20Instance::new(token_address, provider);
             let recipients = match mm_payment_validation.is_some() {
                 true => vec![to_address, fee_address],
                 false => vec![to_address],
@@ -237,8 +293,41 @@ fn create_evm_transfer_transaction(
                 }
                 false => vec![lot.amount],
             };
-            let transfer = token_contract.disperseTokenSimple(token_address, recipients, amounts);
-            let mut transaction_request = transfer.into_transaction_request();
+            let delegator_executions = recipients
+                .iter()
+                .zip(amounts.iter())
+                .map(|(recipient, amount)| {
+                    let calldata = token_contract
+                        .transfer(*recipient, *amount)
+                        .calldata()
+                        .clone();
+                    let target = token_address;
+                    let value = U256::from(0);
+                    let execution = Execution {
+                        target,
+                        value,
+                        callData: calldata,
+                    };
+                    execution
+                })
+                .collect::<Vec<_>>();
+
+            println!("delegator_executions: {:?}", delegator_executions);
+
+            let delegator_contract = EIP7702DelegatorInstance::new(
+                Address::from_str(EIP7702_DELEGATOR_CROSSCHAIN_ADDRESS).unwrap(),
+                provider,
+            );
+
+            let mut transaction_request = delegator_contract
+                .execute_1(
+                    ModeCode::Batch.as_fixed_bytes32(),
+                    delegator_executions.abi_encode().into(),
+                )
+                .into_transaction_request();
+
+            // B/c of EIP7702, we need to set the to address to the actual broadcast address
+            transaction_request.set_to(*sender);
 
             // Add nonce to the end of calldata if provided
             if let Some(mm_payment_validation) = &mm_payment_validation {
@@ -254,7 +343,6 @@ fn create_evm_transfer_transaction(
                 transaction_request.set_input(calldata_with_nonce);
                 transaction_request.set_input_and_data();
             }
-            info!("transaction_request: {:?}", transaction_request);
             Ok(transaction_request)
         }
     }
@@ -272,8 +360,4 @@ fn ensure_valid_token(token: &TokenIdentifier) -> Result<(), WalletError> {
         });
     }
     Ok(())
-}
-
-fn balance_with_buffer(balance: U256) -> U256 {
-    balance + (balance * U256::from(BALANCE_BUFFER_PERCENT)) / U256::from(100_u8)
 }

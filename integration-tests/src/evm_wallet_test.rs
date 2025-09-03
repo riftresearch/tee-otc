@@ -1,6 +1,7 @@
 use alloy::{
     primitives::U256,
-    providers::{ProviderBuilder, WsConnect},
+    providers::{Provider, ProviderBuilder, WsConnect},
+    signers::local::PrivateKeySigner,
 };
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::{
@@ -94,10 +95,16 @@ async fn test_evm_wallet_nonce_error_retry(
         &mut join_set,
     );
 
-    evm_wallet
-        .ensure_inf_approval_on_disperse(&test_token)
-        .await
-        .unwrap();
+    tokio::select! {
+        result = evm_wallet.ensure_eip7702_delegation(
+            PrivateKeySigner::from_slice(&market_maker_account.secret_bytes).unwrap(),
+        ) => {
+            result.unwrap();
+        },
+        err = join_set.join_next() => {
+            panic!("Join set exited unexpectedly, {err:?}");
+        }
+    }
 
     // Subscribe to transaction status updates
     let mut status_receiver = evm_wallet.tx_broadcaster.subscribe_to_status_updates();
@@ -267,7 +274,9 @@ async fn test_evm_wallet_gas_price_bumping(
     let evm_wallet = EVMWallet::new(provider.clone(), eth_rpc_url.to_string(), 1, &mut join_set);
 
     evm_wallet
-        .ensure_inf_approval_on_disperse(test_token)
+        .ensure_eip7702_delegation(
+            PrivateKeySigner::from_slice(&market_maker_account.secret_bytes).unwrap(),
+        )
         .await
         .unwrap();
 
@@ -392,4 +401,141 @@ async fn test_evm_wallet_error_handling(
     join_set.abort_all();
 
     info!("Error handling test completed");
+}
+
+#[sqlx::test]
+async fn test_evm_wallet_actually_sends_token(
+    _: PoolOptions<sqlx::Postgres>,
+    connect_options: PgConnectOptions,
+) {
+    // Initialize logging for debugging
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .with_thread_ids(true)
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
+
+    // Set up test accounts
+    let market_maker_account = MultichainAccount::new(1);
+    let recipient_account = MultichainAccount::new(2);
+
+    // Start the devnet
+    let devnet = RiftDevnet::builder()
+        .using_token_indexer(connect_options.to_database_url())
+        .using_esplora(true)
+        .build()
+        .await
+        .unwrap()
+        .0;
+
+    // Get the Ethereum RPC URL from the anvil instance
+    let eth_rpc_url = devnet.ethereum.anvil.endpoint_url();
+    let ws_url = devnet.ethereum.anvil.ws_endpoint_url();
+    let ws_url_string = ws_url.to_string();
+
+    // Create a wallet provider for the market maker
+    let wallet = market_maker_account.ethereum_wallet.clone();
+    let provider = Arc::new(
+        ProviderBuilder::new()
+            .wallet(wallet)
+            .connect_ws(WsConnect::new(ws_url_string))
+            .await
+            .unwrap(),
+    );
+
+    // Use the cbBTC token that's already deployed on devnet
+    let cbbtc_contract = devnet.ethereum.cbbtc_contract.clone();
+    let test_token = *devnet.ethereum.cbbtc_contract.address();
+
+    // Fund the market maker with cbBTC tokens
+    devnet
+        .ethereum
+        .mint_cbbtc(
+            market_maker_account.ethereum_address,
+            U256::from(10).pow(U256::from(24)), // 1M tokens
+        )
+        .await
+        .unwrap();
+
+    // Also fund with ETH for gas
+    devnet
+        .ethereum
+        .fund_eth_address(
+            market_maker_account.ethereum_address,
+            U256::from(10).pow(U256::from(19)), // 10 ETH
+        )
+        .await
+        .unwrap();
+
+    info!("Deployed test token at: {}", test_token);
+
+    // Create the EVM wallet with transaction broadcaster
+    let mut join_set = JoinSet::new();
+    let evm_wallet = EVMWallet::new(
+        provider.clone(),
+        eth_rpc_url.to_string(),
+        1, // 1 confirmation for testing
+        &mut join_set,
+    );
+
+    tokio::select! {
+        result = evm_wallet.ensure_eip7702_delegation(
+            PrivateKeySigner::from_slice(&market_maker_account.secret_bytes).unwrap(),
+        ) => {
+            result.unwrap();
+        },
+        err = join_set.join_next() => {
+            panic!("Join set exited unexpectedly, {err:?}");
+        }
+    }
+
+    // Subscribe to transaction status updates
+    let mut status_receiver = evm_wallet.tx_broadcaster.subscribe_to_status_updates();
+
+    // Create a currency for testing
+    let lot = Lot {
+        currency: Currency {
+            chain: ChainType::Ethereum,
+            token: TokenIdentifier::Address(test_token.to_string()),
+            decimals: 18,
+        },
+        amount: U256::from(1000) * U256::pow(U256::from(10), U256::from(18)), // 1000 tokens
+    };
+
+    let recipient_balance_before = cbbtc_contract
+        .balanceOf(recipient_account.ethereum_address)
+        .call()
+        .await
+        .unwrap();
+
+    let payment_txid = evm_wallet
+        .create_payment(&lot, &recipient_account.ethereum_address.to_string(), None)
+        .await
+        .unwrap();
+
+    println!("payment_txid: {:?}", payment_txid);
+
+    println!(
+        "market_maker_account.ethereum_address: {:?}",
+        market_maker_account.ethereum_address
+    );
+
+    let code = devnet
+        .ethereum
+        .funded_provider
+        .get_code_at(market_maker_account.ethereum_address)
+        .await
+        .unwrap();
+    println!("mm EOA code: {:?}", code);
+
+    let recipient_balance_after = cbbtc_contract
+        .balanceOf(recipient_account.ethereum_address)
+        .call()
+        .await
+        .unwrap();
+
+    assert!(
+        recipient_balance_after > recipient_balance_before,
+        "Recipient balance should increase"
+    );
 }
