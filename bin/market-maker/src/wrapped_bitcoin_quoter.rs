@@ -7,8 +7,8 @@ use alloy::eips::BlockNumberOrTag;
 use alloy::providers::DynProvider;
 use alloy::{primitives::U256, providers::Provider};
 use bdk_wallet::bitcoin::policy::DUST_RELAY_TX_FEE;
-use chrono::Utc;
 use blockchain_utils::{compute_protocol_fee_sats, inverse_compute_protocol_fee};
+use chrono::Utc;
 use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest};
 use otc_protocols::rfq::{FeeSchedule, QuoteWithFees, RFQResult};
 use serde::{Deserialize, Serialize};
@@ -319,6 +319,7 @@ fn calculate_fees_in_sats_to_send_cbbtc_on_eth(
     max_priority_fee_gwei: f64,
     eth_per_btc_price: f64,
 ) -> u64 {
+    // TODO(high): compute the cost to use the EIP7702 delegator contract, for a basic transfer of CB-BTC
     // This is the gas cost to use disperse.app on ethereum mainnet w/ 2 addresses as recipients reference: https://etherscan.io/tx/0x22d7b1141273fb60ded7a910da4eb4492fd349abe927b6d1961afa7759d25644
     let transfer_gas_limit = 98_722f64;
     let gas_cost_gwei = transfer_gas_limit * (max_priority_fee_gwei + base_fee_gwei);

@@ -199,11 +199,11 @@ async fn deploy_contracts(
         // no need to deploy, just create the instance from the cache
         let cbbtc_contract =
             GenericERC20Instance::new(CBBTC_ADDRESS.parse().unwrap(), provider.clone());
-        let disperse_contract = EIP7702DelegatorInstance::new(
+        let delegator_contract = EIP7702DelegatorInstance::new(
             EIP7702_DELEGATOR_CROSSCHAIN_ADDRESS.parse().unwrap(),
             provider,
         );
-        return Ok((cbbtc_contract, disperse_contract));
+        return Ok((cbbtc_contract, delegator_contract));
     }
 
     provider
@@ -230,12 +230,12 @@ async fn deploy_contracts(
         )
         .await?;
 
-    let disperse_contract = EIP7702DelegatorInstance::new(
+    let delegator_contract = EIP7702DelegatorInstance::new(
         EIP7702_DELEGATOR_CROSSCHAIN_ADDRESS.parse().unwrap(),
         provider,
     );
 
-    Ok((cbbtc_contract, disperse_contract))
+    Ok((cbbtc_contract, delegator_contract))
 }
 
 /// Spawns Anvil in a blocking task.
