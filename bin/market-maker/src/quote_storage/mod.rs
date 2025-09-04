@@ -6,12 +6,11 @@ use sqlx::{
     postgres::{PgPool, PgPoolOptions, PgRow},
     Row,
 };
-use std::sync::Arc;
 use tokio::{task::JoinSet, time};
 use tracing::{error, info};
 use uuid::Uuid;
 
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+static MIGRATOR: Migrator = sqlx::migrate!("src/quote_storage/migrations");
 
 #[derive(Debug, Snafu)]
 pub enum QuoteStorageError {

@@ -26,3 +26,6 @@ mod price_oracle_test;
 
 #[cfg(test)]
 mod quote_storage_test;
+
+#[cfg(test)]
+mod deposit_key_vault_test;

@@ -2,6 +2,7 @@ mod balance_strat;
 pub mod bitcoin_wallet;
 pub mod cb_bitcoin_converter;
 mod config;
+pub mod deposit_key_vault;
 pub mod evm_wallet;
 mod otc_client;
 mod otc_handler;
