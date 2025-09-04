@@ -1,5 +1,5 @@
 use alloy::primitives::U256;
-use market_maker::deposit_key_vault::DepositKeyVault;
+use market_maker::deposit_key_vault::{DepositKeyVault, DepositKeyVaultTrait};
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 
@@ -17,7 +17,11 @@ async fn test_deposit_key_vault_take_deposits(
 
     // Seed ETH deposits via public API: 5, 7, 20 (total 32)
     let eth = |amt: u64| Lot {
-        currency: Currency { chain: ChainType::Ethereum, token: TokenIdentifier::Native, decimals: 18 },
+        currency: Currency {
+            chain: ChainType::Ethereum,
+            token: TokenIdentifier::Native,
+            decimals: 18,
+        },
         amount: U256::from(amt),
     };
     vault
@@ -29,7 +33,10 @@ async fn test_deposit_key_vault_take_deposits(
         .await
         .expect("store k2");
     vault
-        .store_deposit(&market_maker::deposit_key_vault::Deposit::new("k3", eth(20)))
+        .store_deposit(&market_maker::deposit_key_vault::Deposit::new(
+            "k3",
+            eth(20),
+        ))
         .await
         .expect("store k3");
 
@@ -87,7 +94,11 @@ async fn test_deposit_key_vault_take_deposits(
 
     // Seed BTC deposits via API to test Partial
     let btc = |amt: u64| Lot {
-        currency: Currency { chain: ChainType::Bitcoin, token: TokenIdentifier::Native, decimals: 8 },
+        currency: Currency {
+            chain: ChainType::Bitcoin,
+            token: TokenIdentifier::Native,
+            decimals: 8,
+        },
         amount: U256::from(amt),
     };
     vault
@@ -113,7 +124,11 @@ async fn test_deposit_key_vault_take_deposits(
         .expect("reservation should succeed");
     match res4 {
         market_maker::deposit_key_vault::FillStatus::Partial(ds) => {
-            assert_eq!(ds.len(), 2, "should reserve both deposits but still partial");
+            assert_eq!(
+                ds.len(),
+                2,
+                "should reserve both deposits but still partial"
+            );
             let sum: U256 = ds
                 .iter()
                 .fold(U256::from(0u8), |acc, d| acc + d.holdings().amount);

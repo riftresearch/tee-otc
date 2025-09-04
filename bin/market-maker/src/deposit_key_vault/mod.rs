@@ -38,7 +38,7 @@ pub enum Error {
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[allow(async_fn_in_trait)]
-trait DepositKeyVaultTrait {
+pub trait DepositKeyVaultTrait {
     /// Get the balance of all keys in the vault for a given currency
     /// This should be a sum of all the balances of the keys in the vault for a given currency
     /// Should be summed at a database level (ideally)
@@ -86,28 +86,22 @@ impl DepositKeyVault {
         };
         (chain, token, currency.decimals as i16)
     }
-
-    // Public wrappers to expose core operations without requiring the private trait in scope
-    pub async fn balance(&self, currency: &Currency) -> Result<U256> {
-        <Self as DepositKeyVaultTrait>::balance(self, currency).await
-    }
-
-    pub async fn take_deposits_that_fill_lot(&self, lot: &Lot) -> Result<FillStatus> {
-        <Self as DepositKeyVaultTrait>::take_deposits_that_fill_lot(self, lot).await
-    }
-
-    pub async fn store_deposit(&self, deposit: &Deposit) -> Result<()> {
-        <Self as DepositKeyVaultTrait>::store_deposit(self, deposit).await
-    }
 }
 
 impl Deposit {
     pub fn new(private_key: impl Into<String>, holdings: Lot) -> Self {
-        Self { private_key: private_key.into(), holdings }
+        Self {
+            private_key: private_key.into(),
+            holdings,
+        }
     }
 
-    pub fn holdings(&self) -> &Lot { &self.holdings }
-    pub fn private_key(&self) -> &str { &self.private_key }
+    pub fn holdings(&self) -> &Lot {
+        &self.holdings
+    }
+    pub fn private_key(&self) -> &str {
+        &self.private_key
+    }
 }
 
 impl DepositKeyVaultTrait for DepositKeyVault {
