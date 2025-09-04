@@ -1,3 +1,6 @@
+-- Ensure the dedicated schema exists so objects land in quote_storage
+CREATE SCHEMA IF NOT EXISTS quote_storage;
+
 -- Market Maker Quotes Table
 -- This migration creates the quotes table for the market maker to store locally generated quotes
 

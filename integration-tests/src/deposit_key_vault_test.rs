@@ -1,5 +1,5 @@
 use alloy::primitives::U256;
-use market_maker::deposit_key_vault::{DepositKeyVault, DepositKeyVaultTrait};
+use market_maker::deposit_key_storage::{DepositKeyStorage, DepositKeyStorageTrait};
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 
@@ -11,7 +11,7 @@ async fn test_deposit_key_vault_take_deposits(
     connect_options: PgConnectOptions,
 ) -> sqlx::Result<()> {
     // Initialize vault (runs migrations)
-    let vault = DepositKeyVault::new(&connect_options.to_database_url())
+    let vault = DepositKeyStorage::new(&connect_options.to_database_url())
         .await
         .expect("Failed to create deposit key vault");
 
@@ -25,15 +25,21 @@ async fn test_deposit_key_vault_take_deposits(
         amount: U256::from(amt),
     };
     vault
-        .store_deposit(&market_maker::deposit_key_vault::Deposit::new("k1", eth(5)))
+        .store_deposit(&market_maker::deposit_key_storage::Deposit::new(
+            "k1",
+            eth(5),
+        ))
         .await
         .expect("store k1");
     vault
-        .store_deposit(&market_maker::deposit_key_vault::Deposit::new("k2", eth(7)))
+        .store_deposit(&market_maker::deposit_key_storage::Deposit::new(
+            "k2",
+            eth(7),
+        ))
         .await
         .expect("store k2");
     vault
-        .store_deposit(&market_maker::deposit_key_vault::Deposit::new(
+        .store_deposit(&market_maker::deposit_key_storage::Deposit::new(
             "k3",
             eth(20),
         ))
@@ -56,7 +62,7 @@ async fn test_deposit_key_vault_take_deposits(
 
     // Should be Full and reserve two rows (5 and 7); verify count and sum
     match res1 {
-        market_maker::deposit_key_vault::FillStatus::Full(ds) => {
+        market_maker::deposit_key_storage::FillStatus::Full(ds) => {
             assert_eq!(ds.len(), 2, "should reserve two deposits for 10");
             let sum: U256 = ds
                 .iter()
@@ -72,7 +78,7 @@ async fn test_deposit_key_vault_take_deposits(
         .await
         .expect("second reservation should succeed");
     match res2 {
-        market_maker::deposit_key_vault::FillStatus::Full(ds) => {
+        market_maker::deposit_key_storage::FillStatus::Full(ds) => {
             assert_eq!(ds.len(), 1, "should reserve one deposit for second 10");
             let sum: U256 = ds
                 .iter()
@@ -88,7 +94,7 @@ async fn test_deposit_key_vault_take_deposits(
         .await
         .expect("third reservation call should succeed");
     match res3 {
-        market_maker::deposit_key_vault::FillStatus::Empty => {}
+        market_maker::deposit_key_storage::FillStatus::Empty => {}
         other => panic!("expected Empty, got {other:?}"),
     }
 
@@ -102,11 +108,17 @@ async fn test_deposit_key_vault_take_deposits(
         amount: U256::from(amt),
     };
     vault
-        .store_deposit(&market_maker::deposit_key_vault::Deposit::new("b1", btc(3)))
+        .store_deposit(&market_maker::deposit_key_storage::Deposit::new(
+            "b1",
+            btc(3),
+        ))
         .await
         .expect("store b1");
     vault
-        .store_deposit(&market_maker::deposit_key_vault::Deposit::new("b2", btc(4)))
+        .store_deposit(&market_maker::deposit_key_storage::Deposit::new(
+            "b2",
+            btc(4),
+        ))
         .await
         .expect("store b2");
 
@@ -123,7 +135,7 @@ async fn test_deposit_key_vault_take_deposits(
         .await
         .expect("reservation should succeed");
     match res4 {
-        market_maker::deposit_key_vault::FillStatus::Partial(ds) => {
+        market_maker::deposit_key_storage::FillStatus::Partial(ds) => {
             assert_eq!(
                 ds.len(),
                 2,

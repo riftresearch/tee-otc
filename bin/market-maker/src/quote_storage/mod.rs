@@ -49,6 +49,15 @@ impl QuoteStorage {
             .min_connections(2)
             .acquire_timeout(std::time::Duration::from_secs(5))
             .idle_timeout(std::time::Duration::from_secs(600))
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    // Scope this pool to the quote_storage schema so unqualified SQL stays isolated
+                    sqlx::query("SET search_path TO quote_storage, public")
+                        .execute(conn)
+                        .await
+                        .map(|_| ())
+                })
+            })
             .connect(database_url)
             .await
             .context(DatabaseSnafu)?;

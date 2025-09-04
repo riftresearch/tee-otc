@@ -8,7 +8,7 @@ use sqlx::{
 };
 use uuid::Uuid;
 
-static MIGRATOR: Migrator = sqlx::migrate!("src/deposit_key_vault/migrations");
+static MIGRATOR: Migrator = sqlx::migrate!("src/deposit_key_storage/migrations");
 
 #[derive(Debug, Clone)]
 pub struct Deposit {
@@ -38,7 +38,7 @@ pub enum Error {
 type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[allow(async_fn_in_trait)]
-pub trait DepositKeyVaultTrait {
+pub trait DepositKeyStorageTrait {
     /// Get the balance of all keys in the vault for a given currency
     /// This should be a sum of all the balances of the keys in the vault for a given currency
     /// Should be summed at a database level (ideally)
@@ -53,17 +53,26 @@ pub trait DepositKeyVaultTrait {
 }
 
 #[derive(Clone)]
-pub struct DepositKeyVault {
+pub struct DepositKeyStorage {
     pool: PgPool,
 }
 
-impl DepositKeyVault {
+impl DepositKeyStorage {
     pub async fn new(database_url: &str) -> Result<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(10)
             .min_connections(2)
             .acquire_timeout(std::time::Duration::from_secs(5))
             .idle_timeout(std::time::Duration::from_secs(600))
+            .after_connect(|conn, _meta| {
+                Box::pin(async move {
+                    // Scope this pool to the deposit_key_storage schema so unqualified SQL stays isolated
+                    sqlx::query("SET search_path TO deposit_key_storage, public")
+                        .execute(conn)
+                        .await
+                        .map(|_| ())
+                })
+            })
             .connect(database_url)
             .await
             .context(DatabaseSnafu)?;
@@ -104,7 +113,7 @@ impl Deposit {
     }
 }
 
-impl DepositKeyVaultTrait for DepositKeyVault {
+impl DepositKeyStorageTrait for DepositKeyStorage {
     async fn balance(&self, currency: &Currency) -> Result<U256> {
         let (chain, token, decimals) = Self::serialize_currency(currency);
 
