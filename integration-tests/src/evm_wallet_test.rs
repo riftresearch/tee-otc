@@ -5,6 +5,7 @@ use alloy::{
 };
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::{
+    deposit_key_storage::DepositKeyStorageTrait,
     evm_wallet::{self, EVMWallet},
     wallet::Wallet,
 };
@@ -552,4 +553,147 @@ async fn test_evm_wallet_actually_sends_token(
         recipient_balance_after > recipient_balance_before,
         "Recipient balance should increase"
     );
+}
+
+/// Test that the EVM wallet can fulfill a payment by combining its own balance
+/// with funds sourced from the deposit key storage (via EIP-3009 receiveWithAuthorization).
+#[sqlx::test]
+async fn test_evm_wallet_spend_from_deposit_storage(
+    _: PoolOptions<sqlx::Postgres>,
+    connect_options: PgConnectOptions,
+) {
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
+
+    // Accounts: MM sender, deposit-source wallet, and final recipient
+    let mm_account = MultichainAccount::new(21);
+    let deposit_account = MultichainAccount::new(22);
+    let recipient_account = MultichainAccount::new(23);
+
+    // Start devnet (no indexer required for this test)
+    let devnet = RiftDevnet::builder()
+        .using_esplora(false)
+        .build()
+        .await
+        .unwrap()
+        .0;
+
+    // Provider for the MM wallet
+    let ws_url = devnet.ethereum.anvil.ws_endpoint_url().to_string();
+    let http_url = devnet.ethereum.anvil.endpoint_url().to_string();
+    let provider = Arc::new(
+        ProviderBuilder::new()
+            .wallet(mm_account.ethereum_wallet.clone())
+            .connect_ws(WsConnect::new(ws_url))
+            .await
+            .unwrap(),
+    );
+
+    // Token under test (cbBTC)
+    let cbbtc_contract = devnet.ethereum.cbbtc_contract.clone();
+    let token_address = *cbbtc_contract.address();
+
+    // Mint 1 CBBTC to MM wallet and 2 CBBTC to the deposit wallet
+    let one_cbbtc = U256::from(10).pow(U256::from(18));
+    let two_cbbtc = U256::from(2) * one_cbbtc;
+    let three_cbbtc = U256::from(3) * one_cbbtc;
+
+    devnet
+        .ethereum
+        .mint_cbbtc(mm_account.ethereum_address, one_cbbtc)
+        .await
+        .unwrap();
+
+    devnet
+        .ethereum
+        .mint_cbbtc(deposit_account.ethereum_address, two_cbbtc)
+        .await
+        .unwrap();
+
+    // Fund MM address with ETH for gas
+    devnet
+        .ethereum
+        .fund_eth_address(
+            mm_account.ethereum_address,
+            U256::from(10).pow(U256::from(19)),
+        )
+        .await
+        .unwrap();
+
+    // Create and link a deposit key storage, then store the deposit wallet's private key/holdings
+    let deposit_key_storage = Arc::new(
+        market_maker::deposit_key_storage::DepositKeyStorage::new(
+            &connect_options.to_database_url(),
+        )
+        .await
+        .expect("create deposit key storage"),
+    );
+
+    let deposit_private_key_hex = format!("0x{}", alloy::hex::encode(deposit_account.secret_bytes));
+    let deposit_lot = Lot {
+        currency: Currency {
+            chain: ChainType::Ethereum,
+            token: TokenIdentifier::Address(token_address.to_string()),
+            decimals: 18,
+        },
+        amount: two_cbbtc,
+    };
+
+    deposit_key_storage
+        .store_deposit(&market_maker::deposit_key_storage::Deposit::new(
+            deposit_private_key_hex,
+            deposit_lot,
+        ))
+        .await
+        .expect("store deposit in key storage");
+
+    // Spin up EVM wallet with deposit key storage linked
+    let mut join_set = JoinSet::new();
+    let evm_wallet = EVMWallet::new(
+        provider.clone(),
+        http_url,
+        1, // confirmations
+        Some(deposit_key_storage.clone()),
+        &mut join_set,
+    );
+
+    // Ensure 7702 delegation is set on the MM EOA
+    evm_wallet
+        .ensure_eip7702_delegation(PrivateKeySigner::from_slice(&mm_account.secret_bytes).unwrap())
+        .await
+        .unwrap();
+
+    // Prepare a 3 CBBTC payment to a third address
+    let lot = Lot {
+        currency: Currency {
+            chain: ChainType::Ethereum,
+            token: TokenIdentifier::Address(token_address.to_string()),
+            decimals: 18,
+        },
+        amount: three_cbbtc,
+    };
+
+    let before = cbbtc_contract
+        .balanceOf(recipient_account.ethereum_address)
+        .call()
+        .await
+        .unwrap();
+
+    let _txid = evm_wallet
+        .create_payment(&lot, &recipient_account.ethereum_address.to_string(), None)
+        .await
+        .expect("create payment should succeed");
+
+    let after = cbbtc_contract
+        .balanceOf(recipient_account.ethereum_address)
+        .call()
+        .await
+        .unwrap();
+
+    assert_eq!(after - before, three_cbbtc, "Recipient should get 3 CBBTC");
+
+    // Cleanup background tasks
+    join_set.abort_all();
 }

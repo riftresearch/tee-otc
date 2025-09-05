@@ -367,8 +367,10 @@ async fn create_evm_transfer_transaction(
                         FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
                             let mut executions = Vec::new();
                             for deposit in deposits.iter() {
+                                // Move funds from the deposit key wallet to the MM sender address
+                                // so the subsequent payment transfer can be covered.
                                 let execution = deposit
-                                    .to_authorized_erc20_transfer(&provider, &token_address)
+                                    .to_authorized_erc20_transfer(&provider, sender)
                                     .await?;
                                 executions.push(execution);
                             }
@@ -553,7 +555,7 @@ impl DepositToAuthorizedERC20Transfer for Deposit {
                 valid_after,
                 valid_before,
                 nonce,
-                signature.v().into(),
+                27 + (signature.v() as u8), // Note: the ECRecover library expects v to be 27 or 28
                 signature.r().into(),
                 signature.s().into(),
             )
