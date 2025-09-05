@@ -92,6 +92,7 @@ async fn test_evm_wallet_nonce_error_retry(
         provider.clone(),
         eth_rpc_url.to_string(),
         1, // 1 confirmation for testing
+        None,
         &mut join_set,
     );
 
@@ -271,7 +272,13 @@ async fn test_evm_wallet_gas_price_bumping(
 
     // Create EVM wallet
     let mut join_set = JoinSet::new();
-    let evm_wallet = EVMWallet::new(provider.clone(), eth_rpc_url.to_string(), 1, &mut join_set);
+    let evm_wallet = EVMWallet::new(
+        provider.clone(),
+        eth_rpc_url.to_string(),
+        1,
+        None,
+        &mut join_set,
+    );
 
     evm_wallet
         .ensure_eip7702_delegation(
@@ -360,7 +367,13 @@ async fn test_evm_wallet_error_handling(
     );
 
     let mut join_set = JoinSet::new();
-    let evm_wallet = EVMWallet::new(provider.clone(), eth_rpc_url.to_string(), 1, &mut join_set);
+    let evm_wallet = EVMWallet::new(
+        provider.clone(),
+        eth_rpc_url.to_string(),
+        1,
+        None,
+        &mut join_set,
+    );
 
     // Test 1: Invalid recipient address
     let invalid_lot = Lot {
@@ -475,6 +488,7 @@ async fn test_evm_wallet_actually_sends_token(
         provider.clone(),
         eth_rpc_url.to_string(),
         1, // 1 confirmation for testing
+        None,
         &mut join_set,
     );
 

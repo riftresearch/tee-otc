@@ -2,8 +2,8 @@ use crate::db::Database;
 use crate::error::OtcServerError;
 use crate::{config::Settings, services::mm_registry};
 use alloy::primitives::U256;
-use chrono::Utc;
 use blockchain_utils::FeeCalcFromLot;
+use chrono::Utc;
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_chains::ChainRegistry;
 use otc_models::{MMDepositStatus, Swap, SwapStatus, TxStatus, UserDepositStatus};
@@ -420,14 +420,14 @@ impl SwapMonitoringService {
                     let swap_id = swap.id;
                     let private_key = user_wallet.private_key().to_string();
                     let mm_tx_hash = mm_deposit.tx_hash.clone();
-                    let chain = quote.from.currency.chain;
+                    let lot = swap.quote.to.clone();
                     tokio::spawn(async move {
                         let _ = mm_registry
                             .notify_swap_complete(
                                 &market_maker_id,
                                 &swap_id,
                                 &private_key,
-                                chain,
+                                &lot,
                                 &mm_tx_hash,
                             )
                             .await;

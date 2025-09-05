@@ -1,0 +1,3 @@
+[submodule "crates/eip3009-erc20-contract/contract/lib/forge-std"]
+	path = crates/eip3009-erc20-contract/contract/lib/forge-std
+	url = https://github.com/foundry-rs/forge-std

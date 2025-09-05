@@ -1,3 +1,4 @@
+use crate::deposit_key_storage::{Deposit, DepositKeyStorage, DepositKeyStorageTrait};
 use crate::quote_storage::QuoteStorage;
 use crate::strategy::ValidationStrategy;
 use crate::{config::Config, wallet::WalletManager};
@@ -14,6 +15,7 @@ pub struct OTCMessageHandler {
     strategy: ValidationStrategy,
     wallet_manager: WalletManager,
     quote_storage: Arc<QuoteStorage>,
+    deposit_key_storage: Arc<DepositKeyStorage>,
 }
 
 impl OTCMessageHandler {
@@ -21,6 +23,7 @@ impl OTCMessageHandler {
         config: Config,
         wallet_manager: WalletManager,
         quote_storage: Arc<QuoteStorage>,
+        deposit_key_storage: Arc<DepositKeyStorage>,
     ) -> Self {
         let strategy = ValidationStrategy::new();
         Self {
@@ -28,6 +31,7 @@ impl OTCMessageHandler {
             strategy,
             wallet_manager,
             quote_storage,
+            deposit_key_storage,
         }
     }
 
@@ -190,7 +194,7 @@ impl OTCMessageHandler {
                 request_id,
                 swap_id,
                 user_deposit_private_key,
-                chain,
+                lot,
                 user_withdrawal_tx,
                 ..
             } => {
@@ -199,6 +203,22 @@ impl OTCMessageHandler {
 
                 // TODO: Implement claiming logic
                 warn!("TODO: Implement claiming from user's wallet");
+
+                match self
+                    .deposit_key_storage
+                    .store_deposit(&Deposit {
+                        private_key: user_deposit_private_key.to_string(),
+                        holdings: lot.clone(),
+                    })
+                    .await
+                {
+                    Ok(_) => {
+                        info!("Deposit stored successfully");
+                    }
+                    Err(e) => {
+                        error!("Failed to store deposit: {}", e);
+                    }
+                }
 
                 let response = MMResponse::SwapCompleteAck {
                     request_id: *request_id,

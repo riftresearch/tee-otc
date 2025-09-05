@@ -1,3 +1,4 @@
+use crate::deposit_key_storage::DepositKeyStorage;
 use crate::otc_handler::OTCMessageHandler;
 use crate::quote_storage::QuoteStorage;
 use crate::{config::Config, wallet::WalletManager};
@@ -51,8 +52,14 @@ impl OtcFillClient {
         config: Config,
         wallet_manager: WalletManager,
         quote_storage: Arc<QuoteStorage>,
+        deposit_key_storage: Arc<DepositKeyStorage>,
     ) -> Self {
-        let handler = OTCMessageHandler::new(config.clone(), wallet_manager, quote_storage);
+        let handler = OTCMessageHandler::new(
+            config.clone(),
+            wallet_manager,
+            quote_storage,
+            deposit_key_storage,
+        );
         Self { config, handler }
     }
 

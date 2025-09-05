@@ -1,18 +1,20 @@
 pub mod transaction_broadcaster;
 
-use std::{str::FromStr, sync::Arc};
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use alloy::{
+    dyn_abi::{DynSolType, DynSolValue},
     hex,
     network::{TransactionBuilder, TransactionBuilder7702},
-    primitives::{Address, U256},
-    providers::{Provider, WalletProvider},
+    primitives::{keccak256, Address, TxHash, U256},
+    providers::{DynProvider, Provider, WalletProvider},
     rpc::types::{Authorization, TransactionRequest},
     signers::{local::PrivateKeySigner, SignerSync},
     sol_types::SolValue,
 };
 use async_trait::async_trait;
-use blockchain_utils::{GenericERC20::GenericERC20Instance, WebsocketWalletProvider};
+use blockchain_utils::WebsocketWalletProvider;
+use eip3009_erc20_contract::GenericEIP3009ERC20::GenericEIP3009ERC20Instance;
 use eip7702_delegator_contract::{
     EIP7702Delegator::{EIP7702DelegatorInstance, Execution},
     ModeCode, EIP7702_DELEGATOR_CROSSCHAIN_ADDRESS,
@@ -23,20 +25,24 @@ use snafu::{location, ResultExt};
 use tokio::task::JoinSet;
 use tracing::{error, info};
 
-use crate::{wallet::Wallet, WalletError, WalletResult};
+use crate::{
+    deposit_key_storage::{Deposit, DepositKeyStorage, DepositKeyStorageTrait, FillStatus},
+    wallet::Wallet,
+    DepositKeyStorageSnafu, WalletError, WalletResult,
+};
 
 pub struct EVMWallet {
     pub tx_broadcaster: transaction_broadcaster::EVMTransactionBroadcaster,
     provider: Arc<WebsocketWalletProvider>,
+    deposit_key_storage: Option<Arc<DepositKeyStorage>>,
 }
-
-const BALANCE_BUFFER_PERCENT: u8 = 25; // 25% buffer
 
 impl EVMWallet {
     pub fn new(
         provider: Arc<WebsocketWalletProvider>,
         debug_rpc_url: String,
         confirmations: u64,
+        deposit_key_storage: Option<Arc<DepositKeyStorage>>,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Self {
         let tx_broadcaster = transaction_broadcaster::EVMTransactionBroadcaster::new(
@@ -45,9 +51,11 @@ impl EVMWallet {
             confirmations,
             join_set,
         );
+
         Self {
             tx_broadcaster,
             provider,
+            deposit_key_storage,
         }
     }
     pub async fn ensure_eip7702_delegation(
@@ -79,11 +87,10 @@ impl EVMWallet {
 
         if code.starts_with(&delegation_pattern) {
             info!("EOA already has the proper delegation, skipping");
-            // if the EOA already has the proper delegation, return
             return Ok(());
         }
 
-        info!("EOA does not have the proper delegation, deploying");
+        info!("EOA does not have the proper delegation, sending tx...");
 
         let nonce = self
             .provider
@@ -106,8 +113,6 @@ impl EVMWallet {
             address: delegator_contract_address,
             nonce: nonce + 1, // The +1 is important, otherwise nonce will be incorrect but the tx will still succeed
         };
-        info!("Delegation is for EOA: {:?}", sender);
-        info!("Authorization: {:?}", authorization);
 
         let signature = sender_signer
             .sign_hash_sync(&authorization.signature_hash())
@@ -164,7 +169,9 @@ impl Wallet for EVMWallet {
             lot,
             to_address,
             mm_payment_validation,
-        )?;
+            self.deposit_key_storage.clone(),
+        )
+        .await?;
 
         let broadcast_result = self
             .tx_broadcaster
@@ -215,8 +222,23 @@ impl Wallet for EVMWallet {
                 res.unwrap()
             }
         };
-        let balance =
+        let mut balance =
             get_erc20_balance(&self.provider, &token_address, &self.tx_broadcaster.sender).await?;
+
+        if let Some(deposit_key_storage) = &self.deposit_key_storage {
+            let deposit_key_bal = deposit_key_storage
+                .balance(&Currency {
+                    chain: ChainType::Ethereum,
+                    token: token.clone(),
+                    decimals: 8, //TODO(med): this should not be hardcoded
+                })
+                .await
+                .map_err(|e| WalletError::BalanceCheckFailed {
+                    reason: e.to_string(),
+                })?;
+            balance += deposit_key_bal;
+        }
+
         Ok(balance)
     }
 
@@ -228,12 +250,43 @@ impl Wallet for EVMWallet {
         self.tx_broadcaster.sender.to_string()
     }
 
+    // TODO(high): This function should rebroadcast the transaction if the transaction does not have any confirmations after a certain number of retries
     async fn guarantee_confirmations(
         &self,
         tx_hash: &str,
         confirmations: u64,
     ) -> Result<(), WalletError> {
-        // TODO(high): implement this
+        let tx_hash = TxHash::from_str(tx_hash).map_err(|e| WalletError::ParseAddressFailed {
+            context: e.to_string(),
+        })?;
+        loop {
+            let tx_receipt = self
+                .provider
+                .get_transaction_receipt(tx_hash)
+                .await
+                .map_err(|e| WalletError::RpcCallError {
+                    source: e,
+                    loc: location!(),
+                })?;
+            match tx_receipt {
+                Some(tx_receipt) => {
+                    let current_block_height =
+                        self.provider.get_block_number().await.map_err(|e| {
+                            WalletError::RpcCallError {
+                                source: e,
+                                loc: location!(),
+                            }
+                        })?;
+                    if tx_receipt.block_number.unwrap() + confirmations <= current_block_height {
+                        break;
+                    }
+                }
+                None => {
+                    tokio::time::sleep(Duration::from_secs(12)).await;
+                }
+            }
+        }
+
         Ok(())
     }
 }
@@ -243,7 +296,7 @@ async fn get_erc20_balance(
     token_address: &Address,
     address: &Address,
 ) -> WalletResult<U256> {
-    let token_contract = GenericERC20Instance::new(*token_address, provider.clone());
+    let token_contract = GenericEIP3009ERC20Instance::new(*token_address, provider.clone());
     let balance = token_contract
         .balanceOf(*address)
         .call()
@@ -254,12 +307,13 @@ async fn get_erc20_balance(
     Ok(balance)
 }
 
-fn create_evm_transfer_transaction(
+async fn create_evm_transfer_transaction(
     sender: &Address,
     provider: &Arc<WebsocketWalletProvider>,
     lot: &Lot,
     to_address: &str,
     mm_payment_validation: Option<MarketMakerPaymentValidation>,
+    deposit_key_storage: Option<Arc<DepositKeyStorage>>,
 ) -> Result<TransactionRequest, WalletError> {
     match &lot.currency.token {
         TokenIdentifier::Native => unimplemented!(),
@@ -281,7 +335,7 @@ fn create_evm_transfer_transaction(
                 Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Ethereum])
                     .unwrap();
 
-            let token_contract = GenericERC20Instance::new(token_address, provider);
+            let token_contract = GenericEIP3009ERC20Instance::new(token_address, provider);
             let recipients = match mm_payment_validation.is_some() {
                 true => vec![to_address, fee_address],
                 false => vec![to_address],
@@ -293,7 +347,43 @@ fn create_evm_transfer_transaction(
                 }
                 false => vec![lot.amount],
             };
-            let delegator_executions = recipients
+
+            let erc20_funding_executions = match deposit_key_storage {
+                Some(deposit_key_storage) => {
+                    // If this is set, we have the option to try to fill this request with funds
+                    // stored in the deposit key storage. Technically, this looks like adding some `Execution`s
+                    // to the `delegator_executions` vector, that will add funds from the deposit key storage
+                    // the the market maker address
+                    let fill_status = deposit_key_storage
+                        .take_deposits_that_fill_lot(lot)
+                        .await
+                        .map_err(|e| WalletError::DepositKeyStorageError {
+                            source: e,
+                            loc: location!(),
+                        })?;
+
+                    let provider = provider.clone().erased();
+                    match fill_status {
+                        FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
+                            let mut executions = Vec::new();
+                            for deposit in deposits.iter() {
+                                let execution = deposit
+                                    .to_authorized_erc20_transfer(&provider, &token_address)
+                                    .await?;
+                                executions.push(execution);
+                            }
+                            executions
+                        }
+                        FillStatus::Empty => {
+                            vec![]
+                        }
+                    }
+                }
+                None => {
+                    vec![]
+                }
+            };
+            let payment_executions = recipients
                 .iter()
                 .zip(amounts.iter())
                 .map(|(recipient, amount)| {
@@ -303,16 +393,17 @@ fn create_evm_transfer_transaction(
                         .clone();
                     let target = token_address;
                     let value = U256::from(0);
-                    let execution = Execution {
+                    Execution {
                         target,
                         value,
                         callData: calldata,
-                    };
-                    execution
+                    }
                 })
                 .collect::<Vec<_>>();
 
-            println!("delegator_executions: {:?}", delegator_executions);
+            let executions = [erc20_funding_executions, payment_executions].concat();
+
+            println!("executions: {executions:?}");
 
             let delegator_contract = EIP7702DelegatorInstance::new(
                 Address::from_str(EIP7702_DELEGATOR_CROSSCHAIN_ADDRESS).unwrap(),
@@ -322,11 +413,11 @@ fn create_evm_transfer_transaction(
             let mut transaction_request = delegator_contract
                 .execute_1(
                     ModeCode::Batch.as_fixed_bytes32(),
-                    delegator_executions.abi_encode().into(),
+                    executions.abi_encode().into(),
                 )
                 .into_transaction_request();
 
-            // B/c of EIP7702, we need to set the to address to the actual broadcast address
+            // B/c of EIP7702, we need to set the `to` to the actual broadcast address
             transaction_request.set_to(*sender);
 
             // Add nonce to the end of calldata if provided
@@ -360,4 +451,119 @@ fn ensure_valid_token(token: &TokenIdentifier) -> Result<(), WalletError> {
         });
     }
     Ok(())
+}
+
+trait DepositToAuthorizedERC20Transfer {
+    async fn to_authorized_erc20_transfer(
+        &self,
+        provider: &DynProvider,
+        recipient: &Address,
+    ) -> Result<Execution, WalletError>;
+}
+
+impl DepositToAuthorizedERC20Transfer for Deposit {
+    async fn to_authorized_erc20_transfer(
+        &self,
+        provider: &DynProvider,
+        recipient: &Address,
+    ) -> Result<Execution, WalletError> {
+        let token_address = match &self.holdings.currency.token {
+            TokenIdentifier::Address(address) => address.parse::<Address>().unwrap(),
+            _ => {
+                return Err(WalletError::UnsupportedToken {
+                    token: self.holdings.currency.token.clone(),
+                    loc: location!(),
+                })
+            }
+        };
+        // TODO: how should we implement the case when the token is not an EIP-3009 token?
+        let eip_3009_token_contract = GenericEIP3009ERC20Instance::new(token_address, provider);
+
+        let sender_wallet = PrivateKeySigner::from_str(&self.private_key)
+            .expect("Private key should always be valid");
+
+        // TODO: Cache these:
+        let domain_separator = eip_3009_token_contract
+            .DOMAIN_SEPARATOR()
+            .call()
+            .await
+            .unwrap();
+
+        let receive_with_authorization_typehash = eip_3009_token_contract
+            .RECEIVE_WITH_AUTHORIZATION_TYPEHASH()
+            .call()
+            .await
+            .unwrap();
+
+        let from = sender_wallet.address();
+        let to = *recipient;
+        let value = self.holdings.amount;
+        let valid_after = U256::ZERO;
+        let valid_before = U256::MAX;
+        let nonce = [0; 32].into();
+
+        /*
+         * @notice Receive a transfer with a signed authorization from the payer
+         * @dev This has an additional check to ensure that the payee's address
+         * matches the caller of this function to prevent front-running attacks.
+         * @param from          Payer's address (Authorizer)
+         * @param to            Payee's address
+         * @param value         Amount to be transferred
+         * @param validAfter    The time after which this is valid (unix time)
+         * @param validBefore   The time before which this is valid (unix time)
+         * @param nonce         Unique nonce
+         * @param v             v of the signature
+         * @param r             r of the signature
+         * @param s             s of the signature
+        function receiveWithAuthorization(
+            address from,
+            address to,
+            uint256 value,
+            uint256 validAfter,
+            uint256 validBefore,
+            bytes32 nonce,
+            uint8 v,
+            bytes32 r,
+            bytes32 s
+        )
+        */
+        let message_value = DynSolValue::Tuple(vec![
+            DynSolValue::FixedBytes(receive_with_authorization_typehash, 32), // receive_with_authorization_typehash
+            DynSolValue::Address(from),                                       // from
+            DynSolValue::Address(to),                                         // to
+            DynSolValue::Uint(value, 256),                                    // value
+            DynSolValue::Uint(valid_after, 256),                              // validAfter
+            DynSolValue::Uint(valid_before, 256),                             // validBefore
+            DynSolValue::FixedBytes(nonce, 32), // nonce, zeroed to save on calldata
+        ]);
+
+        let encoded_message = message_value.abi_encode();
+        let message_hash = keccak256(&encoded_message);
+        let eip712_hash =
+            keccak256([&[0x19, 0x01], &domain_separator[..], &message_hash[..]].concat());
+        let signature = sender_wallet
+            .sign_hash_sync(&eip712_hash)
+            .map_err(|e| WalletError::SignatureFailed { source: e })?;
+
+        let calldata = eip_3009_token_contract
+            .receiveWithAuthorization(
+                from,
+                to,
+                value,
+                valid_after,
+                valid_before,
+                nonce,
+                signature.v().into(),
+                signature.r().into(),
+                signature.s().into(),
+            )
+            .calldata()
+            .clone();
+
+        Ok(Execution {
+            target: token_address,
+            value: U256::ZERO,
+            callData: calldata.clone(),
+        })
+    }
 }

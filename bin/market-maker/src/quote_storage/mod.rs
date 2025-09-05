@@ -10,7 +10,7 @@ use tokio::{task::JoinSet, time};
 use tracing::{error, info};
 use uuid::Uuid;
 
-static MIGRATOR: Migrator = sqlx::migrate!("src/quote_storage/migrations");
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Debug, Snafu)]
 pub enum QuoteStorageError {

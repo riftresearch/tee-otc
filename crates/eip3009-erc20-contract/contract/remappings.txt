@@ -1,0 +1,9 @@
+forge-std/=lib/forge-std/src/
+lib/openzeppelin-contracts/=lib/openzeppelin-contracts/
+lib/stablecoin-evm/=lib/stablecoin-evm/
+@circlefin/stablecoin-evm/=lib/stablecoin-evm/
+@openzeppelin/=lib/openzeppelin-contracts/
+@openzeppelin4.2.0/=lib/openzeppelin-contracts@v4.2.0/
+openzeppelin-contracts/=lib/openzeppelin-contracts/contracts/
+openzeppelin-contracts@v4.2.0/=lib/openzeppelin-contracts@v4.2.0/contracts/
+stablecoin-evm/=lib/stablecoin-evm/

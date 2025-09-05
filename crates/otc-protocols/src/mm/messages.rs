@@ -57,7 +57,7 @@ pub enum MMRequest {
         swap_id: Uuid,
         /// Private key for user's deposit wallet
         user_deposit_private_key: String,
-        chain: ChainType,
+        lot: Lot,
         /// Final settlement details
         user_withdrawal_tx: String,
         timestamp: DateTime<Utc>,

@@ -26,6 +26,7 @@ otc-server = {path = "bin/otc-server"}
 market-maker = {path = "bin/market-maker"}
 bitcoin-wallet-utils = {path = "bin/bitcoin-wallet-utils"}
 eip7702-delegator-contract = {path = "crates/eip7702-delegator-contract"}
+eip3009-erc20-contract = {path = "crates/eip3009-erc20-contract"}
 
 # All of the following dependences (before the empty line) are implicitly linked to the same version, if one of them is updated they must all be updated simultaneously 
 bitcoin = { version = "0.32.0", default-features = false, features = ["serde", "base64", "secp-recovery"] }

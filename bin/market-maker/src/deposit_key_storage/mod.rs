@@ -8,12 +8,12 @@ use sqlx::{
 };
 use uuid::Uuid;
 
-static MIGRATOR: Migrator = sqlx::migrate!("src/deposit_key_storage/migrations");
+static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Debug, Clone)]
 pub struct Deposit {
-    private_key: String,
-    holdings: Lot,
+    pub private_key: String,
+    pub holdings: Lot,
 }
 
 #[derive(Debug, Clone)]

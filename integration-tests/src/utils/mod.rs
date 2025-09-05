@@ -303,6 +303,7 @@ pub async fn build_test_user_ethereum_wallet(
         Arc::new(provider),
         devnet.ethereum.anvil.ws_endpoint(),
         1,
+        None,
         &mut join_set,
     );
     (join_set, wallet)

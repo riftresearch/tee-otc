@@ -12,6 +12,13 @@ use tokio::sync::oneshot;
 
 #[derive(Debug, Snafu)]
 pub enum WalletError {
+    #[snafu(display("Deposit key storage error: {}", source))]
+    DepositKeyStorageError {
+        source: crate::deposit_key_storage::Error,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
     #[snafu(display("Failed to sign hash: {}", source))]
     SignatureFailed { source: alloy::signers::Error },
 

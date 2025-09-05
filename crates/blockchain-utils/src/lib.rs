@@ -1,11 +1,9 @@
 mod alloy_ext;
 mod bitcoin_wallet;
 mod fee_calc;
-mod generic_erc20;
 pub use alloy_ext::*;
 pub use bitcoin_wallet::*;
 pub use fee_calc::*;
-pub use generic_erc20::*;
 use snafu::ResultExt;
 
 pub fn handle_background_thread_result<T, E>(

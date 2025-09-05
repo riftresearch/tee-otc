@@ -34,6 +34,7 @@ use uuid::Uuid;
 use crate::{
     bitcoin_wallet::BitcoinWallet,
     cb_bitcoin_converter::{coinbase_client::CoinbaseClient, run_rebalancer, BandsParams},
+    deposit_key_storage::DepositKeyStorage,
     evm_wallet::EVMWallet,
     quote_storage::QuoteStorage,
     wallet::WalletManager,
@@ -63,6 +64,9 @@ pub enum Error {
 
     #[snafu(display("Esplora client error: {}", source))]
     EsploraInitialization { source: esplora_client::Error },
+
+    #[snafu(display("Deposit key storage error: {}", source))]
+    DepositKeyStorage { source: deposit_key_storage::Error },
 
     #[snafu(display("Background thread error: {}", source))]
     BackgroundThread {
@@ -247,6 +251,12 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
             .context(QuoteStorageSnafu)?,
     );
 
+    let deposit_key_storage = Arc::new(
+        DepositKeyStorage::new(&args.database_url)
+            .await
+            .context(DepositKeyStorageSnafu)?,
+    );
+
     let esplora_client = esplora_client::Builder::new(&args.bitcoin_wallet_esplora_url)
         .build_async()
         .context(EsploraInitializationSnafu)?;
@@ -274,6 +284,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         provider.clone(),
         args.ethereum_rpc_ws_url,
         args.ethereum_confirmations,
+        Some(deposit_key_storage.clone()),
         &mut join_set,
     ));
 
@@ -310,6 +321,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         },
         wallet_manager.clone(),
         quote_storage.clone(),
+        deposit_key_storage.clone(),
     );
     join_set.spawn(async move { otc_fill_client.run().await.map_err(Error::from) });
 

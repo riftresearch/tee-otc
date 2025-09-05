@@ -35,9 +35,12 @@ bdk_wallet = { workspace = true }
 bdk_esplora = { workspace = true }
 sqlx = { workspace = true }
 esplora-client = {workspace=true}
+
 eip7702-delegator-contract = {workspace=true}
+eip3009-erc20-contract = {workspace=true}
 reqwest = {workspace=true}
 jsonwebtoken = {workspace=true}
+
 
 p256 = {workspace=true}
 metrics = {workspace=true}
