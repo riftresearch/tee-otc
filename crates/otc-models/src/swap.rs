@@ -49,16 +49,17 @@ pub struct Swap {
 pub struct UserDepositStatus {
     pub tx_hash: String,
     pub amount: U256,
-    pub detected_at: DateTime<Utc>,
+    pub deposit_detected_at: DateTime<Utc>,
     pub confirmations: u64,
     pub last_checked: DateTime<Utc>,
+    pub confirmed_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MMDepositStatus {
     pub tx_hash: String,
     pub amount: U256,
-    pub detected_at: DateTime<Utc>,
+    pub deposit_detected_at: DateTime<Utc>,
     pub confirmations: u64,
     pub last_checked: DateTime<Utc>,
 }

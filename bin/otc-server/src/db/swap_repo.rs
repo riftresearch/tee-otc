@@ -625,7 +625,8 @@ mod tests {
                 tx_hash: "7d865e959b2466918c9863afca942d0fb89d7c9ac0c99bafc3749504ded97730"
                     .to_string(),
                 amount: U256::from(2000000u64),
-                detected_at: now,
+                deposit_detected_at: now,
+                confirmed_at: None,
                 confirmations: 6,
                 last_checked: now,
             }),
@@ -633,7 +634,7 @@ mod tests {
                 tx_hash: "0x88df016429689c079f3b2f6ad39fa052532c56b6a39df8e3c84c03b8346cfc63"
                     .to_string(),
                 amount: U256::from(1000000000000000000u64),
-                detected_at: now + Duration::minutes(5),
+                deposit_detected_at: now + Duration::minutes(5),
                 confirmations: 12,
                 last_checked: now + Duration::minutes(5),
             }),
@@ -657,7 +658,7 @@ mod tests {
         assert_eq!(user_deposit.tx_hash, original_user_deposit.tx_hash);
         assert_eq!(user_deposit.amount, original_user_deposit.amount);
         assert!(
-            (user_deposit.detected_at - original_user_deposit.detected_at)
+            (user_deposit.deposit_detected_at - original_user_deposit.deposit_detected_at)
                 .num_seconds()
                 .abs()
                 < 1
@@ -669,7 +670,7 @@ mod tests {
         assert_eq!(mm_deposit.tx_hash, original_mm_deposit.tx_hash);
         assert_eq!(mm_deposit.amount, original_mm_deposit.amount);
         assert!(
-            (mm_deposit.detected_at - original_mm_deposit.detected_at)
+            (mm_deposit.deposit_detected_at - original_mm_deposit.deposit_detected_at)
                 .num_seconds()
                 .abs()
                 < 1
@@ -754,7 +755,8 @@ mod tests {
         let user_deposit = UserDepositStatus {
             tx_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
             amount: deposit_amount,
-            detected_at: Utc::now(),
+            deposit_detected_at: Utc::now(),
+            confirmed_at: None,
             confirmations: 0,
             last_checked: Utc::now(),
         };

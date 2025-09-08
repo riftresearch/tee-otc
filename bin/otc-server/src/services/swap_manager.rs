@@ -268,7 +268,10 @@ impl SwapManager {
                 },
                 deposit_tx: swap.user_deposit_status.as_ref().map(|d| d.tx_hash.clone()),
                 deposit_amount: swap.user_deposit_status.as_ref().map(|d| d.amount),
-                deposit_detected_at: swap.user_deposit_status.as_ref().map(|d| d.detected_at),
+                deposit_detected_at: swap
+                    .user_deposit_status
+                    .as_ref()
+                    .map(|d| d.deposit_detected_at),
             },
             mm_deposit: DepositInfoResponse {
                 address: swap.user_destination_address.clone(),
@@ -281,7 +284,10 @@ impl SwapManager {
                 },
                 deposit_tx: swap.mm_deposit_status.as_ref().map(|d| d.tx_hash.clone()),
                 deposit_amount: swap.mm_deposit_status.as_ref().map(|d| d.amount),
-                deposit_detected_at: swap.mm_deposit_status.as_ref().map(|d| d.detected_at),
+                deposit_detected_at: swap
+                    .mm_deposit_status
+                    .as_ref()
+                    .map(|d| d.deposit_detected_at),
             },
         })
     }

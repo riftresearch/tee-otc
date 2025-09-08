@@ -37,9 +37,10 @@ impl Swap {
         self.user_deposit_status = Some(UserDepositStatus {
             tx_hash,
             amount,
-            detected_at: now,
+            deposit_detected_at: now,
             confirmations,
             last_checked: now,
+            confirmed_at: None,
         });
 
         self.status = SwapStatus::WaitingUserDepositConfirmed;
@@ -65,6 +66,7 @@ impl Swap {
             }
         );
 
+        self.user_deposit_status.as_mut().unwrap().confirmed_at = Some(Utc::now());
         self.status = SwapStatus::WaitingMMDepositInitiated;
         self.updated_at = Utc::now();
 
@@ -90,7 +92,7 @@ impl Swap {
         self.mm_deposit_status = Some(MMDepositStatus {
             tx_hash,
             amount,
-            detected_at: now,
+            deposit_detected_at: now,
             confirmations,
             last_checked: now,
         });

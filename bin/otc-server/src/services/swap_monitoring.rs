@@ -173,7 +173,8 @@ impl SwapMonitoringService {
             let user_deposit_status = UserDepositStatus {
                 tx_hash: deposit.tx_hash.clone(),
                 amount: deposit.amount,
-                detected_at: Utc::now(),
+                deposit_detected_at: Utc::now(),
+                confirmed_at: None,
                 confirmations: 0, // Initial detection
                 last_checked: Utc::now(),
             };
@@ -333,7 +334,7 @@ impl SwapMonitoringService {
             let mm_deposit_status = MMDepositStatus {
                 tx_hash: deposit.tx_hash.clone(),
                 amount: deposit.amount,
-                detected_at: Utc::now(),
+                deposit_detected_at: Utc::now(),
                 confirmations: deposit.confirmations,
                 last_checked: Utc::now(),
             };
