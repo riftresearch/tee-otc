@@ -419,7 +419,8 @@ impl SwapMonitoringService {
                     let market_maker_id = swap.market_maker_id;
                     let swap_id = swap.id;
                     let private_key = user_wallet.private_key().to_string();
-                    let mm_tx_hash = mm_deposit.tx_hash.clone();
+                    let user_deposit_tx_hash =
+                        swap.user_deposit_status.as_ref().unwrap().tx_hash.clone();
                     let lot = swap.quote.to.clone();
                     tokio::spawn(async move {
                         let _ = mm_registry
@@ -428,7 +429,7 @@ impl SwapMonitoringService {
                                 &swap_id,
                                 &private_key,
                                 &lot,
-                                &mm_tx_hash,
+                                &user_deposit_tx_hash,
                             )
                             .await;
                     });

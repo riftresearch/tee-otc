@@ -55,6 +55,7 @@ async fn test_swap_from_bitcoin_to_ethereum(
         &build_bitcoin_wallet_descriptor(&user_account.bitcoin_wallet.private_key),
         bitcoin::Network::Regtest,
         &devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
+        None,
         &mut wallet_join_set,
     )
     .await

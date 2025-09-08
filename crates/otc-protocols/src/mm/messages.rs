@@ -59,7 +59,7 @@ pub enum MMRequest {
         user_deposit_private_key: String,
         lot: Lot,
         /// Final settlement details
-        user_withdrawal_tx: String,
+        user_deposit_tx_hash: String,
         timestamp: DateTime<Utc>,
     },
 

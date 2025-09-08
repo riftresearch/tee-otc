@@ -159,7 +159,7 @@ impl MMRegistry {
         swap_id: &Uuid,
         user_deposit_private_key: &str,
         lot: &Lot,
-        mm_tx_hash: &str,
+        user_deposit_tx_hash: &str,
     ) {
         if let Some(conn) = self.connections.get(market_maker_id) {
             let request = ProtocolMessage {
@@ -170,7 +170,7 @@ impl MMRegistry {
                     swap_id: *swap_id,
                     user_deposit_private_key: user_deposit_private_key.to_string(),
                     lot: lot.clone(),
-                    user_withdrawal_tx: mm_tx_hash.to_string(),
+                    user_deposit_tx_hash: user_deposit_tx_hash.to_string(),
                     timestamp: chrono::Utc::now(),
                 },
             };

@@ -645,6 +645,7 @@ async fn test_evm_wallet_spend_from_deposit_storage(
         .store_deposit(&market_maker::deposit_key_storage::Deposit::new(
             deposit_private_key_hex,
             deposit_lot,
+            "tx1",
         ))
         .await
         .expect("store deposit in key storage");

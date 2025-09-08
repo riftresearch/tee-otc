@@ -5,54 +5,32 @@ use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_wallet::{
     bitcoin::{self, Address, Amount, ScriptBuf},
     signer::SignOptions,
-    KeychainKind, PersistedWallet,
+    CreateParams, KeychainKind, PersistedWallet, Wallet,
 };
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_models::{ChainType, Lot};
-use snafu::Snafu;
+use snafu::{location, ResultExt, Snafu};
 use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tracing::{error, info};
 
+use crate::bitcoin_wallet::{
+    BdkWalletCannotConnectSnafu, BroadcasterFailedSnafu, BuildTransactionSnafu,
+    ExtractTransactionSnafu, PersistWalletSnafu, PsbtNotFinalizedSnafu, ReceiverFailedSnafu,
+    SignTransactionSnafu, SyncWalletSnafu,
+};
+
 use super::{BitcoinWalletError, PARALLEL_REQUESTS, STOP_GAP};
 
 const SYNC_INTERVAL: Duration = Duration::from_secs(60);
 
-#[derive(Debug, Snafu)]
-pub enum TransactionBroadcasterError {
-    #[snafu(display("Failed to sync wallet: {}", source))]
-    SyncWallet { source: BitcoinWalletError },
-
-    #[snafu(display("Failed to build transaction: {}", source))]
-    BuildTransaction { source: BitcoinWalletError },
-
-    #[snafu(display("Failed to sign transaction: {}", source))]
-    SignTransaction { source: BitcoinWalletError },
-
-    #[snafu(display("Failed to broadcast transaction: {}", source))]
-    BroadcastTransaction { source: BitcoinWalletError },
-
-    #[snafu(display("Transaction broadcaster stopped"))]
-    BroadcasterStopped,
-
-    #[snafu(display("Invalid currency"))]
-    InvalidCurrency,
-
-    #[snafu(display("Insufficient balance"))]
-    InsufficientBalance,
-
-    #[snafu(display("Failed to parse address: {}", reason))]
-    ParseAddress { reason: String },
-}
-
-pub type Result<T, E = TransactionBroadcasterError> = std::result::Result<T, E>;
-
 pub struct TransactionRequest {
     pub lot: Lot,
     pub to_address: String,
+    pub foreign_utxos: Vec<ForeignUtxo>,
     pub mm_payment_validation: Option<MarketMakerPaymentValidation>,
-    pub response_tx: oneshot::Sender<Result<String>>,
+    pub response_tx: oneshot::Sender<Result<String, BitcoinWalletError>>,
 }
 
 pub struct BitcoinTransactionBroadcaster {
@@ -82,6 +60,7 @@ impl BitcoinTransactionBroadcaster {
                     &last_sync,
                     request.lot,
                     request.to_address,
+                    request.foreign_utxos,
                     request.mm_payment_validation,
                 )
                 .await;
@@ -102,25 +81,33 @@ impl BitcoinTransactionBroadcaster {
         &self,
         lot: Lot,
         to_address: String,
+        foreign_utxos: Vec<ForeignUtxo>,
         mm_payment_validation: Option<MarketMakerPaymentValidation>,
-    ) -> Result<String> {
+    ) -> Result<String, BitcoinWalletError> {
         let (response_tx, response_rx) = oneshot::channel();
 
         let request = TransactionRequest {
             lot,
             to_address,
+            foreign_utxos,
             mm_payment_validation,
             response_tx,
         };
 
         self.request_tx
             .send(request)
-            .map_err(|_| TransactionBroadcasterError::BroadcasterStopped)?;
+            .context(BroadcasterFailedSnafu)?;
 
-        response_rx
-            .await
-            .map_err(|_| TransactionBroadcasterError::BroadcasterStopped)?
+        response_rx.await.context(ReceiverFailedSnafu)?
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct ForeignUtxo {
+    pub outpoint: bdk_esplora::esplora_client::OutPoint,
+    pub psbt_input: bdk_wallet::bitcoin::psbt::Input,
+    pub satisfaction_weight: bdk_wallet::bitcoin::Weight,
+    pub foreign_descriptor: String,
 }
 
 async fn process_transaction(
@@ -131,8 +118,9 @@ async fn process_transaction(
     last_sync: &Arc<RwLock<Instant>>,
     lot: Lot,
     to_address: String,
+    foreign_utxos: Vec<ForeignUtxo>,
     mm_payment_validation: Option<MarketMakerPaymentValidation>,
-) -> Result<String> {
+) -> Result<String, BitcoinWalletError> {
     let start_time = Instant::now();
 
     info!(
@@ -142,11 +130,11 @@ async fn process_transaction(
 
     // Parse the recipient address
     let address = Address::from_str(&to_address)
-        .map_err(|e| TransactionBroadcasterError::ParseAddress {
+        .map_err(|e| BitcoinWalletError::InvalidAddress {
             reason: e.to_string(),
         })?
         .require_network(network)
-        .map_err(|_| TransactionBroadcasterError::ParseAddress {
+        .map_err(|_| BitcoinWalletError::InvalidAddress {
             reason: format!(
                 "Address {} is not valid for network {:?}",
                 to_address, network
@@ -163,10 +151,6 @@ async fn process_transaction(
     let amount_sats = lot.amount.to::<u64>();
     let amount = Amount::from_sat(amount_sats);
     info!("balance: {:?}", balance);
-
-    if balance.total() < amount {
-        return Err(TransactionBroadcasterError::InsufficientBalance);
-    }
 
     // Build transaction
     let mut tx_builder = wallet_guard.build_tx();
@@ -189,39 +173,49 @@ async fn process_transaction(
         );
     }
 
+    for foreign_utxo in &foreign_utxos {
+        tx_builder
+            .add_foreign_utxo(
+                foreign_utxo.outpoint,
+                foreign_utxo.psbt_input.clone(),
+                foreign_utxo.satisfaction_weight,
+            )
+            .unwrap();
+    }
+
     // Create and sign the transaction
     let build_start = Instant::now();
-    let mut psbt =
-        tx_builder
-            .finish()
-            .map_err(|e| TransactionBroadcasterError::BuildTransaction {
-                source: BitcoinWalletError::BuildTransaction { source: e },
-            })?;
+    let mut psbt = tx_builder.finish().context(BuildTransactionSnafu)?;
     info!("Transaction built in {:?}", build_start.elapsed());
 
-    let finalized = wallet_guard
+    wallet_guard
         .sign(&mut psbt, SignOptions::default())
-        .map_err(|e| TransactionBroadcasterError::SignTransaction {
-            source: BitcoinWalletError::SignTransaction { source: e },
-        })?;
+        .context(SignTransactionSnafu)?;
+
+    // We no longer need the wallet lock
+    drop(wallet_guard);
+
+    // Now loop through all the private keys we have and sign the psbt with each
+    let mut finalized = true;
+    for foreign_utxo in foreign_utxos {
+        info!(
+            "Signing transaction with foreign descriptor: {:?}",
+            foreign_utxo.foreign_descriptor
+        );
+        let temp_wallet =
+            Wallet::create_with_params(CreateParams::new_single(foreign_utxo.foreign_descriptor))
+                .expect("valid wallet");
+        finalized = temp_wallet
+            .sign(&mut psbt, SignOptions::default())
+            .context(SignTransactionSnafu)?;
+    }
 
     if !finalized {
-        return Err(TransactionBroadcasterError::BuildTransaction {
-            source: BitcoinWalletError::BuildTransaction {
-                source: bdk_wallet::error::CreateTxError::NoRecipients,
-            },
-        });
+        PsbtNotFinalizedSnafu.fail()?;
     }
 
     // Extract transaction
-    let tx = psbt
-        .extract_tx()
-        .map_err(|e| TransactionBroadcasterError::BuildTransaction {
-            source: BitcoinWalletError::ExtractTransaction { source: e },
-        })?;
-
-    // Release wallet lock before broadcasting
-    drop(wallet_guard);
+    let tx = psbt.extract_tx().context(ExtractTransactionSnafu)?;
 
     // Broadcast the transaction
     let broadcast_start = Instant::now();
@@ -229,9 +223,7 @@ async fn process_transaction(
         // If broadcast fails, cancel the transaction
         let mut wallet_guard = wallet.blocking_lock();
         wallet_guard.cancel_tx(&tx);
-        TransactionBroadcasterError::BroadcastTransaction {
-            source: BitcoinWalletError::BroadcastTransaction { source: e },
-        }
+        BitcoinWalletError::BroadcastTransaction { source: e }
     })?;
     info!("Transaction broadcast in {:?}", broadcast_start.elapsed());
 
@@ -250,13 +242,11 @@ async fn sync_wallet(
     connection: &Arc<Mutex<bdk_wallet::rusqlite::Connection>>,
     esplora_client: &Arc<esplora_client::AsyncClient>,
     last_sync: &Arc<RwLock<Instant>>,
-) -> Result<()> {
+) -> Result<(), BitcoinWalletError> {
     let sync_start = Instant::now();
-    info!("Starting wallet sync");
 
     let mut wallet_guard = wallet.lock().await;
-    let address = wallet_guard.next_unused_address(KeychainKind::External);
-    info!("next unused address: {:?}", address);
+    // let address = wallet_guard.next_unused_address(KeychainKind::External);
     let mut conn = connection.lock().await;
     wallet_guard.persist(&mut conn).unwrap();
     drop(conn);
@@ -265,24 +255,16 @@ async fn sync_wallet(
     let update = esplora_client
         .full_scan(request, STOP_GAP, PARALLEL_REQUESTS)
         .await
-        .map_err(|e| TransactionBroadcasterError::SyncWallet {
-            source: BitcoinWalletError::SyncWallet { source: e },
-        })?;
-
-    info!("update: {:?}", update);
+        .context(SyncWalletSnafu)?;
 
     wallet_guard
         .apply_update(update)
-        .map_err(|_| TransactionBroadcasterError::SyncWallet {
-            source: BitcoinWalletError::ApplyUpdate,
-        })?;
+        .context(BdkWalletCannotConnectSnafu)?;
 
     let mut conn = connection.lock().await;
     wallet_guard
         .persist(&mut conn)
-        .map_err(|e| TransactionBroadcasterError::SyncWallet {
-            source: BitcoinWalletError::PersistWallet { source: e },
-        })?;
+        .context(PersistWalletSnafu)?;
 
     // Update last sync time
     *last_sync.write().await = Instant::now();

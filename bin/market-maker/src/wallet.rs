@@ -10,11 +10,20 @@ use snafu::{Location, Snafu};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::oneshot;
 
+use crate::bitcoin_wallet::BitcoinWalletError;
+
 #[derive(Debug, Snafu)]
 pub enum WalletError {
     #[snafu(display("Deposit key storage error: {}", source))]
     DepositKeyStorageError {
         source: crate::deposit_key_storage::Error,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
+    #[snafu(display("Esplora client error: {}", source))]
+    EsploraClientError {
+        source: bdk_esplora::esplora_client::Error,
         #[snafu(implicit)]
         loc: Location,
     },
@@ -80,6 +89,16 @@ pub enum WalletError {
     #[snafu(display("Failed to send transaction: {}", source))]
     PendingTransactionError {
         source: PendingTransactionError,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
+    #[snafu(display("Failed to get dedicated wallet balance: {}", source))]
+    BitcoinWalletClient { source: BitcoinWalletError },
+
+    #[snafu(display("Invalid descriptor: {}", reason))]
+    InvalidDescriptor {
+        reason: String,
         #[snafu(implicit)]
         loc: Location,
     },

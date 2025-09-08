@@ -14,6 +14,7 @@ static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 pub struct Deposit {
     pub private_key: String,
     pub holdings: Lot,
+    pub funding_tx_hash: String,
 }
 
 #[derive(Debug, Clone)]
@@ -98,10 +99,15 @@ impl DepositKeyStorage {
 }
 
 impl Deposit {
-    pub fn new(private_key: impl Into<String>, holdings: Lot) -> Self {
+    pub fn new(
+        private_key: impl Into<String>,
+        holdings: Lot,
+        funding_tx_hash: impl Into<String>,
+    ) -> Self {
         Self {
             private_key: private_key.into(),
             holdings,
+            funding_tx_hash: funding_tx_hash.into(),
         }
     }
 
@@ -173,7 +179,7 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
                 reserved_at = NOW()
             FROM take
             WHERE i.id = take.id
-            RETURNING i.id, i.private_key, i.amount::TEXT;
+            RETURNING i.id, i.private_key, i.amount::TEXT, i.funding_tx_hash;
             "#,
         )
         .bind(&chain)
@@ -198,6 +204,8 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
             let amount = U256::from_str_radix(&amount_str, 10)
                 .map_err(|_| Error::InvalidU256 { value: amount_str })?;
 
+            let funding_tx_hash: String = row.get("funding_tx_hash");
+
             sum = sum.saturating_add(amount);
 
             deposits.push(Deposit {
@@ -206,6 +214,7 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
                     currency: lot.currency.clone(),
                     amount,
                 },
+                funding_tx_hash,
             });
         }
 
@@ -224,8 +233,8 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
         sqlx::query(
             r#"
             INSERT INTO mm_deposits (
-                private_key, chain, token, decimals, amount, status
-            ) VALUES ($1, $2, $3, $4, $5::numeric, 'available')
+                private_key, chain, token, decimals, amount, status, funding_tx_hash
+            ) VALUES ($1, $2, $3, $4, $5::numeric, 'available', $6)
             "#,
         )
         .bind(&deposit.private_key)
@@ -233,6 +242,7 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
         .bind(&token)
         .bind(decimals)
         .bind(&amount)
+        .bind(&deposit.funding_tx_hash)
         .execute(&self.pool)
         .await
         .context(DatabaseSnafu)?;

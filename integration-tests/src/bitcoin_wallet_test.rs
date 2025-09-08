@@ -1,11 +1,16 @@
 use alloy::{hex, primitives::U256};
 use bitcoin::{Network, PrivateKey};
-use bitcoincore_rpc_async::RpcApi;
+use bitcoincore_rpc_async::{json::GetRawTransactionVerbose, RpcApi};
 use devnet::{MultichainAccount, RiftDevnet};
-use market_maker::{bitcoin_wallet::BitcoinWallet, wallet::Wallet};
+use market_maker::{
+    bitcoin_wallet::BitcoinWallet,
+    deposit_key_storage::{Deposit, DepositKeyStorage, DepositKeyStorageTrait},
+    wallet::Wallet,
+};
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
+use std::sync::Arc;
 use std::{str::FromStr, time::Duration};
 use tokio::task::JoinSet;
 use tracing::info;
@@ -66,6 +71,7 @@ async fn test_bitcoin_wallet_basic_operations(
         &market_maker_account.bitcoin_wallet.descriptor(),
         Network::Regtest,
         esplora_url,
+        None,
         &mut join_set,
     )
     .await
@@ -264,6 +270,7 @@ async fn test_bitcoin_wallet_error_handling(
         &descriptor,
         Network::Regtest,
         esplora_url,
+        None,
         &mut join_set,
     )
     .await
@@ -308,4 +315,149 @@ async fn test_bitcoin_wallet_error_handling(
     let _ = std::fs::remove_file(&db_path);
 
     info!("Error handling test completed");
+}
+
+/// Test that the Bitcoin wallet can fulfill a payment while leveraging
+/// a foreign UTXO sourced from deposit key storage.
+#[sqlx::test]
+async fn test_bitcoin_wallet_spend_from_deposit_storage(
+    _: PoolOptions<sqlx::Postgres>,
+    connect_options: PgConnectOptions,
+) {
+    let _ = tracing_subscriber::fmt()
+        .with_target(false)
+        .with_max_level(tracing::Level::INFO)
+        .try_init();
+
+    // Accounts: MM sender, deposit-controlled recipient
+    let mm_account = MultichainAccount::new(31);
+    let deposit_vault_account = MultichainAccount::new(32);
+    let recipient_account = MultichainAccount::new(33);
+
+    info!(
+        "Recipient bitcoin address: {:?}",
+        recipient_account.bitcoin_wallet.address
+    );
+
+    // Start devnet with Esplora enabled
+    let devnet = RiftDevnet::builder()
+        .using_esplora(true)
+        .build()
+        .await
+        .unwrap()
+        .0;
+
+    // Fund MM wallet with BTC for internal inputs/fees
+    devnet
+        .bitcoin
+        .deal_bitcoin(
+            &mm_account.bitcoin_wallet.address,
+            &bitcoin::Amount::from_sat(20_000),
+        )
+        .await
+        .unwrap();
+
+    // Prefund the RECIPIENT with the exact lot amount; this UTXO will be
+    // referenced via deposit storage as a foreign input during payment.
+    let lot_amount_sats: u64 = 90_000;
+    let prefund_tx = devnet
+        .bitcoin
+        .deal_bitcoin(
+            &deposit_vault_account.bitcoin_wallet.address,
+            &bitcoin::Amount::from_sat(lot_amount_sats),
+        )
+        .await
+        .unwrap();
+    let prefund_txid = prefund_tx.txid.to_string();
+    println!("prefund_txid: {prefund_txid}");
+
+    // Wait until Esplora has fully indexed both funding transactions
+    devnet
+        .bitcoin
+        .wait_for_esplora_sync(Duration::from_secs(30))
+        .await
+        .unwrap();
+
+    // Create and seed a deposit key storage with the recipient's descriptor
+    // so the wallet can sign the foreign UTXO.
+    let deposit_key_storage = Arc::new(
+        DepositKeyStorage::new(&connect_options.to_database_url())
+            .await
+            .expect("create deposit key storage"),
+    );
+
+    let deposit_vault_descriptor = format!(
+        "wpkh({})",
+        bitcoin::PrivateKey::new(
+            deposit_vault_account.bitcoin_wallet.secret_key,
+            Network::Regtest,
+        )
+    );
+
+    let deposit_lot = Lot {
+        currency: Currency {
+            chain: ChainType::Bitcoin,
+            token: TokenIdentifier::Native,
+            decimals: 8,
+        },
+        amount: U256::from(lot_amount_sats),
+    };
+
+    deposit_key_storage
+        .store_deposit(&Deposit::new(
+            deposit_vault_descriptor,
+            deposit_lot.clone(),
+            prefund_txid.clone(),
+        ))
+        .await
+        .expect("store deposit in key storage");
+
+    // Spin up Bitcoin wallet with deposit key storage linked
+    let db_path = format!("/tmp/bitcoin_wallet_deposit_test_{}.db", std::process::id());
+    let mut join_set = JoinSet::new();
+    let bitcoin_wallet = BitcoinWallet::new(
+        &db_path,
+        &mm_account.bitcoin_wallet.descriptor(),
+        Network::Regtest,
+        devnet.bitcoin.esplora_url.as_ref().unwrap(),
+        Some(deposit_key_storage.clone()),
+        &mut join_set,
+    )
+    .await
+    .unwrap();
+
+    // Prepare a payment equal to the deposit UTXO value and send to the same
+    // recipient address. The wallet should include the foreign input (from the
+    // deposit storage) and produce a new payment output to the recipient.
+    let lot = deposit_lot.clone();
+    let to_address = recipient_account.bitcoin_wallet.address.to_string();
+
+    let txid = bitcoin_wallet
+        .create_payment(&lot, &to_address, None)
+        .await
+        .expect("create payment should succeed");
+
+    // Mine a block to confirm the broadcasted transaction
+    devnet.bitcoin.mine_blocks(1).await.unwrap();
+
+    // Fetch and assert that the resulting tx spends the prefunded UTXO
+    let sent_tx: GetRawTransactionVerbose = devnet
+        .bitcoin
+        .rpc_client
+        .get_raw_transaction_verbose(&txid.parse::<bitcoin::Txid>().unwrap())
+        .await
+        .unwrap();
+
+    println!("sent_tx: {:#?}", sent_tx);
+    assert!(
+        sent_tx
+            .inputs
+            .iter()
+            .any(|input| input.txid == prefund_txid),
+        "Sent tx should spend the UTXO unrelated to the main wallet"
+    );
+
+    // Cleanup background task and temp DB
+    join_set.abort_all();
+    let _ = std::fs::remove_file(&db_path);
 }

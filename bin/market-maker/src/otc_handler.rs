@@ -195,11 +195,11 @@ impl OTCMessageHandler {
                 swap_id,
                 user_deposit_private_key,
                 lot,
-                user_withdrawal_tx,
+                user_deposit_tx_hash,
                 ..
             } => {
                 info!("Swap {} complete, received user's private key", swap_id);
-                info!("User withdrawal tx: {}", user_withdrawal_tx);
+                info!("User deposit tx: {}", user_deposit_tx_hash);
 
                 // TODO: Implement claiming logic
                 warn!("TODO: Implement claiming from user's wallet");
@@ -209,6 +209,7 @@ impl OTCMessageHandler {
                     .store_deposit(&Deposit {
                         private_key: user_deposit_private_key.to_string(),
                         holdings: lot.clone(),
+                        funding_tx_hash: user_deposit_tx_hash.to_string(),
                     })
                     .await
                 {

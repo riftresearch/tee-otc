@@ -267,6 +267,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
             &args.bitcoin_wallet_descriptor,
             args.bitcoin_wallet_network,
             &args.bitcoin_wallet_esplora_url,
+            Some(deposit_key_storage.clone()),
             &mut join_set,
         )
         .await

@@ -21,14 +21,14 @@ use eip7702_delegator_contract::{
 };
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
-use snafu::{location, ResultExt};
+use snafu::location;
 use tokio::task::JoinSet;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::{
     deposit_key_storage::{Deposit, DepositKeyStorage, DepositKeyStorageTrait, FillStatus},
     wallet::Wallet,
-    DepositKeyStorageSnafu, WalletError, WalletResult,
+    WalletError, WalletResult,
 };
 
 pub struct EVMWallet {

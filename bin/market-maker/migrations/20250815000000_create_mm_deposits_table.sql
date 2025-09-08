@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS mm_deposits (
     reserved_by  UUID,
     reserved_at  TIMESTAMPTZ,
     used_at      TIMESTAMPTZ,
-    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    funding_tx_hash TEXT NOT NULL
 );
 
 -- Helpful index for matching/scanning available deposits
