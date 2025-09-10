@@ -19,6 +19,7 @@ use otc_models::{Currency, Lot, Quote, QuoteRequest};
 use otc_protocols::rfq::{
     Connected, ProtocolMessage, QuoteWithFees, RFQRequest, RFQResponse, RFQResult,
 };
+use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 use std::{net::SocketAddr, sync::Arc};
@@ -32,6 +33,7 @@ pub struct AppState {
     pub mm_registry: Arc<RfqMMRegistry>,
     pub api_key_store: Arc<ApiKeyStore>,
     pub quote_aggregator: Arc<QuoteAggregator>,
+    pub address_screener: Option<ChainalysisAddressScreener>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -69,10 +71,35 @@ pub async fn run_server(args: RfqServerArgs) -> Result<()> {
         args.quote_timeout_milliseconds,
     ));
 
+    // Initialize optional Chainalysis address screener
+    let address_screener = match (&args.chainalysis_host, &args.chainalysis_token) {
+        (Some(host), Some(token)) if !host.is_empty() && !token.is_empty() => {
+            match ChainalysisAddressScreener::new(host.clone(), token.clone()) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    warn!("Failed to initialize address screener: {}", e);
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
+    if let Some(host) = &args.chainalysis_host {
+        if address_screener.is_some() {
+            info!(%host, "Chainalysis address screening: enabled");
+        } else {
+            info!(%host, "Chainalysis address screening: disabled (init failed or token missing)");
+        }
+    } else {
+        info!("Chainalysis address screening: disabled (no host configured)");
+    }
+
     let state = AppState {
         mm_registry,
         api_key_store,
         quote_aggregator,
+        address_screener,
     };
 
     let mut app = Router::new()
@@ -328,6 +355,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, market_maker_id: S
 
 async fn request_quotes(
     State(state): State<AppState>,
+    headers: HeaderMap,
     Json(request): Json<QuoteRequest>,
 ) -> Result<Json<QuoteResponse>, RfqServerError> {
     info!(
@@ -337,6 +365,42 @@ async fn request_quotes(
         quote_mode = ?request.mode,
         "Received quote request"
     );
+
+    // Optional address screening via headers if screener is configured
+    if let Some(screener) = &state.address_screener {
+        let mut addresses_to_check: Vec<String> = Vec::new();
+        if let Some(v) = headers.get("x-user-address").and_then(|v| v.to_str().ok()) {
+            addresses_to_check.push(v.to_string());
+        }
+        if let Some(v) = headers
+            .get("x-user-evm-account-address")
+            .and_then(|v| v.to_str().ok())
+        {
+            addresses_to_check.push(v.to_string());
+        }
+        if let Some(v) = headers
+            .get("x-user-destination-address")
+            .and_then(|v| v.to_str().ok())
+        {
+            addresses_to_check.push(v.to_string());
+        }
+
+        for addr in addresses_to_check {
+            match screener.get_address_risk(&addr).await {
+                Ok(r) => {
+                    if matches!(r.risk, RiskLevel::High | RiskLevel::Severe) {
+                        warn!("Address {} blocked due to risk: {:?}", addr, r.risk);
+                        return Err(RfqServerError::Forbidden {
+                            message: format!("Address risk too high: {:?}", r.risk),
+                        });
+                    }
+                }
+                Err(e) => {
+                    warn!("Address screening failed for {}: {}", addr, e);
+                }
+            }
+        }
+    }
 
     match state.quote_aggregator.request_quotes(request).await {
         Ok(result) => {

@@ -28,6 +28,7 @@ use tokio::{sync::mpsc, time::Duration};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, info};
 use uuid::Uuid;
+use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -35,6 +36,7 @@ pub struct AppState {
     pub swap_manager: Arc<SwapManager>,
     pub mm_registry: Arc<MMRegistry>,
     pub api_key_store: Arc<otc_auth::ApiKeyStore>,
+    pub address_screener: Option<ChainalysisAddressScreener>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -124,11 +126,36 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         }
     });
 
+    // Initialize optional Chainalysis address screener
+    let address_screener = match (&args.chainalysis_host, &args.chainalysis_token) {
+        (Some(host), Some(token)) if !host.is_empty() && !token.is_empty() => {
+            match ChainalysisAddressScreener::new(host.clone(), token.clone()) {
+                Ok(s) => Some(s),
+                Err(e) => {
+                    tracing::warn!("Failed to initialize address screener: {}", e);
+                    None
+                }
+            }
+        }
+        _ => None,
+    };
+
+    if let Some(host) = &args.chainalysis_host {
+        if address_screener.is_some() {
+            info!(%host, "Chainalysis address screening: enabled");
+        } else {
+            info!(%host, "Chainalysis address screening: disabled (init failed or token missing)");
+        }
+    } else {
+        info!("Chainalysis address screening: disabled (no host configured)");
+    }
+
     let state = AppState {
         db,
         swap_manager,
         mm_registry,
         api_key_store,
+        address_screener,
     };
 
     let mut app = Router::new()
@@ -303,6 +330,29 @@ async fn create_swap(
     State(state): State<AppState>,
     Json(request): Json<CreateSwapRequest>,
 ) -> Result<Json<CreateSwapResponse>, crate::error::OtcServerError> {
+    // Address screening (only if configured). Block if either address is High/Severe risk.
+    if let Some(screener) = &state.address_screener {
+        let mut to_check: Vec<String> = vec![request.user_destination_address.clone()];
+        to_check.push(request.user_evm_account_address.to_string());
+
+        for addr in to_check {
+            match screener.get_address_risk(&addr).await {
+                Ok(r) => {
+                    if matches!(r.risk, RiskLevel::High | RiskLevel::Severe) {
+                        return Err(crate::error::OtcServerError::Authorization {
+                            message: format!(
+                                "Address {} blocked due to risk classification: {:?}",
+                                addr, r.risk
+                            ),
+                        });
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Address screening failed for {}: {}", addr, e);
+                }
+            }
+        }
+    }
     state
         .swap_manager
         .create_swap(request)

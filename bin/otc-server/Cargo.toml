@@ -42,6 +42,7 @@ getrandom = { workspace = true }
 toml = { workspace = true }
 bitcoin = { workspace = true }
 bitcoincore-rpc-async = {workspace=true}
+chainalysis-address-screener = { workspace = true }
 
 [dev-dependencies]
 sqlx = { workspace = true }

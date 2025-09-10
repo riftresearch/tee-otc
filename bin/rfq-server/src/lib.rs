@@ -57,4 +57,12 @@ pub struct RfqServerArgs {
     /// CORS domain to allow (supports wildcards like "*.example.com")
     #[arg(long = "corsdomain", env = "CORS_DOMAIN")]
     pub cors_domain: Option<String>,
+
+    /// Chainalysis Address Screener host, e.g. https://api.chainalysis.com
+    #[arg(long, env = "CHAINALYSIS_HOST")]
+    pub chainalysis_host: Option<String>,
+
+    /// Chainalysis API token
+    #[arg(long, env = "CHAINALYSIS_TOKEN")]
+    pub chainalysis_token: Option<String>,
 }

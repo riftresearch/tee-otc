@@ -15,6 +15,9 @@ pub enum RfqServerError {
     #[snafu(display("Internal server error: {}", message))]
     Internal { message: String },
 
+    #[snafu(display("Forbidden: {}", message))]
+    Forbidden { message: String },
+
     #[snafu(display("Service unavailable: {}", service))]
     ServiceUnavailable { service: String },
 
@@ -35,6 +38,7 @@ impl IntoResponse for RfqServerError {
         let (status, error_message) = match &self {
             RfqServerError::BadRequest { .. } => (StatusCode::BAD_REQUEST, self.to_string()),
             RfqServerError::Internal { .. } => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+            RfqServerError::Forbidden { .. } => (StatusCode::FORBIDDEN, self.to_string()),
             RfqServerError::ServiceUnavailable { .. } => {
                 (StatusCode::SERVICE_UNAVAILABLE, self.to_string())
             }

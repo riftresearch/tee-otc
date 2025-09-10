@@ -31,3 +31,4 @@ chrono = { workspace = true }
 dashmap = { workspace = true }
 futures-util = { workspace = true }
 alloy = { workspace = true }
+chainalysis-address-screener = { workspace = true }
