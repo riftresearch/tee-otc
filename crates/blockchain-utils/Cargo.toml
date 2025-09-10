@@ -17,3 +17,5 @@ snafu = { workspace = true }
 bitcoin-coin-selection = {workspace = true}
 bip39 = {workspace = true}
 otc-models = {workspace=true}
+eip3009-erc20-contract = {workspace=true}
+eip7702-delegator-contract = {workspace=true}

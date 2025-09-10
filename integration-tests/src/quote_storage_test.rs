@@ -37,8 +37,8 @@ async fn test_quote_storage_round_trip(
             },
             amount: U256::from(500000000000000000u64),
         },
-        expires_at: Utc::now() + Duration::minutes(10),
-        created_at: Utc::now(),
+        expires_at: utc::now() + Duration::minutes(10),
+        created_at: utc::now(),
     };
 
     storage

@@ -8,7 +8,6 @@ use alloy::providers::DynProvider;
 use alloy::{primitives::U256, providers::Provider};
 use bdk_wallet::bitcoin::policy::DUST_RELAY_TX_FEE;
 use blockchain_utils::{compute_protocol_fee_sats, inverse_compute_protocol_fee};
-use chrono::Utc;
 use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest};
 use otc_protocols::rfq::{FeeSchedule, QuoteWithFees, RFQResult};
 use serde::{Deserialize, Serialize};
@@ -156,8 +155,8 @@ impl WrappedBitcoinQuoter {
                                 currency: quote_request.to.clone(),
                                 amount: U256::from(rx_btc),
                             },
-                            expires_at: Utc::now() + QUOTE_EXPIRATION_TIME,
-                            created_at: Utc::now(),
+                            expires_at: utc::now() + QUOTE_EXPIRATION_TIME,
+                            created_at: utc::now(),
                         },
                         fees,
                     })),
@@ -181,8 +180,8 @@ impl WrappedBitcoinQuoter {
                                 currency: quote_request.to.clone(),
                                 amount: quote_request.amount,
                             },
-                            expires_at: Utc::now() + QUOTE_EXPIRATION_TIME,
-                            created_at: Utc::now(),
+                            expires_at: utc::now() + QUOTE_EXPIRATION_TIME,
+                            created_at: utc::now(),
                         },
                         fees,
                     })),

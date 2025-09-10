@@ -229,7 +229,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, market_maker_id: S
     let connected_response = Connected {
         session_id: Uuid::new_v4(),
         server_version: env!("CARGO_PKG_VERSION").to_string(),
-        timestamp: chrono::Utc::now(),
+        timestamp: utc::now(),
     };
 
     let response = serde_json::json!({

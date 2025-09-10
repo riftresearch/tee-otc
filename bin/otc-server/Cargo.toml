@@ -16,7 +16,8 @@ blockchain-utils = { workspace = true }
 otc-models = { workspace = true, features = ["sqlx"] }
 otc-chains = { workspace = true }
 otc-protocols = { workspace = true }
-otc-auth = { path = "../../crates/otc-auth" }
+otc-auth = { workspace=true }
+utc = {workspace=true}
 
 tokio = { workspace = true }
 serde = { workspace = true }

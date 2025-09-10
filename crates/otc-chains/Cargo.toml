@@ -22,13 +22,16 @@ blockchain-utils = {workspace=true}
 bitcoin = {workspace = true}
 bitcoincore-rpc-async = {workspace=true}
 esplora-client = {workspace = true}
+bdk_wallet = { workspace = true }
 
 # Ethereum dependencies (using Alloy)
 alloy = { workspace = true }
 evm-token-indexer-client = {workspace=true}
+eip3009-erc20-contract = {workspace=true}
 
 # Common
 rand = { workspace = true }
 sha2 = { workspace = true }
 hkdf = { workspace = true }
 getrandom = { workspace = true }
+utc = {workspace=true}

@@ -121,7 +121,7 @@ impl CoinbaseClient {
         path: &str,     // the request path (e.g. "/orders")
         body_str: &str, // json stringified body
     ) -> Result<CoinbaseAuthHeaders> {
-        let access_timestamp = chrono::Utc::now().timestamp();
+        let access_timestamp = utc::now().timestamp();
 
         let method_up = method.to_ascii_uppercase();
 
@@ -477,10 +477,7 @@ pub async fn convert_cbbtc_to_btc(
         amount: U256::from(amount_sats),
     };
 
-    let available_balance = sender_wallet
-        .balance(&cbbtc)
-        .await
-        .context(WalletSnafu)?;
+    let available_balance = sender_wallet.balance(&cbbtc).await.context(WalletSnafu)?;
 
     if available_balance < lot.amount {
         return InsufficientBalanceSnafu {

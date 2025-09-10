@@ -14,6 +14,13 @@ use crate::bitcoin_wallet::BitcoinWalletError;
 
 #[derive(Debug, Snafu)]
 pub enum WalletError {
+    #[snafu(display("Crafting receive with authorization execution failed: {}", source))]
+    ReceiveAuthorizationFailed {
+        source: blockchain_utils::ReceiveAuthorizationError,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
     #[snafu(display("Deposit key storage error: {}", source))]
     DepositKeyStorageError {
         source: crate::deposit_key_storage::Error,

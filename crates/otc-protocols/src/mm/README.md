@@ -22,7 +22,7 @@ let request = MMRequest::ValidateQuote {
     request_id: Uuid::new_v4(),
     quote_id: quote.id,
     user_id: user.id,
-    timestamp: Utc::now(),
+    timestamp: utc::now(),
 };
 
 // Wrap in protocol message
@@ -39,12 +39,14 @@ let json = serde_json::to_string(&message)?;
 ## Message Types
 
 ### Requests (Server → MM)
+
 - `ValidateQuote`: Check if MM will fill a quote
 - `UserDeposited`: Notify MM of user deposit
 - `SwapComplete`: Provide user's private key
 - `Ping`: Health check
 
 ### Responses (MM → Server)
+
 - `QuoteValidated`: Accept/reject quote
 - `DepositInitiated`: MM has sent funds
 - `SwapCompleteAck`: Acknowledge completion
@@ -58,6 +60,7 @@ The protocol uses semantic versioning. Current version: 1.0.0
 ## Transport Implementation
 
 This crate does not provide networking. For examples:
+
 - WebSocket: Use `tokio-tungstenite` or `tungstenite`
 - TCP: Use `tokio::net::TcpStream`
 - QUIC: Use `quinn`

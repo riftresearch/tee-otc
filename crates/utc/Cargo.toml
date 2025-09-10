@@ -1,0 +1,13 @@
+[package]
+name = "utc"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+chrono = { workspace = true }
+mock_instant = { workspace = true }
+
+[features]
+default = []
+# When enabled, utc::now() uses mock_instant's global SystemTime/UNIX_EPOCH.
+mock-time = []

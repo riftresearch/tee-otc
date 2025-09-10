@@ -4,7 +4,6 @@ use crate::strategy::ValidationStrategy;
 use crate::{config::Config, wallet::WalletManager};
 use alloy::primitives::U256;
 use blockchain_utils::FeeCalcFromLot;
-use chrono::Utc;
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_protocols::mm::{MMErrorCode, MMRequest, MMResponse, MMStatus, ProtocolMessage};
 use std::sync::Arc;
@@ -94,7 +93,7 @@ impl OTCMessageHandler {
                     quote_id: *quote_id,
                     accepted,
                     rejection_reason,
-                    timestamp: Utc::now(),
+                    timestamp: utc::now(),
                 };
 
                 Some(ProtocolMessage {
@@ -164,13 +163,13 @@ impl OTCMessageHandler {
                                 swap_id: *swap_id,
                                 tx_hash: txid,
                                 amount_sent: expected_lot.amount,
-                                timestamp: Utc::now(),
+                                timestamp: utc::now(),
                             },
                             Err(e) => MMResponse::Error {
                                 request_id: *request_id,
                                 error_code: MMErrorCode::InternalError,
                                 message: e.to_string(),
-                                timestamp: Utc::now(),
+                                timestamp: utc::now(),
                             },
                         }
                     } else {
@@ -178,7 +177,7 @@ impl OTCMessageHandler {
                             request_id: *request_id,
                             error_code: MMErrorCode::UnsupportedChain,
                             message: "No wallet found for chain".to_string(),
-                            timestamp: Utc::now(),
+                            timestamp: utc::now(),
                         }
                     }
                 };
@@ -224,7 +223,7 @@ impl OTCMessageHandler {
                 let response = MMResponse::SwapCompleteAck {
                     request_id: *request_id,
                     swap_id: *swap_id,
-                    timestamp: Utc::now(),
+                    timestamp: utc::now(),
                 };
 
                 Some(ProtocolMessage {
@@ -239,7 +238,7 @@ impl OTCMessageHandler {
                     request_id: *request_id,
                     status: MMStatus::Active,
                     version: env!("CARGO_PKG_VERSION").to_string(),
-                    timestamp: Utc::now(),
+                    timestamp: utc::now(),
                 };
 
                 Some(ProtocolMessage {

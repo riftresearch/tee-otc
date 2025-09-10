@@ -1,8 +1,11 @@
 use crate::{Quote, SwapStatus};
 use alloy::primitives::{Address, U256};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+pub const MM_NEVER_DEPOSITS_TIMEOUT: Duration = Duration::minutes(60);
+pub const MM_DEPOSIT_NEVER_CONFIRMED_TIMEOUT: Duration = Duration::minutes(60 * 24); // 24 hours
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Swap {
@@ -42,6 +45,51 @@ pub struct Swap {
 
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum RefundSwapReason {
+    MarketMakerNeverInitiatedDeposit,
+    MarketMakerDepositNeverConfirmed,
+}
+
+impl Swap {
+    pub fn can_be_refunded(&self) -> Option<RefundSwapReason> {
+        if !matches!(
+            self.status,
+            SwapStatus::WaitingMMDepositInitiated | SwapStatus::WaitingMMDepositConfirmed
+        ) {
+            return None;
+        }
+        // if the status is not waiting mm deposit initiated or confirmed, then it can't be refunded
+        match &self.mm_deposit_status {
+            None => {
+                // This means we must be in WaitingMMDepositInitiated
+                // so we need to see if the user deposit has been confirmed or not
+                let user_deposit = self.user_deposit_status.as_ref().unwrap();
+                let user_deposit_confirmed_at = user_deposit.confirmed_at.expect(
+                    "User deposit must be confirmed if we are in WaitingMMDepositInitiated",
+                );
+                let now = utc::now();
+                let diff = now - user_deposit_confirmed_at;
+                if diff > MM_NEVER_DEPOSITS_TIMEOUT {
+                    Some(RefundSwapReason::MarketMakerNeverInitiatedDeposit)
+                } else {
+                    None
+                }
+            }
+            Some(mm_deposit) => {
+                let mm_deposit_detected_at = mm_deposit.deposit_detected_at;
+                let now = utc::now();
+                let diff = now - mm_deposit_detected_at;
+                if diff > MM_DEPOSIT_NEVER_CONFIRMED_TIMEOUT {
+                    Some(RefundSwapReason::MarketMakerDepositNeverConfirmed)
+                } else {
+                    None
+                }
+            }
+        }
+    }
 }
 
 // JSONB types for rich deposit/settlement data

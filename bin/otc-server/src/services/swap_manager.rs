@@ -1,11 +1,13 @@
-use crate::api::swaps::{CreateSwapRequest, CreateSwapResponse, DepositInfoResponse, SwapResponse};
+use crate::api::swaps::{
+    CreateSwapRequest, CreateSwapResponse, DepositInfoResponse, RefundPayload, RefundSwapRequest,
+    RefundSwapResponse, SwapResponse,
+};
 use crate::config::Settings;
 use crate::db::Database;
 use crate::error::OtcServerError;
 use crate::services::MMRegistry;
 use alloy::hex::FromHexError;
 use alloy::primitives::Address;
-use chrono::Utc;
 use otc_chains::ChainRegistry;
 use otc_models::{Swap, SwapStatus, TokenIdentifier};
 use snafu::prelude::*;
@@ -46,6 +48,12 @@ pub enum SwapError {
 
     #[snafu(display("Invalid EVM account address: {}", source))]
     InvalidEvmAccountAddress { source: FromHexError },
+
+    #[snafu(display("Invalid refund attempt: {}", reason))]
+    InvalidRefundAttempt { reason: String },
+
+    #[snafu(display("Failed to dump to address: {}", err))]
+    DumpToAddress { err: String },
 }
 
 impl From<OtcServerError> for SwapError {
@@ -85,6 +93,54 @@ impl SwapManager {
         }
     }
 
+    pub async fn refund_swap(
+        &self,
+        refund_request: RefundSwapRequest,
+    ) -> SwapResult<RefundSwapResponse> {
+        let swap_id = refund_request.payload.swap_id;
+        let swap = self.db.swaps().get(swap_id).await.context(DatabaseSnafu)?;
+        // TODO(high): Validate the EIP712 signature in the request before proceeding
+
+        match swap.can_be_refunded() {
+            Some(reason) => {
+                let deposit_chain = self
+                    .chain_registry
+                    .get(&swap.quote.from.currency.chain)
+                    .ok_or(SwapError::ChainNotSupported {
+                        chain: swap.quote.from.currency.chain,
+                    })?;
+
+                let deposit_wallet = deposit_chain
+                    .derive_wallet(&self.settings.master_key_bytes(), &swap.user_deposit_salt)
+                    .map_err(|e| SwapError::WalletDerivation { source: e })?;
+
+                let tx_data = deposit_chain
+                    .dump_to_address(
+                        &swap.quote.from.currency.token,
+                        &deposit_wallet.private_key(),
+                        &refund_request.payload.refund_recipient,
+                        refund_request.payload.refund_transaction_fee,
+                    )
+                    .await
+                    .map_err(|e| SwapError::DumpToAddress { err: e.to_string() })?;
+
+                Ok(RefundSwapResponse {
+                    swap_id,
+                    reason,
+                    tx_data,
+                    tx_chain: swap.quote.from.currency.chain,
+                })
+            }
+            None => InvalidRefundAttemptSnafu {
+                reason: format!(
+                    "Swap is not in a refundable state, current status: {:?}",
+                    swap.status
+                ),
+            }
+            .fail(),
+        }
+    }
+
     /// Create a new swap from a quote
     ///
     /// This will:
@@ -97,7 +153,7 @@ impl SwapManager {
     pub async fn create_swap(&self, request: CreateSwapRequest) -> SwapResult<CreateSwapResponse> {
         let quote = request.quote;
         // 1. Check if quote has expired
-        if quote.expires_at < Utc::now() {
+        if quote.expires_at < utc::now() {
             return Err(SwapError::QuoteExpired);
         }
 
@@ -177,7 +233,7 @@ impl SwapManager {
             .address;
 
         // 6. Create swap record
-        let now = Utc::now();
+        let now = utc::now();
         let swap = Swap {
             id: swap_id,
             quote: quote.clone(),

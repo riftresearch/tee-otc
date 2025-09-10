@@ -3,7 +3,6 @@ use crate::error::OtcServerError;
 use crate::{config::Settings, services::mm_registry};
 use alloy::primitives::U256;
 use blockchain_utils::FeeCalcFromLot;
-use chrono::Utc;
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_chains::ChainRegistry;
 use otc_models::{MMDepositStatus, Swap, SwapStatus, TxStatus, UserDepositStatus};
@@ -30,7 +29,6 @@ pub type MonitoringResult<T> = Result<T, MonitoringError>;
 /// Background service that monitors all active swaps for:
 /// - Incoming deposits (user and MM)
 /// - Confirmation tracking
-/// - Timeouts and refund triggers
 /// - Settlement completion
 pub struct SwapMonitoringService {
     db: Database,
@@ -100,9 +98,14 @@ impl SwapMonitoringService {
 
     /// Monitor a single swap based on its current state
     async fn monitor_swap(&self, swap: &Swap) -> MonitoringResult<()> {
+        info!(
+            "Monitoring swap {} status: {:?}, user deposit status: {:?}",
+            swap.id, swap.status, swap.user_deposit_status
+        );
         // Check for timeout first
         if swap.failure_at.is_some() {
-            return self.handle_failure(swap).await;
+            warn!("Swap {} has failed", swap.id);
+            return Ok(());
         }
 
         info!(
@@ -173,10 +176,10 @@ impl SwapMonitoringService {
             let user_deposit_status = UserDepositStatus {
                 tx_hash: deposit.tx_hash.clone(),
                 amount: deposit.amount,
-                deposit_detected_at: Utc::now(),
+                deposit_detected_at: utc::now(),
                 confirmed_at: None,
                 confirmations: 0, // Initial detection
-                last_checked: Utc::now(),
+                last_checked: utc::now(),
             };
 
             self.db
@@ -334,9 +337,9 @@ impl SwapMonitoringService {
             let mm_deposit_status = MMDepositStatus {
                 tx_hash: deposit.tx_hash.clone(),
                 amount: deposit.amount,
-                deposit_detected_at: Utc::now(),
+                deposit_detected_at: utc::now(),
                 confirmations: deposit.confirmations,
-                last_checked: Utc::now(),
+                last_checked: utc::now(),
             };
 
             self.db
@@ -448,49 +451,6 @@ impl SwapMonitoringService {
                     "MM deposit tx {} for swap {} not found on chain",
                     mm_deposit.tx_hash, swap.id
                 );
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Handle swap timeout
-    async fn handle_failure(&self, swap: &Swap) -> MonitoringResult<()> {
-        warn!("Swap {} has timed out in state {:?}", swap.id, swap.status);
-
-        match swap.status {
-            SwapStatus::WaitingUserDepositInitiated => {
-                // No deposits yet, just mark as failed
-                self.db
-                    .swaps()
-                    .mark_failed(swap.id, "Failed waiting for user deposit")
-                    .await
-                    .context(DatabaseSnafu)?;
-            }
-            SwapStatus::WaitingUserDepositConfirmed => {
-                // User deposited but MM didn't, refund user
-                self.db
-                    .swaps()
-                    .initiate_user_refund(swap.id, "Failed waiting for MM deposit")
-                    .await
-                    .context(DatabaseSnafu)?;
-
-                // TODO: Actually execute the refund
-                info!("TODO: Execute user refund for swap {}", swap.id);
-            }
-            SwapStatus::WaitingMMDepositConfirmed | SwapStatus::Settled => {
-                // MM deposited, refund MM
-                self.db
-                    .swaps()
-                    .initiate_mm_refund(swap.id, "Failed during settlement")
-                    .await
-                    .context(DatabaseSnafu)?;
-
-                // TODO: Actually execute the refund
-                info!("TODO: Execute MM refund for swap {}", swap.id);
-            }
-            _ => {
-                // Other states don't need timeout handling
             }
         }
 

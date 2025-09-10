@@ -450,17 +450,6 @@ impl SwapRepository {
         self.update(&swap).await?;
         Ok(())
     }
-
-    /// Initiate refund to MM
-    pub async fn initiate_mm_refund(&self, swap_id: Uuid, reason: &str) -> OtcServerResult<()> {
-        let mut swap = self.get(swap_id).await?;
-        swap.initiate_mm_refund(reason.to_string())
-            .map_err(|e| OtcServerError::InvalidState {
-                message: format!("State transition failed: {e}"),
-            })?;
-        self.update(&swap).await?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
@@ -502,8 +491,8 @@ mod tests {
                 amount: U256::from(500000000000000000u64), // 0.5 ETH
             },
             market_maker_id: Uuid::new_v4(),
-            expires_at: Utc::now() + Duration::hours(1),
-            created_at: Utc::now(),
+            expires_at: utc::now() + Duration::hours(1),
+            created_at: utc::now(),
         };
 
         // Create test salt and nonce
@@ -532,8 +521,8 @@ mod tests {
             failure_at: None,
             mm_notified_at: None,
             mm_private_key_sent_at: None,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: utc::now(),
+            updated_at: utc::now(),
         };
 
         // Store the swap
@@ -597,8 +586,8 @@ mod tests {
                 amount: U256::from(1000000000000000000u64),
             },
             market_maker_id: Uuid::new_v4(),
-            expires_at: Utc::now() + Duration::hours(1),
-            created_at: Utc::now(),
+            expires_at: utc::now() + Duration::hours(1),
+            created_at: utc::now(),
         };
 
         // Create test salt and nonce
@@ -608,7 +597,7 @@ mod tests {
         getrandom::getrandom(&mut mm_nonce).unwrap();
 
         // Create swap with deposit info
-        let now = Utc::now();
+        let now = utc::now();
         let original_swap = Swap {
             id: Uuid::new_v4(),
             market_maker_id: quote.market_maker_id,
@@ -705,8 +694,8 @@ mod tests {
                 amount: U256::from(500000000000000000u64),
             },
             market_maker_id: Uuid::new_v4(),
-            expires_at: Utc::now() + Duration::hours(1),
-            created_at: Utc::now(),
+            expires_at: utc::now() + Duration::hours(1),
+            created_at: utc::now(),
         };
 
         // Create test salt and nonce
@@ -735,8 +724,8 @@ mod tests {
             failure_at: None,
             mm_notified_at: None,
             mm_private_key_sent_at: None,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: utc::now(),
+            updated_at: utc::now(),
         };
 
         swap_repo.create(&swap).await.unwrap();
@@ -755,10 +744,10 @@ mod tests {
         let user_deposit = UserDepositStatus {
             tx_hash: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890".to_string(),
             amount: deposit_amount,
-            deposit_detected_at: Utc::now(),
+            deposit_detected_at: utc::now(),
             confirmed_at: None,
             confirmations: 0,
-            last_checked: Utc::now(),
+            last_checked: utc::now(),
         };
         swap_repo
             .update_user_deposit(swap.id, &user_deposit)
@@ -774,7 +763,7 @@ mod tests {
         let settlement_status = SettlementStatus {
             tx_hash: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
                 .to_string(),
-            broadcast_at: Utc::now(),
+            broadcast_at: utc::now(),
             confirmations: 0,
             completed_at: None,
             fee: None,

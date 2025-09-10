@@ -3,12 +3,13 @@ use crate::{key_derivation, ChainOperations, Result};
 use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::rpc::types::{Log as RpcLog, TransactionReceipt};
-use alloy::signers::local::PrivateKeySigner;
-use alloy::sol;
+use alloy::signers::local::{LocalSigner, PrivateKeySigner};
+use alloy::{hex, sol};
 use async_trait::async_trait;
-use blockchain_utils::inverse_compute_protocol_fee;
+use blockchain_utils::create_receive_with_authorization_execution;
+use eip3009_erc20_contract::GenericEIP3009ERC20::GenericEIP3009ERC20Instance;
 use evm_token_indexer_client::TokenIndexerClient;
-use otc_models::{ChainType, Lot, TokenIdentifier, TransferInfo, TxStatus, Wallet};
+use otc_models::{ChainType, Currency, Lot, TokenIdentifier, TransferInfo, TxStatus, Wallet};
 use std::str::FromStr;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -144,12 +145,75 @@ impl ChainOperations for EthereumChain {
         Ok(Some(transfer_hint.unwrap()))
     }
 
+    /// Dump to address here just gives permission for the recipient to call receiveWithAuthorization
+    /// What is returned is an unsigned transaction calldata that the recipient can sign and send
+    /// note that it CANNOT just be broadcasted, it must be signed the the recipient
+    async fn dump_to_address(
+        &self,
+        token: &TokenIdentifier,
+        private_key: &str,
+        recipient_address: &str,
+        _fee: U256, //ignore fee b/c we dont sign a full transaction here
+    ) -> Result<String> {
+        let token_address = match token {
+            TokenIdentifier::Address(address) => {
+                Address::from_str(address).map_err(|_| crate::Error::DumpToAddress {
+                    message: "Invalid token address".to_string(),
+                })?
+            }
+            TokenIdentifier::Native => {
+                return Err(crate::Error::DumpToAddress {
+                    message: "Native token not supported".to_string(),
+                })
+            }
+        };
+        let sender_signer =
+            LocalSigner::from_str(private_key).map_err(|_| crate::Error::DumpToAddress {
+                message: "Invalid private key".to_string(),
+            })?;
+        let sender_address = sender_signer.address();
+        let recipient_address =
+            Address::from_str(recipient_address).map_err(|_| crate::Error::DumpToAddress {
+                message: "Invalid recipient address".to_string(),
+            })?;
+        let token_contract = GenericEIP3009ERC20Instance::new(token_address, &self.provider);
+        let token_balance = token_contract
+            .balanceOf(sender_address)
+            .call()
+            .await
+            .map_err(|_| crate::Error::DumpToAddress {
+                message: "Failed to get token balance".to_string(),
+            })?;
+
+        let lot = Lot {
+            currency: Currency {
+                chain: ChainType::Ethereum,
+                token: TokenIdentifier::Address(token_address.to_string()),
+                decimals: 8,
+            },
+            amount: token_balance,
+        };
+
+        let execution = create_receive_with_authorization_execution(
+            &lot,
+            &sender_signer,
+            &self.provider,
+            &recipient_address,
+        )
+        .await
+        .map_err(|e| crate::Error::DumpToAddress {
+            message: e.to_string(),
+        })?;
+
+        Ok(hex::encode(execution.callData))
+    }
+
     fn validate_address(&self, address: &str) -> bool {
         Address::from_str(address).is_ok()
     }
 
     fn minimum_block_confirmations(&self) -> u32 {
-        4 // Standard for Ethereum
+        4
     }
 
     fn estimated_block_time(&self) -> Duration {
@@ -290,7 +354,7 @@ impl EthereumChain {
 
                 transfer_hint = Some(TransferInfo {
                     tx_hash: alloy::hex::encode(transfer.transaction_hash),
-                    detected_at: chrono::Utc::now(),
+                    detected_at: utc::now(),
                     confirmations,
                     amount: transfer_log.inner.data.value,
                 });

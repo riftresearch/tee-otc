@@ -40,6 +40,7 @@ eip7702-delegator-contract = {workspace=true}
 eip3009-erc20-contract = {workspace=true}
 reqwest = {workspace=true}
 jsonwebtoken = {workspace=true}
+utc = {workspace=true}
 
 
 p256 = {workspace=true}

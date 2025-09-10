@@ -97,7 +97,7 @@ impl RfqMMRegistry {
                 payload: RFQRequest::QuoteRequested {
                     request_id: mm_request_id, // Use unique ID per MM
                     request: request.clone(),
-                    timestamp: chrono::Utc::now(),
+                    timestamp: utc::now(),
                 },
             };
 
@@ -143,7 +143,7 @@ impl RfqMMRegistry {
             payload: RFQRequest::QuoteSelected {
                 request_id,
                 quote_id,
-                timestamp: chrono::Utc::now(),
+                timestamp: utc::now(),
             },
         };
 

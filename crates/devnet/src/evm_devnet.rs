@@ -271,8 +271,6 @@ async fn spawn_anvil(
             .chain_id(1337)
             .block_time(1)
             // .arg("--steps-tracing")
-            .arg("--timestamp")
-            .arg((chrono::Utc::now().timestamp() - 9 * 60 * 60).to_string()) // 9 hours ago? TODO: do we need to do this?
             .arg("--dump-state")
             .arg(anvil_dump_pathbuf.to_string_lossy().to_string());
 

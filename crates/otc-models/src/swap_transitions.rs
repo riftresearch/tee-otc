@@ -1,6 +1,5 @@
 use crate::{MMDepositStatus, SettlementStatus, Swap, SwapStatus, UserDepositStatus};
 use alloy::primitives::U256;
-use chrono::Utc;
 use snafu::{ensure, Snafu};
 
 #[derive(Debug, Snafu)]
@@ -33,7 +32,7 @@ impl Swap {
             }
         );
 
-        let now = Utc::now();
+        let now = utc::now();
         self.user_deposit_status = Some(UserDepositStatus {
             tx_hash,
             amount,
@@ -66,9 +65,9 @@ impl Swap {
             }
         );
 
-        self.user_deposit_status.as_mut().unwrap().confirmed_at = Some(Utc::now());
+        self.user_deposit_status.as_mut().unwrap().confirmed_at = Some(utc::now());
         self.status = SwapStatus::WaitingMMDepositInitiated;
-        self.updated_at = Utc::now();
+        self.updated_at = utc::now();
 
         Ok(())
     }
@@ -88,7 +87,7 @@ impl Swap {
             }
         );
 
-        let now = Utc::now();
+        let now = utc::now();
         self.mm_deposit_status = Some(MMDepositStatus {
             tx_hash,
             amount,
@@ -109,7 +108,7 @@ impl Swap {
         user_confirmations: Option<u64>,
         mm_confirmations: Option<u64>,
     ) -> TransitionResult {
-        let now = Utc::now();
+        let now = utc::now();
 
         if let (Some(confirmations), Some(status)) =
             (user_confirmations, &mut self.user_deposit_status)
@@ -146,15 +145,15 @@ impl Swap {
         );
 
         self.status = SwapStatus::Settled;
-        self.updated_at = Utc::now();
+        self.updated_at = utc::now();
 
         Ok(())
     }
 
     /// Record that MM was notified
     pub fn mark_mm_notified(&mut self) -> TransitionResult {
-        self.mm_notified_at = Some(Utc::now());
-        self.updated_at = Utc::now();
+        self.mm_notified_at = Some(utc::now());
+        self.updated_at = utc::now();
         Ok(())
     }
 
@@ -167,8 +166,8 @@ impl Swap {
             }
         );
 
-        self.mm_private_key_sent_at = Some(Utc::now());
-        self.updated_at = Utc::now();
+        self.mm_private_key_sent_at = Some(utc::now());
+        self.updated_at = utc::now();
         Ok(())
     }
 
@@ -187,7 +186,7 @@ impl Swap {
             }
         );
 
-        let now = Utc::now();
+        let now = utc::now();
         self.settlement_status = Some(SettlementStatus {
             tx_hash,
             broadcast_at: now,
@@ -204,7 +203,7 @@ impl Swap {
     pub fn update_settlement_confirmations(&mut self, confirmations: u64) -> TransitionResult {
         if let Some(settlement) = &mut self.settlement_status {
             settlement.confirmations = confirmations;
-            self.updated_at = Utc::now();
+            self.updated_at = utc::now();
             Ok(())
         } else {
             Err(TransitionError::MissingData {
@@ -230,26 +229,7 @@ impl Swap {
 
         self.status = SwapStatus::RefundingUser;
         self.failure_reason = Some(reason);
-        self.updated_at = Utc::now();
-        Ok(())
-    }
-
-    /// Initiate refund to MM
-    pub fn initiate_mm_refund(&mut self, reason: String) -> TransitionResult {
-        ensure!(
-            matches!(
-                self.status,
-                SwapStatus::WaitingMMDepositConfirmed | SwapStatus::Settled
-            ),
-            InvalidTransitionSnafu {
-                from: self.status,
-                to: SwapStatus::RefundingMM,
-            }
-        );
-
-        self.status = SwapStatus::RefundingMM;
-        self.failure_reason = Some(reason);
-        self.updated_at = Utc::now();
+        self.updated_at = utc::now();
         Ok(())
     }
 
@@ -257,7 +237,7 @@ impl Swap {
     pub fn mark_failed(&mut self, reason: String) -> TransitionResult {
         self.status = SwapStatus::Failed;
         self.failure_reason = Some(reason);
-        self.updated_at = Utc::now();
+        self.updated_at = utc::now();
         Ok(())
     }
 
@@ -315,8 +295,8 @@ mod tests {
                     },
                     amount: U256::from(1000000u64),
                 },
-                expires_at: Utc::now() + Duration::hours(1),
-                created_at: Utc::now(),
+                expires_at: utc::now() + Duration::hours(1),
+                created_at: utc::now(),
             },
             market_maker_id: Uuid::new_v4(),
             user_deposit_salt: [0u8; 32],
@@ -335,8 +315,8 @@ mod tests {
             failure_at: None,
             mm_notified_at: None,
             mm_private_key_sent_at: None,
-            created_at: Utc::now(),
-            updated_at: Utc::now(),
+            created_at: utc::now(),
+            updated_at: utc::now(),
         }
     }
 
@@ -391,7 +371,7 @@ mod tests {
     #[test]
     fn test_timeout_refund() {
         let mut swap = create_test_swap();
-        swap.failure_at = Some(Utc::now() - Duration::hours(1)); // Already timed out
+        swap.failure_at = Some(utc::now() - Duration::hours(1)); // Already timed out
 
         assert!(swap.has_failed());
 

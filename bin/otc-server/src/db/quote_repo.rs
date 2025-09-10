@@ -78,6 +78,8 @@ impl QuoteRepository {
         &self,
         market_maker_id: Uuid,
     ) -> OtcServerResult<Vec<Quote>> {
+        // Use application time to avoid DB/app clock skew issues
+        let now = utc::now();
         let rows = sqlx::query(
             r#"
             SELECT 
@@ -89,11 +91,12 @@ impl QuoteRepository {
                 created_at
             FROM quotes
             WHERE market_maker_id = $1 
-            AND expires_at > NOW()
+            AND expires_at > $2
             ORDER BY created_at DESC
             "#,
         )
         .bind(market_maker_id)
+        .bind(now)
         .fetch_all(&self.pool)
         .await?;
 
@@ -183,8 +186,8 @@ mod tests {
                 amount: U256::from(500000000000000000u64), // 0.5 ETH in wei
             },
             market_maker_id: Uuid::new_v4(),
-            expires_at: Utc::now() + Duration::minutes(10),
-            created_at: Utc::now(),
+            expires_at: utc::now() + Duration::minutes(10),
+            created_at: utc::now(),
         };
 
         // Store the quote
@@ -201,13 +204,25 @@ mod tests {
         );
 
         // Validate from currency
-        assert_eq!(retrieved_quote.from.currency.chain, original_quote.from.currency.chain);
-        assert_eq!(retrieved_quote.from.currency.token, original_quote.from.currency.token);
+        assert_eq!(
+            retrieved_quote.from.currency.chain,
+            original_quote.from.currency.chain
+        );
+        assert_eq!(
+            retrieved_quote.from.currency.token,
+            original_quote.from.currency.token
+        );
         assert_eq!(retrieved_quote.from.amount, original_quote.from.amount);
 
         // Validate to currency
-        assert_eq!(retrieved_quote.to.currency.chain, original_quote.to.currency.chain);
-        assert_eq!(retrieved_quote.to.currency.token, original_quote.to.currency.token);
+        assert_eq!(
+            retrieved_quote.to.currency.chain,
+            original_quote.to.currency.chain
+        );
+        assert_eq!(
+            retrieved_quote.to.currency.token,
+            original_quote.to.currency.token
+        );
         assert_eq!(retrieved_quote.to.amount, original_quote.to.amount);
 
         // Validate timestamps (with some tolerance for DB precision)
@@ -257,8 +272,8 @@ mod tests {
                 amount: U256::from(1000000000000000000000u128), // 1000 DAI (18 decimals)
             },
             market_maker_id: Uuid::new_v4(),
-            expires_at: Utc::now() + Duration::minutes(5),
-            created_at: Utc::now(),
+            expires_at: utc::now() + Duration::minutes(5),
+            created_at: utc::now(),
         };
 
         // Store and retrieve
@@ -266,14 +281,20 @@ mod tests {
         let retrieved_quote = quote_repo.get(original_quote.id).await.unwrap();
 
         // Validate token addresses are preserved
-        match (&retrieved_quote.from.currency.token, &original_quote.from.currency.token) {
+        match (
+            &retrieved_quote.from.currency.token,
+            &original_quote.from.currency.token,
+        ) {
             (TokenIdentifier::Address(retrieved), TokenIdentifier::Address(original)) => {
                 assert_eq!(retrieved, original);
             }
             _ => panic!("Token identifier type mismatch"),
         }
 
-        match (&retrieved_quote.to.currency.token, &original_quote.to.currency.token) {
+        match (
+            &retrieved_quote.to.currency.token,
+            &original_quote.to.currency.token,
+        ) {
             (TokenIdentifier::Address(retrieved), TokenIdentifier::Address(original)) => {
                 assert_eq!(retrieved, original);
             }
@@ -315,8 +336,8 @@ mod tests {
                 amount: U256::from(21000000u64) * U256::from(100000000u64), // 21M BTC in sats
             },
             market_maker_id: Uuid::new_v4(),
-            expires_at: Utc::now() + Duration::hours(1),
-            created_at: Utc::now(),
+            expires_at: utc::now() + Duration::hours(1),
+            created_at: utc::now(),
         };
 
         // Store and retrieve
@@ -358,8 +379,8 @@ mod tests {
                 amount: U256::from(1000000000000000000u64),
             },
             market_maker_id: mm_identifier,
-            expires_at: Utc::now() - Duration::hours(1), // Already expired
-            created_at: Utc::now() - Duration::hours(2),
+            expires_at: utc::now() - Duration::hours(1), // Already expired
+            created_at: utc::now() - Duration::hours(2),
         };
 
         let active_quote1 = Quote {
@@ -381,8 +402,8 @@ mod tests {
                 amount: U256::from(2000000000000000000u64),
             },
             market_maker_id: mm_identifier,
-            expires_at: Utc::now() + Duration::minutes(30),
-            created_at: Utc::now(),
+            expires_at: utc::now() + Duration::minutes(30),
+            created_at: utc::now(),
         };
 
         let active_quote2 = Quote {
@@ -404,8 +425,8 @@ mod tests {
                 amount: U256::from(300000u64),
             },
             market_maker_id: mm_identifier,
-            expires_at: Utc::now() + Duration::hours(1),
-            created_at: Utc::now(),
+            expires_at: utc::now() + Duration::hours(1),
+            created_at: utc::now(),
         };
 
         // Store all quotes

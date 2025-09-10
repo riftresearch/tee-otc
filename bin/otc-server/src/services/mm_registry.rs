@@ -102,7 +102,7 @@ impl MMRegistry {
                     quote_id: *quote_id,
                     user_tx_hash: user_tx_hash.to_string(),
                     deposit_address: user_deposit_address.to_string(),
-                    timestamp: chrono::Utc::now(),
+                    timestamp: utc::now(),
                 },
             };
             if let Err(e) = conn.sender.send(request).await {
@@ -131,7 +131,7 @@ impl MMRegistry {
                     user_destination_address: user_destination_address.to_string(),
                     mm_nonce,
                     expected_lot: expected_lot.clone(),
-                    timestamp: chrono::Utc::now(),
+                    timestamp: utc::now(),
                 },
             };
 
@@ -171,7 +171,7 @@ impl MMRegistry {
                     user_deposit_private_key: user_deposit_private_key.to_string(),
                     lot: lot.clone(),
                     user_deposit_tx_hash: user_deposit_tx_hash.to_string(),
-                    timestamp: chrono::Utc::now(),
+                    timestamp: utc::now(),
                 },
             };
             if let Err(e) = conn.sender.send(request).await {
@@ -215,7 +215,7 @@ impl MMRegistry {
                 quote_id: quote_id.clone(),
                 quote_hash: quote_hash.clone(),
                 user_destination_address: user_destination_address.to_string(),
-                timestamp: chrono::Utc::now(),
+                timestamp: utc::now(),
             },
         };
 

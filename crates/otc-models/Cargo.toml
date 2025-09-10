@@ -17,6 +17,7 @@ sqlx = { workspace = true, optional = true }
 snafu = { workspace = true }
 argon2 = { workspace = true }
 serde_json = {workspace = true}
+utc = {workspace=true}
 
 [features]
 default = []

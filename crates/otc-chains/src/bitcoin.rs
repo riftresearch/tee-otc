@@ -3,15 +3,14 @@ use crate::{key_derivation, ChainOperations, Result};
 use alloy::hex;
 use alloy::primitives::U256;
 use async_trait::async_trait;
+use bdk_wallet::{signer::SignOptions, CreateParams, Wallet as BdkWallet};
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
-use bitcoin::{Address, Amount, CompressedPublicKey, Network, PrivateKey, Transaction};
+use bitcoin::{Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, Transaction};
 use bitcoincore_rpc_async::{Auth, Client, RpcApi};
-use otc_models::{ChainType, Lot, TransferInfo, TxStatus, Wallet};
+use otc_models::{ChainType, Lot, TokenIdentifier, TransferInfo, TxStatus, Wallet};
 use std::str::FromStr;
 use std::time::Duration;
 use tracing::{debug, info};
-
-const FEE_ADDRESS: &str = "bc1q2p8ms86h3namagp4y486udsv4syydhvqztg886";
 
 pub struct BitcoinChain {
     rpc_client: Client,
@@ -104,6 +103,167 @@ impl ChainOperations for BitcoinChain {
         } else {
             Ok(TxStatus::NotFound)
         }
+    }
+
+    async fn dump_to_address(
+        &self,
+        token: &TokenIdentifier,
+        private_key: &str,
+        recipient_address: &str,
+        fee: U256,
+    ) -> Result<String> {
+        if token != &TokenIdentifier::Native {
+            return Err(crate::Error::DumpToAddress {
+                message: "Native token not supported".to_string(),
+            });
+        }
+        let private_key =
+            PrivateKey::from_wif(private_key).map_err(|e| crate::Error::DumpToAddress {
+                message: "Invalid signer private key".to_string(),
+            })?;
+        let recipient_address = Address::from_str(recipient_address)?.assume_checked();
+
+        // Determine the sender address from the provided private key and collect its UTXOs
+        let secp = Secp256k1::new();
+        let sender_address = Address::p2wpkh(
+            &CompressedPublicKey::from_private_key(&secp, &private_key).unwrap(),
+            self.network,
+        );
+
+        let utxos = self
+            .esplora_client
+            .get_address_utxo(&sender_address)
+            .await?;
+        if utxos.is_empty() {
+            return Err(crate::Error::DumpToAddress {
+                message: "No UTXOs found".to_string(),
+            });
+        }
+        if utxos.iter().map(|utxo| utxo.value).sum::<u64>() < fee.to::<u64>() {
+            return Err(crate::Error::DumpToAddress {
+                message: "Insufficient balance to cover fee".to_string(),
+            });
+        }
+        // Calculate totals
+        let total_in: u64 = utxos.iter().map(|u| u.value).sum();
+        let fee_sats: u64 = fee.to::<u64>();
+        if total_in <= fee_sats {
+            return Err(crate::Error::DumpToAddress {
+                message: format!(
+                    "Insufficient balance: inputs {total_in} sats, fee {fee_sats} sats"
+                ),
+            });
+        }
+
+        let send_amount = total_in - fee_sats;
+
+        // Build a descriptor from the provided WIF — our addresses are P2WPKH
+        let descriptor = format!("wpkh({})", private_key.to_wif());
+
+        // Create a temporary in-memory BDK wallet for signing and building
+        let mut temp_wallet = BdkWallet::create_with_params(
+            CreateParams::new_single(descriptor).network(self.network),
+        )
+        .map_err(|e| crate::Error::DumpToAddress {
+            message: format!("Failed to create temp wallet: {e}"),
+        })?;
+
+        let mut tx_builder = temp_wallet.build_tx();
+        tx_builder.manually_selected_only();
+        tx_builder.add_recipient(
+            recipient_address.script_pubkey(),
+            Amount::from_sat(send_amount),
+        );
+        tx_builder.fee_absolute(Amount::from_sat(fee_sats));
+
+        // Add inputs as foreign UTXOs with full PSBT metadata for reliability
+        for utxo in utxos {
+            let tx_hex = self
+                .rpc_client
+                .get_raw_transaction_hex(&utxo.txid, None)
+                .await
+                .map_err(|e| crate::Error::DumpToAddress {
+                    message: format!(
+                        "Failed to fetch raw transaction for {}: {e}",
+                        utxo.txid
+                    ),
+                })?;
+
+            let tx_bytes = alloy::hex::decode(&tx_hex).map_err(|e| crate::Error::DumpToAddress {
+                message: format!(
+                    "Failed to decode raw transaction hex for {}: {e}",
+                    utxo.txid
+                ),
+            })?;
+
+            let full_tx = bitcoin::consensus::deserialize::<Transaction>(&tx_bytes).map_err(
+                |e| crate::Error::DumpToAddress {
+                    message: format!(
+                        "Failed to deserialize raw transaction for {}: {e}",
+                        utxo.txid
+                    ),
+                },
+            )?;
+
+            let output = full_tx
+                .output
+                .get(utxo.vout as usize)
+                .cloned()
+                .ok_or_else(|| crate::Error::DumpToAddress {
+                    message: format!(
+                        "Transaction {} missing vout {} for foreign UTXO",
+                        utxo.txid, utxo.vout
+                    ),
+                })?;
+
+            let psbt_input = bdk_wallet::bitcoin::psbt::Input {
+                witness_utxo: Some(output),
+                non_witness_utxo: Some(full_tx.clone()),
+                ..Default::default()
+            };
+
+            let satisfaction_weight = bdk_wallet::bitcoin::Weight::from_wu(108);
+
+            tx_builder
+                .add_foreign_utxo(
+                    OutPoint::new(utxo.txid, utxo.vout),
+                    psbt_input,
+                    satisfaction_weight,
+                )
+                .map_err(|e| crate::Error::DumpToAddress {
+                    message: format!(
+                        "Failed to add foreign UTXO {}:{}: {e}",
+                        utxo.txid, utxo.vout
+                    ),
+                })?;
+        }
+
+        let mut psbt = tx_builder
+            .finish()
+            .map_err(|e| crate::Error::DumpToAddress {
+                message: format!("Failed to build transaction: {e}"),
+            })?;
+
+        // Sign with the temporary wallet
+        let finalized = temp_wallet
+            .sign(&mut psbt, SignOptions::default())
+            .map_err(|e| crate::Error::DumpToAddress {
+                message: format!("Failed to sign PSBT: {e}"),
+            })?;
+
+        if !finalized {
+            return Err(crate::Error::DumpToAddress {
+                message: "PSBT not fully finalized after signing".to_string(),
+            });
+        }
+
+        let tx = psbt.extract_tx().map_err(|e| crate::Error::DumpToAddress {
+            message: format!("Failed to extract transaction: {e}"),
+        })?;
+
+        // Return raw signed transaction hex
+        let raw = bitcoin::consensus::serialize(&tx);
+        Ok(hex::encode(raw))
     }
 
     async fn search_for_transfer(
@@ -271,7 +431,7 @@ impl BitcoinChain {
             most_confirmed_transfer = Some(TransferInfo {
                 tx_hash: utxo.txid.to_string(),
                 amount: U256::from(utxo.value),
-                detected_at: chrono::Utc::now(),
+                detected_at: utc::now(),
                 confirmations: cur_utxo_confirmations as u64,
             });
         }

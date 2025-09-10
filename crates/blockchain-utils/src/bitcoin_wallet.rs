@@ -4,7 +4,7 @@ use bitcoin::{
     key::{CompressedPublicKey, PrivateKey, PublicKey},
     script::ScriptBuf,
     secp256k1::{Secp256k1, SecretKey},
-    Address, Amount, Network, OutPoint, Transaction, Weight,
+    Address, Amount, Network, OutPoint, Weight,
 };
 use bitcoin_coin_selection::WeightedUtxo;
 use snafu::prelude::*;
@@ -40,53 +40,12 @@ impl InputUtxo {
     }
 }
 
-/// A trait for signing transactions from a Bitcoin wallet.
-pub trait BitcoinSigner {
-    /// The error type returned by signing operations
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    /// Sign a transaction using the wallet's private key
-    fn sign_transaction(
-        &self,
-        tx: &Transaction,
-        utxo_inputs: &[InputUtxo],
-    ) -> Result<Transaction, Self::Error>;
-
-    /// Get the script pubkey for change outputs
-    fn get_script_pubkey(&self) -> ScriptBuf;
-
-    /// Get the wallet's address
-    fn get_address(&self) -> bitcoin::Address<NetworkChecked>;
-}
-
 #[derive(Debug, Clone)]
 pub struct P2WPKHBitcoinWallet {
     pub secret_key: SecretKey,
     pub private_key: PrivateKey,
     pub public_key: String,
     pub address: Address<NetworkChecked>,
-}
-
-impl BitcoinSigner for P2WPKHBitcoinWallet {
-    type Error = BitcoinWalletError;
-
-    fn sign_transaction(
-        &self,
-        tx: &Transaction,
-        utxo_inputs: &[InputUtxo],
-    ) -> Result<Transaction, Self::Error> {
-        let mut tx = tx.clone();
-        sign_transaction(&mut tx, self, utxo_inputs)?;
-        Ok(tx)
-    }
-
-    fn get_script_pubkey(&self) -> ScriptBuf {
-        self.get_p2wpkh_script()
-    }
-
-    fn get_address(&self) -> Address<NetworkChecked> {
-        self.address.clone()
-    }
 }
 
 // Define a proper error type for the wallet
@@ -205,15 +164,4 @@ impl P2WPKHBitcoinWallet {
     pub fn descriptor(&self) -> String {
         format!("wpkh({})", self.private_key)
     }
-}
-
-// Placeholder for the signing function - you'll need to implement this
-fn sign_transaction(
-    _tx: &mut Transaction,
-    _wallet: &P2WPKHBitcoinWallet,
-    _utxo_inputs: &[InputUtxo],
-) -> Result<(), BitcoinWalletError> {
-    // Implementation would go here
-    // This is a placeholder - actual signing logic depends on your specific requirements
-    Ok(())
 }

@@ -1,7 +1,7 @@
 use crate::Result;
 use alloy::primitives::U256;
 use async_trait::async_trait;
-use otc_models::{Lot, TransferInfo, TxStatus, Wallet};
+use otc_models::{Lot, TokenIdentifier, TransferInfo, TxStatus, Wallet};
 use std::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -33,16 +33,14 @@ pub trait ChainOperations: Send + Sync {
     /// Get the status of a transaction
     async fn get_tx_status(&self, tx_hash: &str) -> Result<TxStatus>;
 
-    /// Send funds from a wallet
-    /// TODO: Reason about how refunds will work and create a type around this
-    /*
-    async fn sign_payment(
+    /// Create a signed transaction to send all funds from a wallet to an address
+    async fn dump_to_address(
         &self,
+        token: &TokenIdentifier,
         private_key: &str,
-        to_address: &str,
-        amount: U256,
-    ) -> Result<String>; // Returns tx hash
-     */
+        recipient_address: &str,
+        fee: U256,
+    ) -> Result<String>; // Returns signed transaction data as a hex string
 
     /// Validate an address format
     fn validate_address(&self, address: &str) -> bool;

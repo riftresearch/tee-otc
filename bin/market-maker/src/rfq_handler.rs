@@ -1,4 +1,3 @@
-use chrono::Utc;
 use otc_models::{Currency, Lot, Quote};
 use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse, RFQResult};
 use std::sync::Arc;
@@ -78,6 +77,7 @@ impl RFQMessageHandler {
                             )
                         } else {
                             let balance = balance.unwrap();
+                            info!("Wallet balance: {:?}", balance);
                             if !self
                                 .balance_strategy
                                 .can_fill_quote(&quote_with_fees.quote, balance)
@@ -123,7 +123,7 @@ impl RFQMessageHandler {
                 let response = RFQResponse::QuoteResponse {
                     request_id: *request_id,
                     quote: rfq_result,
-                    timestamp: Utc::now(),
+                    timestamp: utc::now(),
                 };
 
                 Some(ProtocolMessage {
@@ -153,7 +153,7 @@ impl RFQMessageHandler {
             } => {
                 let response = RFQResponse::Pong {
                     request_id: *request_id,
-                    timestamp: Utc::now(),
+                    timestamp: utc::now(),
                 };
 
                 Some(ProtocolMessage {

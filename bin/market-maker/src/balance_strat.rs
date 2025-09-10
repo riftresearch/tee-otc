@@ -41,7 +41,6 @@ impl QuoteBalanceStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
     use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
     use uuid::Uuid;
 
@@ -63,8 +62,8 @@ mod tests {
                 currency,
                 amount: U256::from(amount),
             },
-            expires_at: Utc::now(),
-            created_at: Utc::now(),
+            expires_at: utc::now(),
+            created_at: utc::now(),
         }
     }
 

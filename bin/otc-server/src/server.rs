@@ -1,5 +1,7 @@
 use crate::{
-    api::swaps::{CreateSwapRequest, CreateSwapResponse, SwapResponse},
+    api::swaps::{
+        CreateSwapRequest, CreateSwapResponse, RefundSwapRequest, RefundSwapResponse, SwapResponse,
+    },
     config::Settings,
     db::Database,
     services::{MMRegistry, SwapManager, SwapMonitoringService},
@@ -142,6 +144,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
             "/api/v1/market-makers/connected",
             get(get_connected_market_makers),
         )
+        .route("/api/v1/refund", post(refund_swap))
         .with_state(state);
 
     // Add CORS layer if cors_domain is specified
@@ -284,6 +287,18 @@ async fn handle_socket(mut socket: WebSocket) {
     }
 }
 
+async fn refund_swap(
+    State(state): State<AppState>,
+    Json(request): Json<RefundSwapRequest>,
+) -> Result<Json<RefundSwapResponse>, crate::error::OtcServerError> {
+    state
+        .swap_manager
+        .refund_swap(request)
+        .await
+        .map(Json)
+        .map_err(Into::into)
+}
+
 async fn create_swap(
     State(state): State<AppState>,
     Json(request): Json<CreateSwapRequest>,
@@ -293,52 +308,7 @@ async fn create_swap(
         .create_swap(request)
         .await
         .map(Json)
-        // TODO: Impl a cleaner way to map these errors
-        .map_err(|e| match e {
-            crate::services::swap_manager::SwapError::QuoteNotFound { .. } => {
-                crate::error::OtcServerError::NotFound
-            }
-            crate::services::swap_manager::SwapError::QuoteExpired => {
-                crate::error::OtcServerError::BadRequest {
-                    message: "Quote has expired".to_string(),
-                }
-            }
-            crate::services::swap_manager::SwapError::MarketMakerRejected => {
-                crate::error::OtcServerError::Conflict {
-                    message: "Market maker rejected the quote".to_string(),
-                }
-            }
-            crate::services::swap_manager::SwapError::MarketMakerNotConnected { .. } => {
-                crate::error::OtcServerError::ServiceUnavailable {
-                    service: "market_maker".to_string(),
-                }
-            }
-            crate::services::swap_manager::SwapError::MarketMakerValidationTimeout => {
-                crate::error::OtcServerError::Timeout {
-                    message: "Market maker validation timeout".to_string(),
-                }
-            }
-            crate::services::swap_manager::SwapError::Database { .. } => {
-                crate::error::OtcServerError::Internal {
-                    message: e.to_string(),
-                }
-            }
-            crate::services::swap_manager::SwapError::ChainNotSupported { .. } => {
-                crate::error::OtcServerError::BadRequest {
-                    message: e.to_string(),
-                }
-            }
-            crate::services::swap_manager::SwapError::WalletDerivation { .. } => {
-                crate::error::OtcServerError::Internal {
-                    message: e.to_string(),
-                }
-            }
-            crate::services::swap_manager::SwapError::InvalidEvmAccountAddress { .. } => {
-                crate::error::OtcServerError::BadRequest {
-                    message: e.to_string(),
-                }
-            }
-        })
+        .map_err(Into::into)
 }
 
 async fn get_swap(
@@ -421,7 +391,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, market_maker_id: S
     let connected_response = Connected {
         session_id: Uuid::new_v4(),
         server_version: env!("CARGO_PKG_VERSION").to_string(),
-        timestamp: chrono::Utc::now(),
+        timestamp: utc::now(),
     };
 
     let response = serde_json::json!({

@@ -25,6 +25,7 @@ reqwest = {workspace = true}
 uuid = {workspace= true}
 eip7702-delegator-contract = {workspace=true}
 eip3009-erc20-contract = {workspace=true}
+utc = {workspace=true}
 
 
 # these dependences below here should be removed to be replaced with the project preferred crates of tracing and snafu respectively

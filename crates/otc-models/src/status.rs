@@ -14,6 +14,5 @@ pub enum SwapStatus {
     WaitingMMDepositConfirmed,
     Settled,
     RefundingUser,
-    RefundingMM,
     Failed,
 }
