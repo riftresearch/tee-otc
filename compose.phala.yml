@@ -56,8 +56,6 @@ services:
       context: .
       dockerfile_inline: |
         FROM debian:bookworm-slim
-        ARG BITCOIN_VERSION=29.0
-        ARG BITCOIN_URL=https://bitcoincore.org/bin/bitcoin-core-29.0/bitcoin-29.0-x86_64-linux-gnu.tar.gz
 
         # Install dependencies
         RUN apt-get update \
@@ -75,7 +73,7 @@ services:
 
         # Download and install Bitcoin Core
         WORKDIR /opt/bitcoin
-        RUN curl -fsSL "$BITCOIN_URL" -o bitcoin.tar.gz \
+        RUN curl -fsSL "https://bitcoincore.org/bin/bitcoin-core-29.0/bitcoin-29.0-x86_64-linux-gnu.tar.gz" -o bitcoin.tar.gz \
           && tar -xzf bitcoin.tar.gz --strip-components=1 \
           && install -m 0755 -o root -g root -t /usr/local/bin bin/* \
           && rm -rf /opt/bitcoin
@@ -157,7 +155,7 @@ services:
     networks:
       - otc-network
     volumes:
-      - /var/run/tappd.sock:/var/run/tappd.sock
+      - ${TAPPD_SOCK_PATH:-/var/run/tappd.sock}:/var/run/tappd.sock
     platform: linux/amd64
 
 networks:
