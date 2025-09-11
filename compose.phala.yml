@@ -31,11 +31,85 @@ services:
         EXPOSE 8545
         WORKDIR /root
         # Default command runs Helios JSON-RPC on :8545
-        CMD [ "helios", "ethereum", "--execution-rpc", "${ETH_RPC_URL}" ]
+        CMD [ "helios", "ethereum", "--execution-rpc", "${UNTRUSTED_EVM_RPC_URL}" ]
     environment:
-      ETH_RPC_URL: ${ETH_RPC_URL}
+      UNTRUSTED_EVM_RPC_URL: ${UNTRUSTED_EVM_RPC_URL}
+
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          'curl -s -X POST http://localhost:8545 -H "Content-Type: application/json" -d ''{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'' || exit 1',
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
     ports:
       - "8545:8545"
+    networks:
+      - otc-network
+    platform: linux/amd64
+
+  bitcoin-core:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM debian:bookworm-slim
+        ARG BITCOIN_VERSION=29.0
+        ARG BITCOIN_URL=https://bitcoincore.org/bin/bitcoin-core-29.0/bitcoin-29.0-x86_64-linux-gnu.tar.gz
+
+        # Install dependencies
+        RUN apt-get update \
+          && apt-get install -y --no-install-recommends \
+             ca-certificates \
+             curl \
+             tar \
+             bash \
+          && rm -rf /var/lib/apt/lists/*
+
+        # Create bitcoin user and data dir
+        RUN useradd -m -u 1000 -s /bin/bash bitcoin \
+          && mkdir -p /home/bitcoin/.bitcoin \
+          && chown -R bitcoin:bitcoin /home/bitcoin/.bitcoin
+
+        # Download and install Bitcoin Core
+        WORKDIR /opt/bitcoin
+        RUN curl -fsSL "$BITCOIN_URL" -o bitcoin.tar.gz \
+          && tar -xzf bitcoin.tar.gz --strip-components=1 \
+          && install -m 0755 -o root -g root -t /usr/local/bin bin/* \
+          && rm -rf /opt/bitcoin
+
+        EXPOSE 8332 8333
+        VOLUME ["/home/bitcoin/.bitcoin"]
+        USER bitcoin
+        WORKDIR /home/bitcoin
+        ENTRYPOINT ["bitcoind"]
+    container_name: otc-bitcoin-core
+    command:
+      - "-server=1"
+      - "-txindex=1"
+      - "-rpcbind=0.0.0.0"
+      - "-rpcallowip=0.0.0.0/0"
+      - "-rpcuser=user"
+      - "-rpcpassword=pass"
+      - "-datadir=/home/bitcoin/.bitcoin"
+      - "-fallbackfee=0.0002"
+    volumes:
+      - bitcoin_data:/home/bitcoin/.bitcoin
+    ports:
+      - "8332:8332" # RPC
+      - "8333:8333" # P2P
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bitcoin-cli -rpcuser=user -rpcpassword=pass getblockchaininfo > /dev/null || exit 1",
+        ]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     networks:
       - otc-network
     platform: linux/amd64
@@ -55,8 +129,9 @@ services:
             && rm -rf /var/lib/apt/lists/*
         WORKDIR /app
         COPY --from=builder /app/target/release/otc-server /app/
+        COPY prod_whitelisted_market_makers.json /app/
         EXPOSE 3000
-        CMD ["./otc-server", "--host", "0.0.0.0"]
+        CMD ["./otc-server", "--host", "0.0.0.0", "--port", "3000"]
     container_name: otc-server
     depends_on:
       postgres:
@@ -68,7 +143,15 @@ services:
     environment:
       DATABASE_URL: postgres://otc_user:otc_password@postgres:5432/otc_db
       RUST_LOG: info
-      ETH_RPC_URL: http://helios:8545
+      EVM_RPC_URL: http://helios:8545
+      UNTRUSTED_EVM_TOKEN_INDEXER_URL: ${UNTRUSTED_EVM_TOKEN_INDEXER_URL}
+      BITCOIN_RPC_URL: http://bitcoin-core:8332
+      BITCOIN_RPC_AUTH: user:pass
+      ELECTRUM_HTTP_SERVER_URL: ${UNTRUSTED_ELECTRUM_HTTP_SERVER_URL}
+      WHITELISTED_MM_FILE: /app/prod_whitelisted_market_makers.json
+      CORS_DOMAIN: "*.rift.trade"
+      CHAINALYSIS_HOST: ${CHAINALYSIS_HOST}
+      CHAINALYSIS_TOKEN: ${CHAINALYSIS_TOKEN}
     ports:
       - "3000:3000"
     networks:
@@ -83,3 +166,4 @@ networks:
 
 volumes:
   postgres_data:
+  bitcoin_data:
