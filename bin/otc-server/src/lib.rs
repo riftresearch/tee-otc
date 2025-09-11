@@ -74,8 +74,8 @@ pub struct OtcServerArgs {
     pub ethereum_mainnet_rpc_url: String,
 
     /// Ethereum Mainnet Token Indexer URL
-    #[arg(long, env = "EVM_TOKEN_INDEXER_URL")]
-    pub ethereum_mainnet_token_indexer_url: String,
+    #[arg(long, env = "UNTRUSTED_EVM_TOKEN_INDEXER_URL")]
+    pub untrusted_ethereum_mainnet_token_indexer_url: String,
 
     /// Ethereum Mainnet Chain ID
     #[arg(long, env = "EVM_CHAIN_ID", default_value = "1")]
@@ -91,7 +91,7 @@ pub struct OtcServerArgs {
 
     /// Electrum HTTP Server URL
     #[arg(long, env = "ELECTRUM_HTTP_SERVER_URL")]
-    pub esplora_http_server_url: String,
+    pub untrusted_esplora_http_server_url: String,
 
     /// Bitcoin Network
     #[arg(long, env = "BITCOIN_NETWORK", default_value = "bitcoin")]

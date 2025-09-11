@@ -17,6 +17,7 @@ use axum::{
     routing::{get, post, Router},
     Json,
 };
+use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use futures_util::{SinkExt, StreamExt};
 use otc_auth::ApiKeyStore;
 use otc_chains::{bitcoin::BitcoinChain, ethereum::EthereumChain, ChainRegistry};
@@ -28,7 +29,6 @@ use tokio::{sync::mpsc, time::Duration};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, info};
 use uuid::Uuid;
-use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -67,7 +67,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
     let bitcoin_chain = BitcoinChain::new(
         &args.bitcoin_rpc_url,
         args.bitcoin_rpc_auth,
-        &args.esplora_http_server_url,
+        &args.untrusted_esplora_http_server_url,
         args.bitcoin_network,
     )
     .await
@@ -81,7 +81,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
     // Initialize Ethereum chain
     let ethereum_chain = EthereumChain::new(
         &args.ethereum_mainnet_rpc_url,
-        &args.ethereum_mainnet_token_indexer_url,
+        &args.untrusted_ethereum_mainnet_token_indexer_url,
         args.ethereum_mainnet_chain_id,
     )
     .await

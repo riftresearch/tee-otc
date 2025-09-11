@@ -14,7 +14,7 @@ use tracing::{debug, info};
 
 pub struct BitcoinChain {
     rpc_client: Client,
-    esplora_client: esplora_client::AsyncClient,
+    untrusted_esplora_client: esplora_client::AsyncClient,
     network: Network,
 }
 
@@ -23,7 +23,7 @@ impl BitcoinChain {
     pub async fn new(
         bitcoin_core_rpc_url: &str,
         bitcoin_core_rpc_auth: Auth,
-        esplora_url: &str,
+        untrusted_esplora_url: &str,
         network: Network,
     ) -> Result<Self> {
         let rpc_client = Client::new(bitcoin_core_rpc_url.to_string(), bitcoin_core_rpc_auth)
@@ -32,7 +32,7 @@ impl BitcoinChain {
                 message: "Failed to create Bitcoin RPC client".to_string(),
             })?;
 
-        let esplora_client = esplora_client::Builder::new(esplora_url)
+        let esplora_client = esplora_client::Builder::new(untrusted_esplora_url)
             .build_async()
             .map_err(|_| crate::Error::Rpc {
                 message: "Failed to create Esplora client".to_string(),
@@ -40,7 +40,7 @@ impl BitcoinChain {
 
         Ok(Self {
             rpc_client,
-            esplora_client,
+            untrusted_esplora_client: esplora_client,
             network,
         })
     }
@@ -131,7 +131,7 @@ impl ChainOperations for BitcoinChain {
         );
 
         let utxos = self
-            .esplora_client
+            .untrusted_esplora_client
             .get_address_utxo(&sender_address)
             .await?;
         if utxos.is_empty() {
@@ -183,27 +183,26 @@ impl ChainOperations for BitcoinChain {
                 .get_raw_transaction_hex(&utxo.txid, None)
                 .await
                 .map_err(|e| crate::Error::DumpToAddress {
+                    message: format!("Failed to fetch raw transaction for {}: {e}", utxo.txid),
+                })?;
+
+            let tx_bytes =
+                alloy::hex::decode(&tx_hex).map_err(|e| crate::Error::DumpToAddress {
                     message: format!(
-                        "Failed to fetch raw transaction for {}: {e}",
+                        "Failed to decode raw transaction hex for {}: {e}",
                         utxo.txid
                     ),
                 })?;
 
-            let tx_bytes = alloy::hex::decode(&tx_hex).map_err(|e| crate::Error::DumpToAddress {
-                message: format!(
-                    "Failed to decode raw transaction hex for {}: {e}",
-                    utxo.txid
-                ),
-            })?;
-
-            let full_tx = bitcoin::consensus::deserialize::<Transaction>(&tx_bytes).map_err(
-                |e| crate::Error::DumpToAddress {
-                    message: format!(
-                        "Failed to deserialize raw transaction for {}: {e}",
-                        utxo.txid
-                    ),
-                },
-            )?;
+            let full_tx =
+                bitcoin::consensus::deserialize::<Transaction>(&tx_bytes).map_err(|e| {
+                    crate::Error::DumpToAddress {
+                        message: format!(
+                            "Failed to deserialize raw transaction for {}: {e}",
+                            utxo.txid
+                        ),
+                    }
+                })?;
 
             let output = full_tx
                 .output
@@ -327,7 +326,10 @@ impl BitcoinChain {
 
         // Called a hint b/c the esplora client CANNOT be trusted to return non-fradulent data (b/c it not intended to run locally)
         // Note that if there are more than 50 utxos available to the address, this could ignore a valid transfer (TODO: how to handle this?)
-        let utxos = self.esplora_client.get_address_utxo(&address).await?;
+        let utxos = self
+            .untrusted_esplora_client
+            .get_address_utxo(&address)
+            .await?;
         debug!("UTXOs: {:?}", utxos);
         let current_block_height = self.rpc_client.get_block_count().await? as u32;
         let mut most_confirmed_transfer: Option<TransferInfo> = None;

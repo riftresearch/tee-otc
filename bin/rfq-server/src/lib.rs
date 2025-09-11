@@ -31,11 +31,11 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 #[command(about = "RFQ server for collecting and aggregating market maker quotes")]
 pub struct RfqServerArgs {
     /// Host to bind to
-    #[arg(short = 'H', long, default_value = "127.0.0.1")]
+    #[arg(short = 'H', long, env = "HOST", default_value = "127.0.0.1")]
     pub host: IpAddr,
 
     /// Port to bind to
-    #[arg(short, long, default_value = "3001")]
+    #[arg(short, long, env = "PORT", default_value = "3001")]
     pub port: u16,
 
     /// Log level

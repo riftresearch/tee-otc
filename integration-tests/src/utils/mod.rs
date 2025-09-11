@@ -274,7 +274,7 @@ pub async fn build_otc_server_test_args(
         host: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
         log_level: "debug".to_string(),
         ethereum_mainnet_rpc_url: devnet.ethereum.anvil.endpoint(),
-        ethereum_mainnet_token_indexer_url: devnet
+        untrusted_ethereum_mainnet_token_indexer_url: devnet
             .ethereum
             .token_indexer
             .as_ref()
@@ -284,7 +284,7 @@ pub async fn build_otc_server_test_args(
         ethereum_mainnet_chain_id: devnet.ethereum.anvil.chain_id(),
         bitcoin_rpc_url: devnet.bitcoin.rpc_url_with_cookie.clone(),
         bitcoin_rpc_auth: Auth::CookieFile(devnet.bitcoin.cookie.clone()),
-        esplora_http_server_url: devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
+        untrusted_esplora_http_server_url: devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
         bitcoin_network: bitcoin::network::Network::Regtest,
         chain_monitor_interval_seconds: 2,
         cors_domain: None,

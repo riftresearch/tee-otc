@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   postgres:
@@ -20,11 +20,31 @@ services:
     networks:
       - otc-network
 
+  helios:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM ubuntu:22.04@sha256:01a3ee0b5e413cefaaffc6abe68c9c37879ae3cced56a8e088b1649e5b269eee
+        RUN apt-get update && apt-get install -y curl ca-certificates && rm -rf /var/lib/apt/lists/*
+        # Install Helios
+        RUN curl -L 'https://github.com/a16z/helios/releases/download/0.9.0/helios_linux_amd64.tar.gz' | tar -xzC /usr/local/bin
+        EXPOSE 8545
+        WORKDIR /root
+        # Default command runs Helios JSON-RPC on :8545
+        CMD [ "helios", "ethereum", "--execution-rpc", "${ETH_RPC_URL}" ]
+    environment:
+      ETH_RPC_URL: ${ETH_RPC_URL}
+    ports:
+      - "8545:8545"
+    networks:
+      - otc-network
+    platform: linux/amd64
+
   otc-server:
     build:
       context: .
       dockerfile_inline: |
-        FROM rust:1.75 as builder
+        FROM rust:1.88 as builder
         WORKDIR /app
         COPY . .
         RUN cargo build --release --bin otc-server
@@ -41,13 +61,21 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      helios:
+        condition: service_started
+      bitcoin-core:
+        condition: service_started
     environment:
       DATABASE_URL: postgres://otc_user:otc_password@postgres:5432/otc_db
       RUST_LOG: info
+      ETH_RPC_URL: http://helios:8545
     ports:
       - "3000:3000"
     networks:
       - otc-network
+    volumes:
+      - /var/run/tappd.sock:/var/run/tappd.sock
+    platform: linux/amd64
 
 networks:
   otc-network:
