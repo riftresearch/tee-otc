@@ -69,6 +69,10 @@ pub struct OtcServerArgs {
     #[arg(long, env = "RUST_LOG", default_value = "info")]
     pub log_level: String,
 
+    /// Config directory where the master key is stored
+    #[arg(long, env = "CONFIG_DIR", default_value = "config")]
+    pub config_dir: String,
+
     /// Ethereum Mainnet RPC URL
     #[arg(long, env = "EVM_RPC_URL")]
     pub ethereum_mainnet_rpc_url: String,

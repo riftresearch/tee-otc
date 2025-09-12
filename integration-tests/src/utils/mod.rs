@@ -8,7 +8,7 @@ use std::{
 use bitcoincore_rpc_async::Auth;
 use blockchain_utils::create_websocket_wallet_provider;
 use ctor::ctor;
-use devnet::MultichainAccount;
+use devnet::{MultichainAccount, get_new_temp_dir};
 use market_maker::{evm_wallet::EVMWallet, MarketMakerArgs};
 use otc_server::{api::SwapResponse, OtcServerArgs};
 use rfq_server::RfqServerArgs;
@@ -290,6 +290,7 @@ pub async fn build_otc_server_test_args(
         cors_domain: None,
         chainalysis_host: None,
         chainalysis_token: None,
+        config_dir: devnet.otc_server_config_dir.path().to_string_lossy().to_string(),
     }
 }
 

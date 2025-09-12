@@ -1,77 +1,75 @@
-use config::{Config, File};
-use secrecy::{ExposeSecret, SecretString};
-use serde::{Deserialize, Serialize};
+use secrecy::{ExposeSecret, SecretBox, SecretSlice, SecretString};
 use snafu::{ResultExt, Snafu};
-use std::path::Path;
+use std::{fs, path::Path};
 use zeroize::Zeroize;
 
 #[derive(Debug, Snafu)]
 pub enum SettingsError {
-    #[snafu(display("Failed to load config: {}", source))]
-    Load { source: config::ConfigError },
-    
     #[snafu(display("Failed to create config file: {}", source))]
     Create { source: std::io::Error },
+
+    #[snafu(display("Failed to load config file: {}", source))]
+    Load { source: std::io::Error },
+
+    #[snafu(display("Failed to generate random bytes: {}", source))]
+    Random { source: getrandom::Error },
+
+    #[snafu(display("Failed to decode hex: {}", source))]
+    HexDecode { source: alloy::hex::FromHexError },
+
+    #[snafu(display("Invalid master key length"))]
+    KeyLength { },
 }
 
 type Result<T> = std::result::Result<T, SettingsError>;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Clone)]
+pub struct MasterKey([u8; 64]);
+
+#[derive(Debug)]
 pub struct Settings {
-    pub master_key: SecretString,
+    pub master_key: SecretBox<MasterKey>,
 }
 
-#[derive(Serialize)]
-struct DefaultSettings {
-    master_key: String,
+impl Zeroize for MasterKey {
+    fn zeroize(&mut self) {
+        self.0.zeroize();
+    }
 }
+
 
 impl Settings {
-    pub fn load() -> Result<Self> {
-        let config_path = "otc-server.toml";
+    pub fn load(config_dir: &str) -> Result<Self> {
+        let config_path = format!("{config_dir}/otc-server-master-key.hex");
         
-        // Check for environment variable first (useful for tests)
-        if let Ok(master_key) = std::env::var("OTC_MASTER_KEY") {
-            return Ok(Settings {
-                master_key: SecretString::from(master_key),
-            });
-        }
         
         // Create default config if it doesn't exist
-        if !Path::new(config_path).exists() {
-            Self::create_default_config(config_path)?;
-        }
+        let master_key = if !Path::new(&config_path).exists() {
+            Self::create_default_config(&config_path)?
+        } else { 
+            alloy::hex::decode(fs::read(config_path).context(LoadSnafu)?).context(HexDecodeSnafu)?.try_into().map_err(|_| SettingsError::KeyLength {})?
+        };
         
-        let settings = Config::builder()
-            .add_source(File::with_name(config_path))
-            .build()
-            .context(LoadSnafu)?;
-        
-        settings.try_deserialize().context(LoadSnafu)
+        Ok(Settings {
+            master_key: SecretBox::new(Box::new(MasterKey(master_key))),
+        })
     }
     
-    fn create_default_config(path: &str) -> Result<()> {
-        use std::fs;
+    fn create_default_config(path: &str) -> Result<[u8; 64]> {
         
         // Generate a random 64-byte master key
         let mut key_bytes = [0u8; 64];
-        getrandom::getrandom(&mut key_bytes).expect("Failed to generate random bytes");
+        getrandom::getrandom(&mut key_bytes).context(RandomSnafu)?;
         let master_key = alloy::hex::encode(key_bytes);
         key_bytes.zeroize();
         
-        let default = DefaultSettings { master_key };
+        fs::write(path, master_key).context(CreateSnafu)?;
         
-        let toml = toml::to_string_pretty(&default)
-            .expect("Failed to serialize default config");
-        
-        fs::write(path, toml).context(CreateSnafu)?;
-        
-        tracing::info!("Created default config file at {}", path);
-        Ok(())
+        tracing::info!("Created new master key");
+        Ok(key_bytes)
     }
     
-    #[must_use] pub fn master_key_bytes(&self) -> Vec<u8> {
-        alloy::hex::decode(self.master_key.expose_secret())
-            .expect("Master key should be valid hex")
+    #[must_use] pub fn master_key_bytes(&self) -> [u8; 64] {
+        self.master_key.expose_secret().0
     }
 }

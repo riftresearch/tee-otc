@@ -35,7 +35,6 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 dashmap = { workspace = true }
 alloy = { workspace = true }
-config = { workspace = true }
 zeroize = { workspace = true }
 secrecy = { workspace = true }
 getrandom = { workspace = true }

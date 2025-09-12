@@ -52,7 +52,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
     let addr = SocketAddr::from((args.host, args.port));
 
     // Load configuration
-    let settings = Arc::new(Settings::load().map_err(|e| crate::Error::DatabaseInit {
+    let settings = Arc::new(Settings::load(&args.config_dir).map_err(|e| crate::Error::DatabaseInit {
         source: crate::error::OtcServerError::InvalidData {
             message: format!("Failed to load settings: {e}"),
         },

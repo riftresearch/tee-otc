@@ -64,6 +64,7 @@ services:
              bash \
              lz4 \
              wget \
+             aria2 \
           && rm -rf /var/lib/apt/lists/*
 
         # Create bitcoin user and data dir

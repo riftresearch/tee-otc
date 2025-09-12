@@ -12,7 +12,7 @@ use evm_devnet::ForkConfig;
 use log::info;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tempfile::NamedTempFile;
+use tempfile::{NamedTempFile, TempDir};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 
@@ -352,6 +352,7 @@ pub type Result<T, E = DevnetError> = std::result::Result<T, E>;
 pub struct RiftDevnet {
     pub bitcoin: BitcoinDevnet,
     pub ethereum: EthDevnet,
+    pub otc_server_config_dir: TempDir,
     pub join_set: JoinSet<Result<()>>,
 }
 
@@ -573,10 +574,13 @@ impl RiftDevnetBuilder {
             .await?;
         }
 
+        let config_dir = get_new_temp_dir()?;
+
         // 11) Return the final devnet
         let devnet = crate::RiftDevnet {
             bitcoin: bitcoin_devnet,
             ethereum: ethereum_devnet,
+            otc_server_config_dir: config_dir,
             join_set,
         };
         info!(
