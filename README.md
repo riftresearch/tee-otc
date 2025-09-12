@@ -25,7 +25,14 @@ Cross-chain OTC swap desk put inside a TEE
    cargo build
    ```
 
-2. **Run tests**:
+2. **Run all tests**:
    ```bash
    make test-clean
+   ```
+
+3. **Run Dockerized OTC Server (simulates TEE environment)**
+   a. Run TEE Simulator (TODO) 
+   b. Setup services
+   ```bash
+   docker compose -f compose.phala.yml up -d
    ```

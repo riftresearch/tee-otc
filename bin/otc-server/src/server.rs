@@ -37,6 +37,7 @@ pub struct AppState {
     pub mm_registry: Arc<MMRegistry>,
     pub api_key_store: Arc<otc_auth::ApiKeyStore>,
     pub address_screener: Option<ChainalysisAddressScreener>,
+    pub chain_registry: Arc<ChainRegistry>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -156,6 +157,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         mm_registry,
         api_key_store,
         address_screener,
+        chain_registry,
     };
 
     let mut app = Router::new()
@@ -172,6 +174,8 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
             get(get_connected_market_makers),
         )
         .route("/api/v1/refund", post(refund_swap))
+        .route("/api/v1/chains/bitcoin/best-hash", get(get_best_bitcoin_hash))
+        .route("/api/v1/chains/ethereum/best-hash", get(get_best_ethereum_hash))
         .with_state(state);
 
     // Add CORS layer if cors_domain is specified
@@ -324,6 +328,20 @@ async fn refund_swap(
         .await
         .map(Json)
         .map_err(Into::into)
+}
+
+async fn get_best_bitcoin_hash(
+    State(state): State<AppState>,
+) -> Result<Json<String>, crate::error::OtcServerError> {
+    let chain = state.chain_registry.get(&otc_models::ChainType::Bitcoin).unwrap();
+    chain.get_best_hash().await.map_err(Into::into).map(Json)
+}
+
+async fn get_best_ethereum_hash(
+    State(state): State<AppState>,
+) -> Result<Json<String>, crate::error::OtcServerError> {
+    let chain = state.chain_registry.get(&otc_models::ChainType::Ethereum).unwrap();
+    chain.get_best_hash().await.map_err(Into::into).map(Json)
 }
 
 async fn create_swap(

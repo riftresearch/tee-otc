@@ -219,6 +219,10 @@ impl ChainOperations for EthereumChain {
     fn estimated_block_time(&self) -> Duration {
         Duration::from_secs(12) // ~12 seconds
     }
+
+    async fn get_best_hash(&self) -> Result<String> {
+        Ok(hex::encode(self.provider.get_block_by_number(alloy::eips::BlockNumberOrTag::Latest).await?.unwrap().hash()))
+    }
 }
 
 impl EthereumChain {

@@ -1,15 +1,11 @@
-version: "3.8"
-
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: otc-postgres
+    container_name: tee-otc-postgres
     environment:
       POSTGRES_USER: otc_user
       POSTGRES_PASSWORD: otc_password
       POSTGRES_DB: otc_db
-    ports:
-      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -18,22 +14,25 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - otc-network
+      - tee-network
 
   helios:
+    container_name: tee-helios 
     build:
       context: .
       dockerfile_inline: |
-        FROM ubuntu:22.04@sha256:01a3ee0b5e413cefaaffc6abe68c9c37879ae3cced56a8e088b1649e5b269eee
+        FROM ubuntu:24.04
         RUN apt-get update && apt-get install -y curl ca-certificates && rm -rf /var/lib/apt/lists/*
         # Install Helios
         RUN curl -L 'https://github.com/a16z/helios/releases/download/0.9.0/helios_linux_amd64.tar.gz' | tar -xzC /usr/local/bin
         EXPOSE 8545
         WORKDIR /root
         # Default command runs Helios JSON-RPC on :8545
-        CMD [ "helios", "ethereum", "--execution-rpc", "${UNTRUSTED_EVM_RPC_URL}" ]
+        CMD [ "helios", "ethereum", "--execution-rpc", "${UNTRUSTED_EVM_RPC_URL}", "--checkpoint", "0xf95f9c34be687e3cef0906d25e51f3568798fb11155b00d715416dba3d70a313", "--rpc-bind-ip", "0.0.0.0"]
     environment:
       UNTRUSTED_EVM_RPC_URL: ${UNTRUSTED_EVM_RPC_URL}
+    ports: 
+      - "8550:8545"
 
     healthcheck:
       test:
@@ -45,13 +44,12 @@ services:
       timeout: 5s
       retries: 5
 
-    ports:
-      - "8545:8545"
     networks:
-      - otc-network
+      - tee-network
     platform: linux/amd64
 
   bitcoin-core:
+    container_name: tee-bitcoin-core
     build:
       context: .
       dockerfile_inline: |
@@ -64,6 +62,8 @@ services:
              curl \
              tar \
              bash \
+             lz4 \
+             wget \
           && rm -rf /var/lib/apt/lists/*
 
         # Create bitcoin user and data dir
@@ -78,12 +78,15 @@ services:
           && install -m 0755 -o root -g root -t /usr/local/bin bin/* \
           && rm -rf /opt/bitcoin
 
+        # Copy entrypoint script from host
+        COPY bitcoin-entrypoint.sh /usr/local/bin/bitcoin-entrypoint.sh
+        RUN chmod +x /usr/local/bin/bitcoin-entrypoint.sh
+
         EXPOSE 8332 8333
         VOLUME ["/home/bitcoin/.bitcoin"]
         USER bitcoin
         WORKDIR /home/bitcoin
-        ENTRYPOINT ["bitcoind"]
-    container_name: otc-bitcoin-core
+        ENTRYPOINT ["/usr/local/bin/bitcoin-entrypoint.sh"]
     command:
       - "-server=1"
       - "-txindex=1"
@@ -95,9 +98,6 @@ services:
       - "-fallbackfee=0.0002"
     volumes:
       - bitcoin_data:/home/bitcoin/.bitcoin
-    ports:
-      - "8332:8332" # RPC
-      - "8333:8333" # P2P
     healthcheck:
       test:
         [
@@ -109,7 +109,7 @@ services:
       retries: 10
       start_period: 30s
     networks:
-      - otc-network
+      - tee-network
     platform: linux/amd64
 
   otc-server:
@@ -128,9 +128,9 @@ services:
         WORKDIR /app
         COPY --from=builder /app/target/release/otc-server /app/
         COPY prod_whitelisted_market_makers.json /app/
-        EXPOSE 3000
-        CMD ["./otc-server", "--host", "0.0.0.0", "--port", "3000"]
-    container_name: otc-server
+        EXPOSE 4422 
+        CMD ["./otc-server", "--host", "0.0.0.0", "--port", "4422"]
+    container_name: tee-otc-server
     depends_on:
       postgres:
         condition: service_healthy
@@ -151,15 +151,15 @@ services:
       CHAINALYSIS_HOST: ${CHAINALYSIS_HOST}
       CHAINALYSIS_TOKEN: ${CHAINALYSIS_TOKEN}
     ports:
-      - "3000:3000"
+      - "4422:4422"
     networks:
-      - otc-network
+      - tee-network
     volumes:
       - ${TAPPD_SOCK_PATH:-/var/run/tappd.sock}:/var/run/tappd.sock
     platform: linux/amd64
 
 networks:
-  otc-network:
+  tee-network:
     driver: bridge
 
 volumes:

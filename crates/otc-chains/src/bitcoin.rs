@@ -312,6 +312,10 @@ impl ChainOperations for BitcoinChain {
     fn estimated_block_time(&self) -> Duration {
         Duration::from_secs(600) // 10 minutes
     }
+
+    async fn get_best_hash(&self) -> Result<String> {
+        Ok(self.rpc_client.get_best_block_hash().await?.to_string())
+    }
 }
 
 impl BitcoinChain {

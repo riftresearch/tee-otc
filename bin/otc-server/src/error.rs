@@ -116,6 +116,14 @@ impl IntoResponse for OtcServerError {
 pub type OtcServerResult<T> = Result<T, OtcServerError>;
 
 // Cleaner mapping from service-layer SwapError to API-layer OtcServerError
+impl From<otc_chains::Error> for OtcServerError {
+    fn from(err: otc_chains::Error) -> Self {
+        OtcServerError::Internal {
+            message: err.to_string(),
+        }
+    }
+}
+
 impl From<crate::services::swap_manager::SwapError> for OtcServerError {
     fn from(err: crate::services::swap_manager::SwapError) -> Self {
         use crate::services::swap_manager::SwapError;

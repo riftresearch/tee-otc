@@ -50,4 +50,7 @@ pub trait ChainOperations: Send + Sync {
 
     /// Get rough block time as an estimation of confirmation time
     fn estimated_block_time(&self) -> Duration;
+
+    /// Get the best hash for the chain as hex string
+    async fn get_best_hash(&self) -> Result<String>;
 }
