@@ -14,7 +14,7 @@ use axum::{
     Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
-use otc_auth::ApiKeyStore;
+use otc_auth::{ApiKeyStore, api_keys::API_KEYS};
 use otc_models::{Currency, Lot, Quote, QuoteRequest};
 use otc_protocols::rfq::{
     Connected, ProtocolMessage, QuoteWithFees, RFQRequest, RFQResponse, RFQResult,
@@ -57,7 +57,7 @@ pub async fn run_server(args: RfqServerArgs) -> Result<()> {
 
     // Initialize API key store
     let api_key_store = Arc::new(
-        ApiKeyStore::new(args.whitelist_file.into())
+        ApiKeyStore::new(API_KEYS.clone())
             .await
             .map_err(|e| crate::Error::ApiKeyLoad { source: e })?,
     );
@@ -180,40 +180,41 @@ async fn mm_websocket_handler(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     // Extract and validate authentication headers
-    let api_key_id = match headers.get("x-api-key-id") {
+    let market_maker_id = match headers.get("x-api-id") {
         Some(value) => match value.to_str() {
             Ok(id_str) => match Uuid::parse_str(id_str) {
                 Ok(id) => id,
                 Err(_) => {
-                    return (StatusCode::BAD_REQUEST, "Invalid API key ID format").into_response();
+                    return (StatusCode::BAD_REQUEST, "Invalid API ID format").into_response();
                 }
             },
             Err(_) => {
-                return (StatusCode::BAD_REQUEST, "Invalid API key ID header").into_response();
+                return (StatusCode::BAD_REQUEST, "Invalid API ID header").into_response();
             }
         },
         None => {
-            return (StatusCode::UNAUTHORIZED, "Missing X-API-Key-ID header").into_response();
+            return (StatusCode::UNAUTHORIZED, "Missing X-API-ID header").into_response();
         }
     };
 
-    let api_key = match headers.get("x-api-key") {
+    let api_secret = match headers.get("x-api-secret") {
         Some(value) => match value.to_str() {
             Ok(key) => key,
             Err(_) => {
-                return (StatusCode::BAD_REQUEST, "Invalid API key header").into_response();
+                return (StatusCode::BAD_REQUEST, "Invalid API secret header").into_response();
             }
         },
         None => {
-            return (StatusCode::UNAUTHORIZED, "Missing X-API-Key header").into_response();
+            return (StatusCode::UNAUTHORIZED, "Missing X-API-SECRET header").into_response();
         }
     };
 
     // Validate the API key
-    match state.api_key_store.validate_by_id(&api_key_id, api_key) {
-        Ok(market_maker_id) => {
-            info!("Market maker {} authenticated via headers", market_maker_id);
-            ws.on_upgrade(move |socket| handle_mm_socket(socket, state, market_maker_id))
+    match state.api_key_store.validate(&market_maker_id, api_secret) {
+        Ok(market_maker_tag) => {
+            info!("Market maker {} authenticated via headers", market_maker_tag);
+            let mm_uuid = market_maker_id.clone();
+            ws.on_upgrade(move |socket| handle_mm_socket(socket, state, mm_uuid))
         }
         Err(e) => {
             error!("API key validation failed: {}", e);
@@ -222,20 +223,12 @@ async fn mm_websocket_handler(
     }
 }
 
-async fn handle_mm_socket(socket: WebSocket, state: AppState, market_maker_id: String) {
+async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     info!(
         "RFQ Market maker {} WebSocket connection established",
-        market_maker_id
+        mm_uuid
     );
 
-    // Parse market_maker_id as UUID
-    let mm_uuid = match Uuid::parse_str(&market_maker_id) {
-        Ok(uuid) => uuid,
-        Err(e) => {
-            error!("Invalid market maker UUID {}: {}", market_maker_id, e);
-            return;
-        }
-    };
 
     // Channel for sending messages to the MM
     let (tx, mut rx) = mpsc::channel::<ProtocolMessage<RFQRequest>>(100);
@@ -250,7 +243,6 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, market_maker_id: S
         "1.0.0".to_string(), // Default protocol version
     );
 
-    let mm_id = market_maker_id;
 
     // Send Connected response
     let connected_response = Connected {
@@ -276,7 +268,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, market_maker_id: S
     }
 
     // Spawn task to handle outgoing messages from the registry
-    let mm_id_clone = mm_id.clone();
+    let mm_id_clone = mm_uuid.clone();
     let sender_tx_clone = sender_tx.clone();
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -290,7 +282,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, market_maker_id: S
     });
 
     // Spawn task to forward messages to the socket
-    let mm_id_clone = mm_id.clone();
+    let mm_id_clone = mm_uuid.clone();
     let mut sender = sender;
     tokio::spawn(async move {
         while let Some(msg) = sender_rx.recv().await {
@@ -327,7 +319,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, market_maker_id: S
                         } => {
                             warn!(
                                 "Received error from market maker {}: {:?} - {}",
-                                mm_id, error_code, message
+                                mm_uuid, error_code, message
                             );
                         }
                     },
@@ -337,11 +329,11 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, market_maker_id: S
                 }
             }
             Ok(Message::Close(_)) => {
-                info!("Market maker {} disconnected", mm_id);
+                info!("Market maker {} disconnected", mm_uuid);
                 break;
             }
             Err(e) => {
-                error!("WebSocket error for market maker {}: {}", mm_id, e);
+                error!("WebSocket error for market maker {}: {}", mm_uuid, e);
                 break;
             }
             _ => {}
@@ -350,7 +342,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, market_maker_id: S
 
     // Unregister on disconnect
     state.mm_registry.unregister(mm_uuid);
-    info!("Market maker {} unregistered", mm_id);
+    info!("Market maker {} unregistered", mm_uuid);
 }
 
 async fn request_quotes(

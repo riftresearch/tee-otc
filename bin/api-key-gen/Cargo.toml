@@ -1,5 +1,5 @@
 [package]
-name = "api-key-manager"
+name = "api-key-gen"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

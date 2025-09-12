@@ -3,13 +3,13 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ApiKey {
+pub struct PublicApiKeyRecord {
     pub id: Uuid,
-    pub market_maker: String,
+    pub tag: String,
     pub hash: String, // PHC format string from Argon2
 }
 
-impl ApiKey {
+impl PublicApiKeyRecord {
     /// Verify an API key against the stored hash
     #[must_use] pub fn verify(&self, api_key: &str) -> bool {
         if let Ok(parsed_hash) = PasswordHash::new(&self.hash) {

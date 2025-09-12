@@ -118,16 +118,16 @@ pub struct MarketMakerArgs {
     pub log_level: String,
 
     /// Market maker identifier
+    #[arg(long, env = "MM_TAG")]
+    pub market_maker_tag: String,
+
+    /// Market maker ID (UUID) for authentication
     #[arg(long, env = "MM_ID")]
     pub market_maker_id: String,
 
-    /// API key ID (UUID) for authentication
-    #[arg(long, env = "MM_API_KEY_ID")]
-    pub api_key_id: String,
-
-    /// API key for authentication
-    #[arg(long, env = "MM_API_KEY")]
-    pub api_key: String,
+    /// API secret for authentication
+    #[arg(long, env = "MM_API_SECRET")]
+    pub api_secret: String,
 
     /// OTC server WebSocket URL
     #[arg(long, env = "OTC_WS_URL", default_value = "ws://localhost:3000/ws/mm")]
@@ -314,8 +314,8 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     let otc_fill_client = otc_client::OtcFillClient::new(
         Config {
             market_maker_id,
-            api_key_id: args.api_key_id.clone(),
-            api_key: args.api_key.clone(),
+            market_maker_tag: args.market_maker_tag.clone(),
+            api_secret: args.api_secret.clone(),
             otc_ws_url: args.otc_ws_url.clone(),
             reconnect_interval_secs: 5,
             max_reconnect_attempts: 5,
@@ -341,8 +341,8 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     let rfq_client = rfq_client::RfqClient::new(
         Config {
             market_maker_id,
-            api_key_id: args.api_key_id,
-            api_key: args.api_key,
+            market_maker_tag: args.market_maker_tag.clone(),
+            api_secret: args.api_secret.clone(),
             otc_ws_url: args.otc_ws_url,
             reconnect_interval_secs: 5,
             max_reconnect_attempts: 5,

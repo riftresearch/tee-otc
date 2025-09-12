@@ -112,8 +112,8 @@ impl OtcFillClient {
                 "Sec-WebSocket-Key",
                 tokio_tungstenite::tungstenite::handshake::client::generate_key(),
             )
-            .header("X-API-Key-ID", &self.config.api_key_id)
-            .header("X-API-Key", &self.config.api_key)
+            .header("X-API-ID", &self.config.market_maker_id.to_string())
+            .header("X-API-SECRET", &self.config.api_secret)
             .body(())
             .map_err(|e| ClientError::WebSocketConnection {
                 source: tokio_tungstenite::tungstenite::Error::Http(

@@ -49,9 +49,9 @@ pub async fn get_free_port() -> u16 {
         .port()
 }
 
-pub const TEST_MARKET_MAKER_ID: &str = "550e8400-e29b-41d4-a716-446655440000";
-pub const TEST_API_KEY_ID: &str = "d2e0a695-e3b1-494e-b645-1b41a72d7e75";
-pub const TEST_API_KEY: &str = "7KNJu1t1j9DtVqS0d8FB6pfX0nkqr4TX";
+pub const TEST_MARKET_MAKER_TAG: &str = "test-mm";
+pub const TEST_MARKET_MAKER_API_ID: &str = "a4c6da0d-a071-40ea-b69c-e23d49327d42";
+pub const TEST_MARKET_MAKER_API_SECRET: &str = "l3f2zYpsLHwI8Qx3mOiYOeef51r0PCk5";
 pub const TEST_MM_WHITELIST_FILE: &str =
     "integration-tests/src/utils/test_whitelisted_market_makers.json";
 pub const INTEGRATION_TEST_TIMEOUT_SECS: u64 = 60;
@@ -174,7 +174,7 @@ pub async fn wait_for_market_maker_to_connect_to_rfq_server(rfq_port: u16) {
                 if let Ok(body) = response.json::<serde_json::Value>().await {
                     if let Some(market_makers) = body["market_makers"].as_array() {
                         if market_makers.len() == 1
-                            && market_makers[0].as_str() == Some(TEST_MARKET_MAKER_ID)
+                            && market_makers[0].as_str() == Some(TEST_MARKET_MAKER_API_ID)
                         {
                             println!("Market maker is connected to RFQ server!");
                             break;
@@ -204,9 +204,9 @@ pub async fn build_mm_test_args(
 ) -> MarketMakerArgs {
     let db_url = create_test_database(connect_options).await.unwrap();
     MarketMakerArgs {
-        market_maker_id: TEST_MARKET_MAKER_ID.to_string(),
-        api_key_id: TEST_API_KEY_ID.to_string(),
-        api_key: TEST_API_KEY.to_string(),
+        market_maker_tag: TEST_MARKET_MAKER_TAG.to_string(),
+        market_maker_id: TEST_MARKET_MAKER_API_ID.to_string(),
+        api_secret: TEST_MARKET_MAKER_API_SECRET.to_string(),
         otc_ws_url: format!("ws://127.0.0.1:{otc_port}/ws/mm"),
         rfq_ws_url: format!("ws://127.0.0.1:{rfq_port}/ws/mm"),
         log_level: "info".to_string(),
@@ -253,7 +253,6 @@ pub fn build_rfq_server_test_args(rfq_port: u16) -> RfqServerArgs {
         port: rfq_port,
         host: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
         log_level: "info".to_string(),
-        whitelist_file: get_whitelist_file_path(),
         quote_timeout_milliseconds: 5000,
         cors_domain: None,
         chainalysis_host: None,

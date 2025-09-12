@@ -7,9 +7,7 @@ use std::time::Duration;
 use tokio::task::JoinSet;
 
 use crate::utils::{
-    build_mm_test_args, build_otc_server_test_args, get_free_port, get_whitelist_file_path,
-    wait_for_otc_server_to_be_ready, PgConnectOptionsExt, INTEGRATION_TEST_TIMEOUT_SECS,
-    TEST_API_KEY, TEST_API_KEY_ID, TEST_MARKET_MAKER_ID,
+    INTEGRATION_TEST_TIMEOUT_SECS, PgConnectOptionsExt, TEST_MARKET_MAKER_API_ID, build_mm_test_args, build_otc_server_test_args, get_free_port, get_whitelist_file_path, wait_for_otc_server_to_be_ready
 };
 
 #[sqlx::test]
@@ -82,7 +80,7 @@ async fn test_market_maker_otc_auth(
                 if let Ok(body) = response.json::<serde_json::Value>().await {
                     if let Some(market_makers) = body["market_makers"].as_array() {
                         if market_makers.len() == 1
-                            && market_makers[0].as_str() == Some(TEST_MARKET_MAKER_ID)
+                            && market_makers[0].as_str() == Some(TEST_MARKET_MAKER_API_ID)
                         {
                             println!("Market maker is connected!");
                             break;

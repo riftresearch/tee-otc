@@ -1,11 +1,7 @@
 use crate::{
-    api::swaps::{
+    OtcServerArgs, Result, api::swaps::{
         CreateSwapRequest, CreateSwapResponse, RefundSwapRequest, RefundSwapResponse, SwapResponse,
-    },
-    config::Settings,
-    db::Database,
-    services::{MMRegistry, SwapManager, SwapMonitoringService},
-    OtcServerArgs, Result,
+    }, config::Settings, db::Database, services::{MMRegistry, SwapManager, SwapMonitoringService}
 };
 use axum::{
     extract::{
@@ -19,7 +15,7 @@ use axum::{
 };
 use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use futures_util::{SinkExt, StreamExt};
-use otc_auth::ApiKeyStore;
+use otc_auth::{ApiKeyStore, api_keys::API_KEYS};
 use otc_chains::{bitcoin::BitcoinChain, ethereum::EthereumChain, ChainRegistry};
 use otc_protocols::mm::{Connected, MMRequest, MMResponse, ProtocolMessage};
 use serde::{Deserialize, Serialize};
@@ -98,7 +94,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
     info!("Initializing services...");
 
     // Initialize API key store
-    let api_key_store = Arc::new(ApiKeyStore::new(args.whitelist_file.into()).await?);
+    let api_key_store = Arc::new(ApiKeyStore::new(API_KEYS.clone()).await?);
 
     // Initialize MM registry with 5-second validation timeout
     let mm_registry = Arc::new(MMRegistry::new(Duration::from_secs(5)));
@@ -247,37 +243,37 @@ async fn mm_websocket_handler(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     // Extract and validate authentication headers
-    let api_key_id = match headers.get("x-api-key-id") {
+    let market_maker_id = match headers.get("x-api-id") {
         Some(value) => match value.to_str() {
             Ok(id_str) => match Uuid::parse_str(id_str) {
                 Ok(id) => id,
                 Err(_) => {
-                    return (StatusCode::BAD_REQUEST, "Invalid API key ID format").into_response();
+                    return (StatusCode::BAD_REQUEST, "Invalid API ID format").into_response();
                 }
             },
             Err(_) => {
-                return (StatusCode::BAD_REQUEST, "Invalid API key ID header").into_response();
+                return (StatusCode::BAD_REQUEST, "Invalid API ID header").into_response();
             }
         },
         None => {
-            return (StatusCode::UNAUTHORIZED, "Missing X-API-Key-ID header").into_response();
+            return (StatusCode::UNAUTHORIZED, "Missing X-API-ID header").into_response();
         }
     };
 
-    let api_key = match headers.get("x-api-key") {
+    let api_secret = match headers.get("x-api-secret") {
         Some(value) => match value.to_str() {
             Ok(key) => key,
             Err(_) => {
-                return (StatusCode::BAD_REQUEST, "Invalid API key header").into_response();
+                return (StatusCode::BAD_REQUEST, "Invalid API secret header").into_response();
             }
         },
         None => {
-            return (StatusCode::UNAUTHORIZED, "Missing X-API-Key header").into_response();
+            return (StatusCode::UNAUTHORIZED, "Missing X-API-SECRET header").into_response();
         }
     };
 
     // Validate the API key
-    match state.api_key_store.validate_by_id(&api_key_id, api_key) {
+    match state.api_key_store.validate(&market_maker_id, api_secret) {
         Ok(market_maker_id) => {
             info!("Market maker {} authenticated via headers", market_maker_id);
             ws.on_upgrade(move |socket| handle_mm_socket(socket, state, market_maker_id))
