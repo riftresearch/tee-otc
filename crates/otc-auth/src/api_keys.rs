@@ -2,16 +2,21 @@ use otc_models::PublicApiKeyRecord;
 use std::sync::LazyLock;
 
 // TODO: implement this as a proper API that can be used to add/remove API keys
-pub const API_KEYS: LazyLock<Vec<PublicApiKeyRecord>> = LazyLock::new(|| {
+pub static API_KEYS: LazyLock<Vec<PublicApiKeyRecord>> = LazyLock::new(|| {
     vec![
-    // the integration tests use a hardcoded API key for the test market maker
-    // we don't want this to exist in production, so hide it behind the
-    // `integration-test` feature (matches Cargo features)
-    #[cfg(feature = "integration-test")]
-    PublicApiKeyRecord {
-        id: "a4c6da0d-a071-40ea-b69c-e23d49327d42".parse().unwrap(),
-        tag: "test-mm".to_string(),
-        hash: "$argon2id$v=19$m=19456,t=2,p=1$AxmsqRK3lgwVnzXNwTeQmw$UgBYL3NIShPhC02dVWCsvCbAyWF+N/VpH4Rlkf+Vplo".to_string(),
-    }
-]
+        // the integration tests use a hardcoded API key for the test market maker
+        // we don't want this to exist in production, so hide it behind the
+        // `integration-test` feature 
+        #[cfg(feature = "integration-test")]
+        PublicApiKeyRecord {
+            id: "a4c6da0d-a071-40ea-b69c-e23d49327d42".parse().unwrap(),
+            tag: "test-mm".to_string(),
+            hash: "$argon2id$v=19$m=19456,t=2,p=1$AxmsqRK3lgwVnzXNwTeQmw$UgBYL3NIShPhC02dVWCsvCbAyWF+N/VpH4Rlkf+Vplo".to_string(),
+        },
+        PublicApiKeyRecord {
+            id: "439505b9-423f-4975-a6c2-b8a2f72e95a9".parse().unwrap(),
+            tag: "rift-mm-1".to_string(),
+            hash: "$argon2id$v=19$m=19456,t=2,p=1$WRpNdXmZfVvYKMSOswoqHA$QP9uBxjsxVU1cqz/fntfvbpH3mLlYILEOLALWK1nxdQ".to_string(),
+        }
+    ]
 });
