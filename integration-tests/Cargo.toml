@@ -12,7 +12,8 @@ path = "src/lib.rs"
 tokio = {workspace = true}
 ctor = {workspace = true}
 tracing-subscriber = { workspace = true }
-otc-server = {workspace = true }
+otc-server = {workspace = true, features = ["integration-test"] }
+rfq-server = {workspace= true, features = ["integration-test"]}
 market-maker = {workspace = true }
 sqlx = {workspace = true}
 reqwest = {workspace = true}
@@ -26,7 +27,6 @@ bitcoin = {workspace = true}
 blockchain-utils = {workspace = true}
 otc-models = {workspace = true}
 uuid = {workspace= true}
-rfq-server ={workspace= true}
 serde = {workspace = true}
 chrono = {workspace=true}
 otc-protocols = {workspace = true}

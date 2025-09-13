@@ -47,3 +47,7 @@ chainalysis-address-screener = { workspace = true }
 sqlx = { workspace = true }
 getrandom = { workspace = true }
 bitcoin = { workspace = true }
+
+[features]
+integration-test = ["otc-auth/integration-test"]
+

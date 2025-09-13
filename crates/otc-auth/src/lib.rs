@@ -9,7 +9,6 @@ pub enum AuthError {
     #[snafu(display("Market maker '{}' not found", market_maker))]
     MarketMakerNotFound { market_maker: String },
 
-
     #[snafu(display("API key ID '{}' not found", id))]
     ApiKeyIdNotFound { id: Uuid },
 
@@ -27,7 +26,6 @@ pub struct ApiKeyStore {
 impl ApiKeyStore {
     /// Create a new API key store from a JSON file
     pub async fn new(api_key_records: Vec<PublicApiKeyRecord>) -> Result<Self, Whatever> {
-
         let mut records_by_id = HashMap::new();
 
         for record in api_key_records {
@@ -47,9 +45,7 @@ impl ApiKeyStore {
         if stored_key.verify(api_secret) {
             Ok(stored_key.tag.clone())
         } else {
-            Err(AuthError::InvalidApiKeyForId {
-                id: *id,
-            })
+            Err(AuthError::InvalidApiKeyForId { id: *id })
         }
     }
 

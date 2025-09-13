@@ -11,6 +11,8 @@ name = "rfq-server"
 path = "src/main.rs"
 
 
+
+
 [dependencies]
 otc-models = { workspace = true }
 otc-auth =  { workspace = true }
@@ -32,3 +34,7 @@ dashmap = { workspace = true }
 futures-util = { workspace = true }
 alloy = { workspace = true }
 chainalysis-address-screener = { workspace = true }
+
+[features]
+integration-test = ["otc-auth/integration-test"]
+

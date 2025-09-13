@@ -274,9 +274,10 @@ async fn mm_websocket_handler(
 
     // Validate the API key
     match state.api_key_store.validate(&market_maker_id, api_secret) {
-        Ok(market_maker_id) => {
-            info!("Market maker {} authenticated via headers", market_maker_id);
-            ws.on_upgrade(move |socket| handle_mm_socket(socket, state, market_maker_id))
+        Ok(market_maker_tag) => {
+            info!("Market maker {} authenticated via headers", market_maker_tag);
+            let mm_uuid = market_maker_id.clone();
+            ws.on_upgrade(move |socket| handle_mm_socket(socket, state, mm_uuid))
         }
         Err(e) => {
             error!("API key validation failed: {}", e);
@@ -421,20 +422,11 @@ async fn get_connected_market_makers(
     Json(ConnectedMarketMakersResponse { market_makers })
 }
 
-async fn handle_mm_socket(socket: WebSocket, state: AppState, market_maker_id: String) {
+async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     info!(
         "Market maker {} WebSocket connection established",
-        market_maker_id
+        mm_uuid
     );
-
-    // Parse market_maker_id as UUID
-    let mm_uuid = match Uuid::parse_str(&market_maker_id) {
-        Ok(uuid) => uuid,
-        Err(e) => {
-            error!("Invalid market maker UUID {}: {}", market_maker_id, e);
-            return;
-        }
-    };
 
     // Channel for sending messages to the MM
     let (tx, mut rx) = mpsc::channel::<ProtocolMessage<MMRequest>>(100);
@@ -449,7 +441,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, market_maker_id: S
         "1.0.0".to_string(), // Default protocol version
     );
 
-    let mm_id = market_maker_id;
+    let mm_id = mm_uuid.to_string();
 
     // Send Connected response
     let connected_response = Connected {
