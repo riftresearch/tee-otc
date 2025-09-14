@@ -17,7 +17,7 @@ services:
       - tee-network
 
   helios:
-    container_name: tee-helios 
+    container_name: tee-helios
     build:
       context: .
       dockerfile_inline: |
@@ -31,7 +31,7 @@ services:
         CMD [ "helios", "ethereum", "--execution-rpc", "${UNTRUSTED_EVM_RPC_URL}", "--checkpoint", "0xf95f9c34be687e3cef0906d25e51f3568798fb11155b00d715416dba3d70a313", "--rpc-bind-ip", "0.0.0.0"]
     environment:
       UNTRUSTED_EVM_RPC_URL: ${UNTRUSTED_EVM_RPC_URL}
-    ports: 
+    ports:
       - "8550:8545"
 
     healthcheck:
