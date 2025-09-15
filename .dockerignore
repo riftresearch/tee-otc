@@ -1,0 +1,52 @@
+# Rust
+target/
+**/target/
+
+# Node/JS (if present)
+node_modules/
+**/node_modules/
+.pnpm-store/
+.npm/
+
+# VCS + IDE
+.git/
+.gitignore
+.gitattributes
+.vscode/
+.idea/
+
+# OS junk
+.DS_Store
+
+# Build outputs / binaries
+**/*.a
+**/*.o
+**/*.so
+**/*.dll
+**/*.exe
+
+# Archives / datasets (common in your workflow)
+*.tar
+*.tar.*
+*.zip
+*.7z
+*.lz4
+*.gz
+*.bz2
+*.xz
+
+# Blockchain data & snapshots
+**/bitcoind-data*/
+**/bitcoin*/blocks/
+**/bitcoin*/chainstate/
+**/bitcoin*/indexes/
+**/electrum*/data*/
+**/reth*/
+**/geth*/
+**/snapshots*/
+
+# Logs & tmp
+**/*.log
+logs/
+tmp/
+.cache/

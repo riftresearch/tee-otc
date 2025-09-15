@@ -1,8 +1,19 @@
 #!/bin/bash
 set -euo pipefail
-
-bitcoin_data_dir="/home/bitcoin/.bitcoin"
+# /home/bitcoin/.bitcoin
+bitcoin_data_dir="${BITCOIN_DATA_DIR}"
 archive_url="https://rift-blockchain-archive.s3.us-west-1.amazonaws.com/bitcoind-datadir-2025-09-11.tar.lz4"
+
+# Error out if required variables are empty
+if [[ -z "$bitcoin_data_dir" ]]; then
+    echo "Error: BITCOIN_DATA_DIR environment variable is empty or not set" >&2
+    exit 1
+fi
+
+if [[ -z "$archive_url" ]]; then
+    echo "Error: archive_url is empty" >&2
+    exit 1
+fi
 
 echo "Checking Bitcoin data directory: $bitcoin_data_dir"
 
@@ -19,7 +30,7 @@ if [[ ! -d "$bitcoin_data_dir/blocks" ]] && [[ ! -d "$bitcoin_data_dir/chainstat
     echo "Downloading from: $archive_url"
     
     # Download with aria2c for maximum speed with parallel connections
-    local archive_file="$temp_dir/blockchain-archive.tar.lz4"
+    archive_file="$temp_dir/blockchain-archive.tar.lz4"
     echo "Downloading to temporary file: $archive_file"
     echo "Using aria2c with 8 parallel connections for optimal speed..."
     

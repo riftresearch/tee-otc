@@ -269,7 +269,6 @@ pub async fn build_otc_server_test_args(
     OtcServerArgs {
         port: otc_port,
         database_url: db_url,
-        whitelist_file: get_whitelist_file_path(),
         host: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
         log_level: "debug".to_string(),
         ethereum_mainnet_rpc_url: devnet.ethereum.anvil.endpoint(),

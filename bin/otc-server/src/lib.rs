@@ -70,7 +70,7 @@ pub struct OtcServerArgs {
     pub log_level: String,
 
     /// Config directory where the master key is stored
-    #[arg(long, env = "CONFIG_DIR", default_value = "config")]
+    #[arg(long, env = "CONFIG_DIR")]
     pub config_dir: String,
 
     /// Ethereum Mainnet RPC URL
@@ -101,13 +101,6 @@ pub struct OtcServerArgs {
     #[arg(long, env = "BITCOIN_NETWORK", default_value = "bitcoin")]
     pub bitcoin_network: bitcoin::Network,
 
-    /// API keys file
-    #[arg(
-        long,
-        env = "WHITELISTED_MM_FILE",
-        default_value = "prod_whitelisted_market_makers.json"
-    )]
-    pub whitelist_file: String,
 
     /// Chain monitor interval in seconds
     #[arg(long, env = "CHAIN_MONITOR_INTERVAL", default_value = "10")]
