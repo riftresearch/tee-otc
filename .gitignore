@@ -44,3 +44,4 @@ tmp/
 
 # SQLx offline mode data (should be committed)
 !.sqlx/
+evm-token-indexer/postgres-data
