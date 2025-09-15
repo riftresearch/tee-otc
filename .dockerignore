@@ -8,6 +8,8 @@ node_modules/
 .pnpm-store/
 .npm/
 
+**/postgres-data/
+
 # VCS + IDE
 .git/
 .gitignore
