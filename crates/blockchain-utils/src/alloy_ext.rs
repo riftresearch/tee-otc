@@ -84,6 +84,10 @@ pub async fn create_websocket_wallet_provider(
     evm_rpc_websocket_url: &str,
     private_key: [u8; 32],
 ) -> Result<WebsocketWalletProvider, ProviderError> {
+    tracing::info!(
+        "Creating websocket wallet provider w/ url: {}",
+        evm_rpc_websocket_url
+    );
     let ws = RetryWsConnect(WsConnect::new(evm_rpc_websocket_url));
     let client = ClientBuilder::default().pubsub(ws).await?;
 
