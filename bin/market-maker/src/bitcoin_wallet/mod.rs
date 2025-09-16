@@ -383,9 +383,9 @@ impl WalletTrait for BitcoinWallet {
         }
 
         Ok(U256::from(
-            self.get_dedicated_wallet_balance().await.map_err(|_| {
+            self.get_dedicated_wallet_balance().await.map_err(|e| {
                 wallet::WalletError::BalanceCheckFailed {
-                    reason: "Failed to get balance".to_string(),
+                    source: Box::new(e),
                 }
             })?,
         ))

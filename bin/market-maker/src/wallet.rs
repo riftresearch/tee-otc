@@ -50,8 +50,10 @@ pub enum WalletError {
     #[snafu(display("Transaction creation failed: {}", reason))]
     TransactionCreationFailed { reason: String },
 
-    #[snafu(display("Balance check failed: {}", reason))]
-    BalanceCheckFailed { reason: String },
+    #[snafu(display("Balance check failed: {}", source))]
+    BalanceCheckFailed {
+        source: Box<dyn std::error::Error + Send + Sync>,
+    },
 
     #[snafu(display("Unsupported token: {:?}", token))]
     UnsupportedToken {
