@@ -205,6 +205,7 @@ services:
       bitcoin-core:
         condition: service_started
     environment:
+      GRANT_SUDO: yes
       DATABASE_URL: postgres://otc_user:otc_password@postgres:5432/otc_db
       RUST_LOG: info
       EVM_RPC_URL: http://helios:8545
@@ -221,9 +222,10 @@ services:
     networks:
       - tee-network
     volumes:
-      - ${TAPPD_SOCK_PATH:-/var/run/tappd.sock}:/var/run/tappd.sock
+      - ${DSTACK_SOCK_PATH:-/var/run/dstack.sock}:/var/run/dstack.sock
       - otc_server_config_data:/app/config
     platform: linux/amd64
+    user: root
 
 networks:
   tee-network:

@@ -101,7 +101,6 @@ pub struct OtcServerArgs {
     #[arg(long, env = "BITCOIN_NETWORK", default_value = "bitcoin")]
     pub bitcoin_network: bitcoin::Network,
 
-
     /// Chain monitor interval in seconds
     #[arg(long, env = "CHAIN_MONITOR_INTERVAL", default_value = "10")]
     pub chain_monitor_interval_seconds: u64,
@@ -117,6 +116,10 @@ pub struct OtcServerArgs {
     /// Chainalysis API token
     #[arg(long, env = "CHAINALYSIS_TOKEN")]
     pub chainalysis_token: Option<String>,
+
+    /// Dstack socket path
+    #[arg(long, env = "DSTACK_SOCK_PATH", default_value = "/var/run/dstack.sock")]
+    pub dstack_sock_path: String,
 }
 
 fn parse_auth(s: &str) -> Result<Auth, String> {

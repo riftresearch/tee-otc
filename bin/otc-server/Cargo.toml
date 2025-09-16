@@ -42,6 +42,7 @@ toml = { workspace = true }
 bitcoin = { workspace = true }
 bitcoincore-rpc-async = {workspace=true}
 chainalysis-address-screener = { workspace = true }
+dstack-sdk = {workspace=true}
 
 [dev-dependencies]
 sqlx = { workspace = true }

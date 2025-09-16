@@ -1,7 +1,11 @@
 use crate::{
-    OtcServerArgs, Result, api::swaps::{
+    api::swaps::{
         CreateSwapRequest, CreateSwapResponse, RefundSwapRequest, RefundSwapResponse, SwapResponse,
-    }, config::Settings, db::Database, services::{MMRegistry, SwapManager, SwapMonitoringService}
+    },
+    config::Settings,
+    db::Database,
+    services::{MMRegistry, SwapManager, SwapMonitoringService},
+    OtcServerArgs, Result,
 };
 use axum::{
     extract::{
@@ -14,8 +18,9 @@ use axum::{
     Json,
 };
 use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
+use dstack_sdk::dstack_client::{DstackClient, GetQuoteResponse, InfoResponse};
 use futures_util::{SinkExt, StreamExt};
-use otc_auth::{ApiKeyStore, api_keys::API_KEYS};
+use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
 use otc_chains::{bitcoin::BitcoinChain, ethereum::EthereumChain, ChainRegistry};
 use otc_protocols::mm::{Connected, MMRequest, MMResponse, ProtocolMessage};
 use serde::{Deserialize, Serialize};
@@ -34,6 +39,7 @@ pub struct AppState {
     pub api_key_store: Arc<otc_auth::ApiKeyStore>,
     pub address_screener: Option<ChainalysisAddressScreener>,
     pub chain_registry: Arc<ChainRegistry>,
+    pub dstack_client: Arc<DstackClient>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -48,11 +54,14 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
     let addr = SocketAddr::from((args.host, args.port));
 
     // Load configuration
-    let settings = Arc::new(Settings::load(&args.config_dir).map_err(|e| crate::Error::DatabaseInit {
-        source: crate::error::OtcServerError::InvalidData {
-            message: format!("Failed to load settings: {e}"),
-        },
-    })?);
+    let settings =
+        Arc::new(
+            Settings::load(&args.config_dir).map_err(|e| crate::Error::DatabaseInit {
+                source: crate::error::OtcServerError::InvalidData {
+                    message: format!("Failed to load settings: {e}"),
+                },
+            })?,
+        );
     let db = Database::connect(&args.database_url)
         .await
         .context(crate::DatabaseInitSnafu)?;
@@ -147,6 +156,8 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         info!("Chainalysis address screening: disabled (no host configured)");
     }
 
+    let dstack_client = Arc::new(DstackClient::new(Some(&args.dstack_sock_path)));
+
     let state = AppState {
         db,
         swap_manager,
@@ -154,6 +165,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         api_key_store,
         address_screener,
         chain_registry,
+        dstack_client,
     };
 
     let mut app = Router::new()
@@ -170,8 +182,16 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
             get(get_connected_market_makers),
         )
         .route("/api/v1/refund", post(refund_swap))
-        .route("/api/v1/chains/bitcoin/best-hash", get(get_best_bitcoin_hash))
-        .route("/api/v1/chains/ethereum/best-hash", get(get_best_ethereum_hash))
+        .route(
+            "/api/v1/chains/bitcoin/best-hash",
+            get(get_best_bitcoin_hash),
+        )
+        .route(
+            "/api/v1/chains/ethereum/best-hash",
+            get(get_best_ethereum_hash),
+        )
+        .route("/api/v1/tdx/quote", get(get_tdx_quote))
+        .route("/api/v1/tdx/info", get(get_tdx_info))
         .with_state(state);
 
     // Add CORS layer if cors_domain is specified
@@ -275,7 +295,10 @@ async fn mm_websocket_handler(
     // Validate the API key
     match state.api_key_store.validate(&market_maker_id, api_secret) {
         Ok(market_maker_tag) => {
-            info!("Market maker {} authenticated via headers", market_maker_tag);
+            info!(
+                "Market maker {} authenticated via headers",
+                market_maker_tag
+            );
             let mm_uuid = market_maker_id.clone();
             ws.on_upgrade(move |socket| handle_mm_socket(socket, state, mm_uuid))
         }
@@ -330,14 +353,20 @@ async fn refund_swap(
 async fn get_best_bitcoin_hash(
     State(state): State<AppState>,
 ) -> Result<Json<String>, crate::error::OtcServerError> {
-    let chain = state.chain_registry.get(&otc_models::ChainType::Bitcoin).unwrap();
+    let chain = state
+        .chain_registry
+        .get(&otc_models::ChainType::Bitcoin)
+        .unwrap();
     chain.get_best_hash().await.map_err(Into::into).map(Json)
 }
 
 async fn get_best_ethereum_hash(
     State(state): State<AppState>,
 ) -> Result<Json<String>, crate::error::OtcServerError> {
-    let chain = state.chain_registry.get(&otc_models::ChainType::Ethereum).unwrap();
+    let chain = state
+        .chain_registry
+        .get(&otc_models::ChainType::Ethereum)
+        .unwrap();
     chain.get_best_hash().await.map_err(Into::into).map(Json)
 }
 
@@ -423,10 +452,7 @@ async fn get_connected_market_makers(
 }
 
 async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
-    info!(
-        "Market maker {} WebSocket connection established",
-        mm_uuid
-    );
+    info!("Market maker {} WebSocket connection established", mm_uuid);
 
     // Channel for sending messages to the MM
     let (tx, mut rx) = mpsc::channel::<ProtocolMessage<MMRequest>>(100);
@@ -548,4 +574,37 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     // Unregister on disconnect
     state.mm_registry.unregister(mm_uuid);
     info!("Market maker {} unregistered", mm_id);
+}
+
+async fn get_tdx_quote(
+    State(state): State<AppState>,
+    Path(challenge_hex): Path<String>,
+) -> Result<Json<GetQuoteResponse>, crate::error::OtcServerError> {
+    let challenge = alloy::hex::decode(challenge_hex).map_err(|e| {
+        crate::error::OtcServerError::BadRequest {
+            message: format!("Invalid challenge hex: {e}"),
+        }
+    })?;
+
+    state
+        .dstack_client
+        .get_quote(challenge)
+        .await
+        .map(Json)
+        .map_err(|e| crate::error::OtcServerError::Internal {
+            message: format!("TDX get quote failed: {e}"),
+        })
+}
+
+async fn get_tdx_info(
+    State(state): State<AppState>,
+) -> Result<Json<InfoResponse>, crate::error::OtcServerError> {
+    state
+        .dstack_client
+        .info()
+        .await
+        .map(Json)
+        .map_err(|e| crate::error::OtcServerError::Internal {
+            message: format!("TDX get info failed: {e}"),
+        })
 }
