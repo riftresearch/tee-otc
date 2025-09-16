@@ -114,6 +114,14 @@ pub async fn run_rebalancer(
             continue;
         }
 
+        // Log human-readable percentages of each asset vs total
+        let btc_pct = (btc as f64 / total as f64) * 100.0;
+        let cbbtc_pct = (cbbtc as f64 / total as f64) * 100.0;
+        info!(
+            "inventory share: btc={:.2}%, cbbtc={:.2}%",
+            btc_pct, cbbtc_pct
+        );
+
         // --- symmetric band around target ---
         let lo = params
             .target_bps
