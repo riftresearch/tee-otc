@@ -1,4 +1,4 @@
-.PHONY: start-db stop-db clean-db test build run help test-clean test-isolated ci-test test-robust
+.PHONY: start-db stop-db clean-db test build run help test-clean test-isolated ci-test test-robust docker-build-and-push
 
 .ONESHELL:
 
@@ -42,3 +42,13 @@ build-test: ## Build the project for testing
 cache-devnet: build-test ## Cache the devnet
 	cargo run --bin devnet -- cache
 	@echo "Devnet cached"
+
+docker-release: ## Build and push the OTC server Docker image
+	@GIT_COMMIT=$$(git rev-parse --short HEAD); \
+	GIT_BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
+	VERSION_TAG="$${GIT_BRANCH}-$${GIT_COMMIT}"; \
+	echo "Building Docker image for version: $${VERSION_TAG}"; \
+	docker build -f Dockerfile.otc -t riftresearch/otc-server:$${VERSION_TAG} .; \
+	docker tag riftresearch/otc-server:$${VERSION_TAG} riftresearch/otc-server:latest; \
+	docker push riftresearch/otc-server:$${VERSION_TAG}; \
+	docker push riftresearch/otc-server:latest
