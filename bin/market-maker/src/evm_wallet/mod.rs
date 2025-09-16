@@ -233,7 +233,7 @@ impl Wallet for EVMWallet {
                 })
                 .await
                 .map_err(|e| WalletError::BalanceCheckFailed {
-                    reason: e.to_string(),
+                    source: Box::new(e),
                 })?;
             balance += deposit_key_bal;
         }
