@@ -63,6 +63,8 @@ services:
 
     networks:
       - mm-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - market_maker_bitcoin_wallet_db_data:/app/bitcoin-wallet-db
     platform: linux/amd64
