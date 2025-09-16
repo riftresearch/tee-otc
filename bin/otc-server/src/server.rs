@@ -10,7 +10,7 @@ use crate::{
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, State,
+        Path, Query, State,
     },
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
@@ -578,7 +578,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
 
 async fn get_tdx_quote(
     State(state): State<AppState>,
-    Path(challenge_hex): Path<String>,
+    Query(challenge_hex): Query<String>,
 ) -> Result<Json<GetQuoteResponse>, crate::error::OtcServerError> {
     let challenge = alloy::hex::decode(challenge_hex).map_err(|e| {
         crate::error::OtcServerError::BadRequest {
