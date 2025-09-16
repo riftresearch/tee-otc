@@ -576,10 +576,16 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     info!("Market maker {} unregistered", mm_id);
 }
 
+#[derive(Deserialize)]
+struct TDXQuoteParams {
+    challenge_hex: String,
+}
+
 async fn get_tdx_quote(
     State(state): State<AppState>,
-    Query(challenge_hex): Query<String>,
+    Query(params): Query<TDXQuoteParams>,
 ) -> Result<Json<GetQuoteResponse>, crate::error::OtcServerError> {
+    let challenge_hex = params.challenge_hex;
     let challenge = alloy::hex::decode(challenge_hex).map_err(|e| {
         crate::error::OtcServerError::BadRequest {
             message: format!("Invalid challenge hex: {e}"),
