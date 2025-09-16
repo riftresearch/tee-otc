@@ -217,6 +217,7 @@ services:
       CHAINALYSIS_HOST: ${CHAINALYSIS_HOST}
       CHAINALYSIS_TOKEN: ${CHAINALYSIS_TOKEN}
       CONFIG_DIR: /app/config
+      DSTACK_SOCK_PATH: /var/run/dstack.sock
     ports:
       - "4422:4422"
     networks:
