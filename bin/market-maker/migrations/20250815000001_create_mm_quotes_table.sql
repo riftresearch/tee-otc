@@ -36,10 +36,10 @@ CREATE TABLE IF NOT EXISTS mm_quotes (
 );
 
 -- Create indexes for efficient queries
-CREATE INDEX idx_mm_quotes_market_maker ON mm_quotes(market_maker_id);
-CREATE INDEX idx_mm_quotes_expires_at ON mm_quotes(expires_at);
-CREATE INDEX idx_mm_quotes_created_at ON mm_quotes(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mm_quotes_market_maker ON mm_quotes(market_maker_id);
+CREATE INDEX IF NOT EXISTS idx_mm_quotes_expires_at ON mm_quotes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_mm_quotes_created_at ON mm_quotes(created_at DESC);
 
 -- Index for finding unsent quotes
-CREATE INDEX idx_mm_quotes_unsent ON mm_quotes(sent_to_rfq, sent_to_otc)
+CREATE INDEX IF NOT EXISTS idx_mm_quotes_unsent ON mm_quotes(sent_to_rfq, sent_to_otc)
 WHERE sent_to_rfq = FALSE OR sent_to_otc = FALSE;
