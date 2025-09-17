@@ -3,29 +3,23 @@ configs:
     content: |
       #!/bin/bash
       set -euo pipefail
-      # /home/bitcoin/.bitcoin
       archive_url="https://rift-blockchain-archive.s3.us-west-1.amazonaws.com/bitcoind-datadir-2025-09-11.tar.lz4"
 
       echo "Checking Bitcoin data directory: $$BITCOIN_DATA_DIR"
 
-      # Check if the data directory is empty (only contains wallet.dat or is completely empty)
-      # We consider it empty if there's no blocks/ directory or chainstate/ directory
       if [[ ! -d "$$BITCOIN_DATA_DIR/blocks" ]] && [[ ! -d "$$BITCOIN_DATA_DIR/chainstate" ]]; then
           echo "Bitcoin data directory appears to be empty. Downloading blockchain data..."
           echo "This may take a while depending on your internet connection..."
           
-          # Create a temporary directory for extraction
           temp_dir="$$(mktemp -d)"
           trap "rm -rf $$temp_dir" EXIT
           
           echo "Downloading from: $$archive_url"
           
-          # Download with aria2c for maximum speed with parallel connections
           archive_file="$$temp_dir/blockchain-archive.tar.lz4"
           echo "Downloading to temporary file: $$archive_file"
           echo "Using aria2c with 8 parallel connections for optimal speed..."
           
-          # Use aria2c with optimal settings for large S3 downloads
           if aria2c \
               --max-connection-per-server=8 \
               --split=8 \
@@ -46,15 +40,13 @@ configs:
               
               echo "Download completed. Extracting archive..."
               if tar -I lz4 -xf $$archive_file -C $$temp_dir; then
-                  # Remove the archive file to save space
                   rm -f $$archive_file
                   echo "Download and extraction successful"
                   
-                  # Copy extracted data directly to bitcoin data directory
                   echo "Copying blockchain data to $$BITCOIN_DATA_DIR..."
                   cp -r $$temp_dir/* $$BITCOIN_DATA_DIR/
                   
-                  # Ensure proper ownership
+                  
                   chown -R bitcoin:bitcoin $$BITCOIN_DATA_DIR
                   
                   echo "Blockchain data initialization complete"
@@ -102,11 +94,9 @@ services:
       dockerfile_inline: |
         FROM ubuntu:24.04
         RUN apt-get update && apt-get install -y curl ca-certificates && rm -rf /var/lib/apt/lists/*
-        # Install Helios
         RUN curl -L 'https://github.com/a16z/helios/releases/download/0.9.0/helios_linux_amd64.tar.gz' | tar -xzC /usr/local/bin
         EXPOSE 8545
         WORKDIR /root
-        # Default command runs Helios JSON-RPC on :8545
         CMD [ "helios", "ethereum", "--execution-rpc", "${UNTRUSTED_EVM_RPC_URL}", "--checkpoint", "0xf95f9c34be687e3cef0906d25e51f3568798fb11155b00d715416dba3d70a313", "--rpc-bind-ip", "0.0.0.0"]
     environment:
       UNTRUSTED_EVM_RPC_URL: ${UNTRUSTED_EVM_RPC_URL}
@@ -134,7 +124,6 @@ services:
       dockerfile_inline: |
         FROM debian:bookworm-slim
 
-        # Install dependencies
         RUN apt-get update \
           && apt-get install -y --no-install-recommends \
              ca-certificates \
@@ -146,12 +135,10 @@ services:
              aria2 \
           && rm -rf /var/lib/apt/lists/*
 
-        # Create bitcoin user and data dir
         RUN useradd -m -u 1000 -s /bin/bash bitcoin \
           && mkdir -p /home/bitcoin/.bitcoin \
           && chown -R bitcoin:bitcoin /home/bitcoin/.bitcoin
 
-        # Download and install Bitcoin Core
         WORKDIR /opt/bitcoin
         RUN curl -fsSL "https://bitcoincore.org/bin/bitcoin-core-29.0/bitcoin-29.0-x86_64-linux-gnu.tar.gz" -o bitcoin.tar.gz \
           && tar -xzf bitcoin.tar.gz --strip-components=1 \
@@ -213,7 +200,7 @@ services:
       BITCOIN_RPC_URL: http://bitcoin-core:8332
       BITCOIN_RPC_AUTH: user:pass
       ELECTRUM_HTTP_SERVER_URL: ${UNTRUSTED_ELECTRUM_HTTP_SERVER_URL}
-      CORS_DOMAIN: "*.rift.trade"
+      CORS_DOMAIN: "*"
       CHAINALYSIS_HOST: ${CHAINALYSIS_HOST}
       CHAINALYSIS_TOKEN: ${CHAINALYSIS_TOKEN}
       CONFIG_DIR: /app/config
