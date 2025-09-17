@@ -120,11 +120,13 @@ impl QuoteAggregator {
         };
 
         // Relevant fail quote - prioritize InvalidRequest over MakerUnavailable
-        let best_fail_quote: Option<RFQResult<QuoteWithFees>> =
-            quotes.iter().find_map(|q| match q {
+        let best_fail_quote: Option<RFQResult<QuoteWithFees>> = quotes
+            .iter()
+            .find_map(|q| match q {
                 RFQResult::InvalidRequest(e) => Some(RFQResult::InvalidRequest(e.clone())),
                 _ => None,
-            }).or_else(|| {
+            })
+            .or_else(|| {
                 quotes.iter().find_map(|q| match q {
                     RFQResult::MakerUnavailable(e) => Some(RFQResult::MakerUnavailable(e.clone())),
                     _ => None,

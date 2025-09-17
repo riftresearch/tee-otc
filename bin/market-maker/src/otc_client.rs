@@ -1,5 +1,6 @@
 use crate::deposit_key_storage::DepositKeyStorage;
 use crate::otc_handler::OTCMessageHandler;
+use crate::payment_manager::PaymentManager;
 use crate::quote_storage::QuoteStorage;
 use crate::{config::Config, wallet::WalletManager};
 use futures_util::{SinkExt, StreamExt};
@@ -50,15 +51,15 @@ pub struct OtcFillClient {
 impl OtcFillClient {
     pub fn new(
         config: Config,
-        wallet_manager: WalletManager,
         quote_storage: Arc<QuoteStorage>,
         deposit_key_storage: Arc<DepositKeyStorage>,
+        payment_manager: Arc<PaymentManager>,
     ) -> Self {
         let handler = OTCMessageHandler::new(
             config.clone(),
-            wallet_manager,
             quote_storage,
             deposit_key_storage,
+            payment_manager,
         );
         Self { config, handler }
     }
@@ -132,11 +133,10 @@ impl OtcFillClient {
 
         let (mut write, mut read) = ws_stream.split();
 
-        // Handle messages
         while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
-                    // First check if it's a Connected response
+                    // TODO: Create a dedicated ProtocolMessage for this
                     if text.contains("Connected") {
                         info!("Received Connected acknowledgment from server");
                         continue;

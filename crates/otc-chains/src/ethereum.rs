@@ -221,7 +221,13 @@ impl ChainOperations for EthereumChain {
     }
 
     async fn get_best_hash(&self) -> Result<String> {
-        Ok(hex::encode(self.provider.get_block_by_number(alloy::eips::BlockNumberOrTag::Latest).await?.unwrap().hash()))
+        Ok(hex::encode(
+            self.provider
+                .get_block_by_number(alloy::eips::BlockNumberOrTag::Latest)
+                .await?
+                .unwrap()
+                .hash(),
+        ))
     }
 }
 

@@ -5,32 +5,19 @@ use uuid::Uuid;
 #[derive(Debug, Snafu)]
 pub enum ProtocolError {
     #[snafu(display("Protocol version mismatch: expected {expected}, received {received}"))]
-    VersionMismatch { 
-        expected: String, 
-        received: String 
-    },
-    
+    VersionMismatch { expected: String, received: String },
+
     #[snafu(display("Invalid message: {message}"))]
-    InvalidMessage { 
-        message: String 
-    },
-    
+    InvalidMessage { message: String },
+
     #[snafu(display("Message sequence error: expected {expected}, received {received}"))]
-    SequenceError { 
-        expected: u64, 
-        received: u64 
-    },
-    
+    SequenceError { expected: u64, received: u64 },
+
     #[snafu(display("Serialization error: {message}"))]
-    Serialization { 
-        message: String 
-    },
-    
+    Serialization { message: String },
+
     #[snafu(display("Request {request_id} timed out after {timeout_ms}ms"))]
-    Timeout { 
-        request_id: Uuid, 
-        timeout_ms: u64 
-    },
+    Timeout { request_id: Uuid, timeout_ms: u64 },
 }
 
 /// Result type for protocol operations

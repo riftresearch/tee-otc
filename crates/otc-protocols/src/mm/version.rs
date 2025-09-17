@@ -1,4 +1,4 @@
-use super::errors::{ProtocolResult, ProtocolError};
+use super::errors::{ProtocolError, ProtocolResult};
 use serde::{Deserialize, Serialize};
 
 /// Current protocol version
@@ -34,7 +34,8 @@ impl Default for VersionInfo {
 }
 
 /// Check if a version is compatible
-#[must_use] pub fn is_version_compatible(version: &str) -> bool {
+#[must_use]
+pub fn is_version_compatible(version: &str) -> bool {
     // Simple major version check for now
     // In production, use semver crate for proper version comparison
     version.starts_with("1.")

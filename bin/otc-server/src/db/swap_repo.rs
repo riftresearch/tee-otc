@@ -1,13 +1,23 @@
-use otc_models::{MMDepositStatus, SettlementStatus, Swap, SwapStatus, UserDepositStatus};
+use otc_models::{Lot, MMDepositStatus, SettlementStatus, Swap, SwapStatus, UserDepositStatus};
 use sqlx::postgres::PgPool;
+use sqlx::Row;
 use uuid::Uuid;
 
 use super::conversions::{
-    mm_deposit_status_to_json, settlement_status_to_json, user_deposit_status_to_json,
+    lot_from_db, mm_deposit_status_to_json, settlement_status_to_json, user_deposit_status_to_json,
 };
 use super::row_mappers::FromRow;
 use crate::db::quote_repo::QuoteRepository;
 use crate::error::{OtcServerError, OtcServerResult};
+
+#[derive(Debug, Clone)]
+pub struct PendingMMDepositSwap {
+    pub swap_id: Uuid,
+    pub quote_id: Uuid,
+    pub user_destination_address: String,
+    pub mm_nonce: [u8; 16],
+    pub expected_lot: Lot,
+}
 
 #[derive(Clone)]
 pub struct SwapRepository {
@@ -223,6 +233,62 @@ impl SwapRepository {
         let mut swaps = Vec::new();
         for row in rows {
             swaps.push(Swap::from_row(&row)?);
+        }
+
+        Ok(swaps)
+    }
+
+    pub async fn get_waiting_mm_deposit_swaps(
+        &self,
+        market_maker_id: Uuid,
+    ) -> OtcServerResult<Vec<PendingMMDepositSwap>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                s.id AS swap_id,
+                s.quote_id,
+                s.user_destination_address,
+                s.mm_nonce,
+                q.to_chain,
+                q.to_token,
+                q.to_amount,
+                q.to_decimals
+            FROM swaps s
+            JOIN quotes q ON s.quote_id = q.id
+            WHERE s.market_maker_id = $1
+              AND s.status = $2
+            "#,
+        )
+        .bind(market_maker_id)
+        .bind(SwapStatus::WaitingMMDepositInitiated)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut swaps = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mm_nonce_vec: Vec<u8> = row.try_get("mm_nonce")?;
+            if mm_nonce_vec.len() != 16 {
+                return Err(OtcServerError::InvalidData {
+                    message: "mm_nonce must be exactly 16 bytes".to_string(),
+                });
+            }
+            let mut mm_nonce = [0u8; 16];
+            mm_nonce.copy_from_slice(&mm_nonce_vec);
+
+            let expected_lot = lot_from_db(
+                row.try_get::<String, _>("to_chain")?,
+                row.try_get::<serde_json::Value, _>("to_token")?,
+                row.try_get::<String, _>("to_amount")?,
+                row.try_get::<i16, _>("to_decimals")? as u8,
+            )?;
+
+            swaps.push(PendingMMDepositSwap {
+                swap_id: row.try_get("swap_id")?,
+                quote_id: row.try_get("quote_id")?,
+                user_destination_address: row.try_get("user_destination_address")?,
+                mm_nonce,
+                expected_lot,
+            });
         }
 
         Ok(swaps)

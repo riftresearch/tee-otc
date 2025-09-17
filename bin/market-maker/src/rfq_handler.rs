@@ -13,7 +13,7 @@ pub struct RFQMessageHandler {
     market_maker_id: Uuid,
     wrapped_bitcoin_quoter: WrappedBitcoinQuoter,
     quote_storage: Arc<QuoteStorage>,
-    wallet_manager: WalletManager,
+    wallet_manager: Arc<WalletManager>,
     balance_strategy: QuoteBalanceStrategy,
 }
 
@@ -22,7 +22,7 @@ impl RFQMessageHandler {
         market_maker_id: Uuid,
         wrapped_bitcoin_quoter: WrappedBitcoinQuoter,
         quote_storage: Arc<QuoteStorage>,
-        wallet_manager: WalletManager,
+        wallet_manager: Arc<WalletManager>,
         balance_strategy: QuoteBalanceStrategy,
     ) -> Self {
         Self {

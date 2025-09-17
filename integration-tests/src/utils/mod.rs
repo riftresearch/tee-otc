@@ -193,7 +193,6 @@ pub fn build_bitcoin_wallet_descriptor(private_key: &bitcoin::PrivateKey) -> Str
 pub fn build_tmp_bitcoin_wallet_db_file() -> String {
     format!("/tmp/bitcoin_wallet_{}.db", uuid::Uuid::new_v4())
 }
-// TODO:
 
 pub async fn build_mm_test_args(
     otc_port: u16,

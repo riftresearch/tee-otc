@@ -11,7 +11,8 @@ pub struct PublicApiKeyRecord {
 
 impl PublicApiKeyRecord {
     /// Verify an API key against the stored hash
-    #[must_use] pub fn verify(&self, api_key: &str) -> bool {
+    #[must_use]
+    pub fn verify(&self, api_key: &str) -> bool {
         if let Ok(parsed_hash) = PasswordHash::new(&self.hash) {
             Argon2::default()
                 .verify_password(api_key.as_bytes(), &parsed_hash)

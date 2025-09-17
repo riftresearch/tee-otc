@@ -11,15 +11,17 @@ pub struct Wallet {
 }
 
 impl Wallet {
-    #[must_use] pub fn new(address: String, private_key: String) -> Self {
+    #[must_use]
+    pub fn new(address: String, private_key: String) -> Self {
         Self {
             address,
             private_key: SecretString::from(private_key),
         }
     }
-    
+
     /// Get the private key. Use with extreme caution.
-    #[must_use] pub fn private_key(&self) -> &str {
+    #[must_use]
+    pub fn private_key(&self) -> &str {
         self.private_key.expose_secret()
     }
 }
@@ -61,28 +63,28 @@ impl Drop for Wallet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_wallet_debug_redacts_private_key() {
         let wallet = Wallet::new(
             "0x1234567890123456789012345678901234567890".to_string(),
             "private_key_12345".to_string(),
         );
-        
+
         let debug_str = format!("{wallet:?}");
         assert!(debug_str.contains("Wallet"));
         assert!(debug_str.contains("0x1234567890123456789012345678901234567890"));
-        assert!(debug_str.contains(".."));  // finish_non_exhaustive adds ".."
+        assert!(debug_str.contains("..")); // finish_non_exhaustive adds ".."
         assert!(!debug_str.contains("private_key"));
     }
-    
+
     #[test]
     fn test_wallet_serialization_excludes_private_key() {
         let wallet = Wallet::new(
             "0x1234567890123456789012345678901234567890".to_string(),
             "private_key_12345".to_string(),
         );
-        
+
         let json = serde_json::to_string(&wallet).unwrap();
         assert_eq!(json, "\"0x1234567890123456789012345678901234567890\"");
     }

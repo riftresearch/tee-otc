@@ -521,6 +521,31 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         }
     });
 
+    match state.db.swaps().get_waiting_mm_deposit_swaps(mm_uuid).await {
+        Ok(pending_swaps) => {
+            for swap in pending_swaps {
+                state
+                    .mm_registry
+                    .notify_user_deposit_confirmed(
+                        &mm_uuid,
+                        &swap.swap_id,
+                        &swap.quote_id,
+                        swap.user_destination_address.as_str(),
+                        swap.mm_nonce,
+                        &swap.expected_lot,
+                    )
+                    .await;
+            }
+        }
+        Err(err) => {
+            error!(
+                market_maker_id = %mm_id,
+                error = %err,
+                "Failed to fetch swaps awaiting MM deposit"
+            );
+        }
+    }
+
     // Handle incoming messages
     while let Some(msg) = receiver.next().await {
         match msg {

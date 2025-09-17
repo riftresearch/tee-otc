@@ -37,7 +37,9 @@ impl IntoResponse for RfqServerError {
     fn into_response(self) -> Response {
         let (status, error_message) = match &self {
             RfqServerError::BadRequest { .. } => (StatusCode::BAD_REQUEST, self.to_string()),
-            RfqServerError::Internal { .. } => (StatusCode::INTERNAL_SERVER_ERROR, self.to_string()),
+            RfqServerError::Internal { .. } => {
+                (StatusCode::INTERNAL_SERVER_ERROR, self.to_string())
+            }
             RfqServerError::Forbidden { .. } => (StatusCode::FORBIDDEN, self.to_string()),
             RfqServerError::ServiceUnavailable { .. } => {
                 (StatusCode::SERVICE_UNAVAILABLE, self.to_string())

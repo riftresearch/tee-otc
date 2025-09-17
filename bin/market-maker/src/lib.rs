@@ -6,6 +6,8 @@ pub mod deposit_key_storage;
 pub mod evm_wallet;
 mod otc_client;
 mod otc_handler;
+pub mod payment_manager;
+pub mod payment_storage;
 pub mod price_oracle;
 pub mod quote_storage;
 mod rfq_client;
@@ -17,9 +19,9 @@ mod wrapped_bitcoin_quoter;
 pub use wallet::WalletError;
 pub use wallet::WalletResult;
 
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use alloy::{primitives::Address, providers::Provider, signers::local::PrivateKeySigner};
+use alloy::{providers::Provider, signers::local::PrivateKeySigner};
 use bdk_wallet::bitcoin;
 use blockchain_utils::{create_websocket_wallet_provider, handle_background_thread_result};
 use clap::Parser;
@@ -31,6 +33,8 @@ use tokio::task::JoinSet;
 use tracing::info;
 use uuid::Uuid;
 
+use crate::payment_manager::PaymentManager;
+use crate::payment_storage::PaymentStorage;
 use crate::{
     bitcoin_wallet::BitcoinWallet,
     cb_bitcoin_converter::{coinbase_client::CoinbaseClient, run_rebalancer, BandsParams},
@@ -78,6 +82,9 @@ pub enum Error {
         source: quote_storage::QuoteStorageError,
     },
 
+    #[snafu(display("Payment storage error: {}", source))]
+    PaymentStorage { source: payment_storage::Error },
+
     #[snafu(display("Coinbase client error: {}", source))]
     CoinbaseClientError {
         source: cb_bitcoin_converter::coinbase_client::ConversionError,
@@ -109,7 +116,7 @@ impl From<otc_client::ClientError> for Error {
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(name = "market-maker")]
 #[command(about = "Market Maker client for TEE-OTC")]
 pub struct MarketMakerArgs {
@@ -301,6 +308,8 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     wallet_manager.register(ChainType::Bitcoin, bitcoin_wallet.clone());
     wallet_manager.register(ChainType::Ethereum, evm_wallet.clone());
 
+    let wallet_manager = Arc::new(wallet_manager);
+
     let btc_eth_price_oracle = price_oracle::BitcoinEtherPriceOracle::new(&mut join_set);
 
     let wrapped_bitcoin_quoter = WrappedBitcoinQuoter::new(
@@ -311,6 +320,17 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         args.fee_safety_multiplier,
     );
 
+    let payment_storage = Arc::new(
+        PaymentStorage::new(&args.database_url)
+            .await
+            .context(PaymentStorageSnafu)?,
+    );
+
+    let payment_manager = Arc::new(PaymentManager::new(
+        wallet_manager.clone(),
+        payment_storage.clone(),
+    ));
+
     let otc_fill_client = otc_client::OtcFillClient::new(
         Config {
             market_maker_id,
@@ -320,9 +340,9 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
             reconnect_interval_secs: 5,
             max_reconnect_attempts: 5,
         },
-        wallet_manager.clone(),
         quote_storage.clone(),
         deposit_key_storage.clone(),
+        payment_manager.clone(),
     );
     join_set.spawn(async move { otc_fill_client.run().await.map_err(Error::from) });
 
@@ -333,7 +353,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         market_maker_id,
         wrapped_bitcoin_quoter,
         quote_storage,
-        wallet_manager,
+        wallet_manager.clone(),
         balance_strategy,
     );
 

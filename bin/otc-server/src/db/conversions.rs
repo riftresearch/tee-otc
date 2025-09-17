@@ -1,9 +1,12 @@
-use alloy::primitives::U256;
-use otc_models::{ChainType, TokenIdentifier, Currency, Lot, UserDepositStatus, MMDepositStatus, SettlementStatus};
-use serde_json;
 use crate::error::{OtcServerError, OtcServerResult};
+use alloy::primitives::U256;
+use otc_models::{
+    ChainType, Currency, Lot, MMDepositStatus, SettlementStatus, TokenIdentifier, UserDepositStatus,
+};
+use serde_json;
 
-#[must_use] pub fn chain_type_to_db(chain: &ChainType) -> &'static str {
+#[must_use]
+pub fn chain_type_to_db(chain: &ChainType) -> &'static str {
     match chain {
         ChainType::Bitcoin => "bitcoin",
         ChainType::Ethereum => "ethereum",
@@ -32,7 +35,8 @@ pub fn token_identifier_from_json(value: serde_json::Value) -> OtcServerResult<T
     })
 }
 
-#[must_use] pub fn u256_to_db(value: &U256) -> String {
+#[must_use]
+pub fn u256_to_db(value: &U256) -> String {
     value.to_string()
 }
 
@@ -50,7 +54,12 @@ pub fn lot_to_db(lot: &Lot) -> OtcServerResult<(String, serde_json::Value, Strin
     Ok((chain, token, amount, decimals))
 }
 
-pub fn lot_from_db(chain: String, token: serde_json::Value, amount: String, decimals: u8) -> OtcServerResult<Lot> {
+pub fn lot_from_db(
+    chain: String,
+    token: serde_json::Value,
+    amount: String,
+    decimals: u8,
+) -> OtcServerResult<Lot> {
     Ok(Lot {
         currency: Currency {
             chain: chain_type_from_db(&chain)?,
@@ -61,13 +70,17 @@ pub fn lot_from_db(chain: String, token: serde_json::Value, amount: String, deci
     })
 }
 
-pub fn user_deposit_status_to_json(status: &UserDepositStatus) -> OtcServerResult<serde_json::Value> {
+pub fn user_deposit_status_to_json(
+    status: &UserDepositStatus,
+) -> OtcServerResult<serde_json::Value> {
     serde_json::to_value(status).map_err(|e| OtcServerError::InvalidData {
         message: format!("Failed to serialize user deposit status: {e}"),
     })
 }
 
-pub fn user_deposit_status_from_json(value: serde_json::Value) -> OtcServerResult<UserDepositStatus> {
+pub fn user_deposit_status_from_json(
+    value: serde_json::Value,
+) -> OtcServerResult<UserDepositStatus> {
     serde_json::from_value(value).map_err(|e| OtcServerError::InvalidData {
         message: format!("Failed to deserialize user deposit status: {e}"),
     })
@@ -100,17 +113,16 @@ pub fn settlement_status_from_json(value: serde_json::Value) -> OtcServerResult<
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_chain_type_conversion() {
         assert_eq!(chain_type_to_db(&ChainType::Bitcoin), "bitcoin");
         assert_eq!(chain_type_to_db(&ChainType::Ethereum), "ethereum");
-        
+
         assert_eq!(chain_type_from_db("bitcoin").unwrap(), ChainType::Bitcoin);
         assert_eq!(chain_type_from_db("ethereum").unwrap(), ChainType::Ethereum);
         assert!(chain_type_from_db("invalid").is_err());
     }
-    
 
     #[test]
     fn test_lot_conversion() {
@@ -131,6 +143,6 @@ mod tests {
         let lot2 = lot_from_db(chain, token, amount, decimals).unwrap();
         assert_eq!(lot2.currency.chain, lot.currency.chain);
         assert_eq!(lot2.currency.token, lot.currency.token);
-        assert_eq!(lot2.amount, lot.amount); 
+        assert_eq!(lot2.amount, lot.amount);
     }
 }

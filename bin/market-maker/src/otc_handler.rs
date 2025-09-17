@@ -1,4 +1,5 @@
 use crate::deposit_key_storage::{Deposit, DepositKeyStorage, DepositKeyStorageTrait};
+use crate::payment_manager::PaymentManager;
 use crate::quote_storage::QuoteStorage;
 use crate::strategy::ValidationStrategy;
 use crate::{config::Config, wallet::WalletManager};
@@ -12,25 +13,25 @@ use tracing::{error, info, warn};
 pub struct OTCMessageHandler {
     config: Config,
     strategy: ValidationStrategy,
-    wallet_manager: WalletManager,
     quote_storage: Arc<QuoteStorage>,
     deposit_key_storage: Arc<DepositKeyStorage>,
+    payment_manager: Arc<PaymentManager>,
 }
 
 impl OTCMessageHandler {
     pub fn new(
         config: Config,
-        wallet_manager: WalletManager,
         quote_storage: Arc<QuoteStorage>,
         deposit_key_storage: Arc<DepositKeyStorage>,
+        payment_manager: Arc<PaymentManager>,
     ) -> Self {
         let strategy = ValidationStrategy::new();
         Self {
             config,
             strategy,
-            wallet_manager,
             quote_storage,
             deposit_key_storage,
+            payment_manager,
         }
     }
 
@@ -140,48 +141,19 @@ impl OTCMessageHandler {
                     quote_id = quote_id.to_string(),
                 );
 
-                // TODO: We should have additional safety checks here to ensure the user's deposit is valid
-                // instead of trusting the TEE
-                let wallet = self.wallet_manager.get(expected_lot.currency.chain);
-                let response: MMResponse = {
-                    if let Some(wallet) = wallet {
-                        info!("Creating payment for swap {swap_id}");
-                        let tx_result = wallet
-                            .create_payment(
-                                expected_lot,
-                                user_destination_address,
-                                Some(MarketMakerPaymentValidation {
-                                    fee_amount: U256::from(expected_lot.compute_protocol_fee()),
-                                    embedded_nonce: *mm_nonce,
-                                }),
-                            )
-                            .await;
-                        info!("Payment created for swap {swap_id} {tx_result:?}");
-                        match tx_result {
-                            Ok(txid) => MMResponse::DepositInitiated {
-                                request_id: *request_id,
-                                swap_id: *swap_id,
-                                tx_hash: txid,
-                                amount_sent: expected_lot.amount,
-                                timestamp: utc::now(),
-                            },
-                            Err(e) => MMResponse::Error {
-                                request_id: *request_id,
-                                error_code: MMErrorCode::InternalError,
-                                message: e.to_string(),
-                                timestamp: utc::now(),
-                            },
-                        }
-                    } else {
-                        MMResponse::Error {
-                            request_id: *request_id,
-                            error_code: MMErrorCode::UnsupportedChain,
-                            message: "No wallet found for chain".to_string(),
-                            timestamp: utc::now(),
-                        }
-                    }
-                };
+                let response = self
+                    .payment_manager
+                    .make_payment(
+                        request_id,
+                        swap_id,
+                        quote_id,
+                        user_destination_address,
+                        mm_nonce,
+                        expected_lot,
+                    )
+                    .await;
 
+                // TODO: Implement payment manager
                 Some(ProtocolMessage {
                     version: msg.version.clone(),
                     sequence: msg.sequence + 1,

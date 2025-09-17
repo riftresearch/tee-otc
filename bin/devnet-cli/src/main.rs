@@ -1,10 +1,10 @@
-use clap::{Parser, Subcommand};
 use blockchain_utils::{handle_background_thread_result, init_logger};
+use clap::{Parser, Subcommand};
 use devnet::evm_devnet::ForkConfig;
 use devnet::{RiftDevnet, RiftDevnetCache};
 use snafu::{ResultExt, Whatever};
-use tracing::info;
 use tokio::signal;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -33,7 +33,6 @@ enum Commands {
     /// Create and save a cached devnet for faster subsequent runs
     Cache,
 }
-
 
 #[tokio::main]
 async fn main() -> Result<(), Whatever> {
@@ -72,7 +71,6 @@ async fn run_server(
     let server_start = tokio::time::Instant::now();
     info!("[Devnet Server] Starting devnet server...");
 
-
     let mut devnet_builder = RiftDevnet::builder().interactive(true).using_esplora(true);
 
     for address in fund_address {
@@ -84,7 +82,10 @@ async fn run_server(
     }
     info!("[Devnet Server] Building devnet...");
     let build_start = tokio::time::Instant::now();
-    let (mut devnet, _funding_sats) = devnet_builder.build().await.whatever_context("Failed to build devnet")?;
+    let (mut devnet, _funding_sats) = devnet_builder
+        .build()
+        .await
+        .whatever_context("Failed to build devnet")?;
     info!(
         "[Devnet Server] Devnet built in {:?}",
         build_start.elapsed()
@@ -125,10 +126,16 @@ async fn run_cache() -> Result<(), Whatever> {
 
     // Build devnet using for_cached configuration
     let build_start = tokio::time::Instant::now();
-    let (devnet, _funding_sats) = RiftDevnet::builder_for_cached().build().await.whatever_context("Failed to build devnet")?;
+    let (devnet, _funding_sats) = RiftDevnet::builder_for_cached()
+        .build()
+        .await
+        .whatever_context("Failed to build devnet")?;
     info!("[Devnet Cache] Devnet built in {:?}", build_start.elapsed());
 
     info!("[Devnet Cache] Devnet created successfully, saving to cache...");
-    cache.save_devnet(devnet).await.whatever_context("Failed to save devnet to cache")?;
+    cache
+        .save_devnet(devnet)
+        .await
+        .whatever_context("Failed to save devnet to cache")?;
     Ok(())
 }

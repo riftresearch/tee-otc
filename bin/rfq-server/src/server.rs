@@ -13,13 +13,13 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
+use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use futures_util::{SinkExt, StreamExt};
-use otc_auth::{ApiKeyStore, api_keys::API_KEYS};
+use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
 use otc_models::{Currency, Lot, Quote, QuoteRequest};
 use otc_protocols::rfq::{
     Connected, ProtocolMessage, QuoteWithFees, RFQRequest, RFQResponse, RFQResult,
 };
-use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 use std::{net::SocketAddr, sync::Arc};
@@ -212,7 +212,10 @@ async fn mm_websocket_handler(
     // Validate the API key
     match state.api_key_store.validate(&market_maker_id, api_secret) {
         Ok(market_maker_tag) => {
-            info!("Market maker {} authenticated via headers", market_maker_tag);
+            info!(
+                "Market maker {} authenticated via headers",
+                market_maker_tag
+            );
             let mm_uuid = market_maker_id.clone();
             ws.on_upgrade(move |socket| handle_mm_socket(socket, state, mm_uuid))
         }
@@ -229,7 +232,6 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         mm_uuid
     );
 
-
     // Channel for sending messages to the MM
     let (tx, mut rx) = mpsc::channel::<ProtocolMessage<RFQRequest>>(100);
 
@@ -242,7 +244,6 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         tx.clone(),
         "1.0.0".to_string(), // Default protocol version
     );
-
 
     // Send Connected response
     let connected_response = Connected {

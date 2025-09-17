@@ -159,4 +159,15 @@ mod tests {
         let client = TokenIndexerClient::new("http://localhost:3000");
         assert!(client.is_ok());
     }
+
+    #[test]
+    fn test_path_building() {
+        let client = TokenIndexerClient::new("http://localhost:3000/erc20-indexer/").unwrap();
+
+        let url = client.base_url.join("balance/0x123").unwrap();
+        assert_eq!(
+            url.to_string(),
+            "http://localhost:3000/erc20-indexer/balance/0x123"
+        );
+    }
 }

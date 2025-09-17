@@ -7,7 +7,9 @@ use std::time::Duration;
 use tokio::task::JoinSet;
 
 use crate::utils::{
-    INTEGRATION_TEST_TIMEOUT_SECS, PgConnectOptionsExt, TEST_MARKET_MAKER_API_ID, build_mm_test_args, build_otc_server_test_args, get_free_port, get_whitelist_file_path, wait_for_otc_server_to_be_ready
+    build_mm_test_args, build_otc_server_test_args, get_free_port, get_whitelist_file_path,
+    wait_for_otc_server_to_be_ready, PgConnectOptionsExt, INTEGRATION_TEST_TIMEOUT_SECS,
+    TEST_MARKET_MAKER_API_ID,
 };
 
 #[sqlx::test]

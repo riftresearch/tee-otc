@@ -8,6 +8,7 @@ use devnet::bitcoin_devnet::MiningMode;
 use devnet::{MultichainAccount, RiftDevnet};
 use evm_token_indexer_client::TokenIndexerClient;
 use market_maker::evm_wallet::EVMWallet;
+use market_maker::payment_storage::PaymentStorage;
 use market_maker::wallet::Wallet;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, MarketMakerArgs};
 use otc_models::{ChainType, Currency, Lot, Quote, QuoteMode, QuoteRequest, TokenIdentifier};
@@ -20,9 +21,10 @@ use otc_server::{
 };
 use reqwest::StatusCode;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::task::JoinSet;
 use tracing::info;
+use uuid::Uuid;
 
 use crate::utils::{
     build_bitcoin_wallet_descriptor, build_mm_test_args, build_otc_server_test_args,
@@ -30,6 +32,35 @@ use crate::utils::{
     get_free_port, wait_for_market_maker_to_connect_to_rfq_server, wait_for_otc_server_to_be_ready,
     wait_for_rfq_server_to_be_ready, wait_for_swap_to_be_settled, PgConnectOptionsExt,
 };
+
+async fn wait_for_swap_status(
+    client: &reqwest::Client,
+    otc_port: u16,
+    swap_id: Uuid,
+    expected_status: &str,
+) -> SwapResponse {
+    let timeout = Duration::from_secs(crate::utils::INTEGRATION_TEST_TIMEOUT_SECS);
+    let start = Instant::now();
+    let poll_interval = Duration::from_millis(500);
+    let url = format!("http://localhost:{otc_port}/api/v1/swaps/{swap_id}");
+
+    loop {
+        let response = client.get(&url).send().await.unwrap();
+        let response_json: SwapResponse = response.json().await.unwrap();
+
+        if response_json.status == expected_status {
+            return response_json;
+        }
+
+        if start.elapsed() > timeout {
+            panic!(
+                "Timeout waiting for swap {swap_id} status to become {expected_status}, last response: {response_json:#?}"
+            );
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
+}
 
 #[sqlx::test]
 async fn test_swap_from_bitcoin_to_ethereum(
@@ -252,6 +283,220 @@ async fn test_swap_from_bitcoin_to_ethereum(
 }
 
 #[sqlx::test]
+async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
+    _: PoolOptions<sqlx::Postgres>,
+    connect_options: PgConnectOptions,
+) {
+    let market_maker_account = MultichainAccount::new(1);
+    let user_account = MultichainAccount::new(2);
+
+    let devnet = RiftDevnet::builder()
+        .using_token_indexer(connect_options.to_database_url())
+        .using_esplora(true)
+        .build()
+        .await
+        .unwrap()
+        .0;
+
+    let mut wallet_join_set = JoinSet::new();
+
+    let user_bitcoin_wallet = BitcoinWallet::new(
+        &build_tmp_bitcoin_wallet_db_file(),
+        &build_bitcoin_wallet_descriptor(&user_account.bitcoin_wallet.private_key),
+        bitcoin::Network::Regtest,
+        &devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
+        None,
+        &mut wallet_join_set,
+    )
+    .await
+    .unwrap();
+
+    devnet
+        .bitcoin
+        .deal_bitcoin(
+            &user_account.bitcoin_wallet.address,
+            &bitcoin::Amount::from_sat(500_000_000),
+        )
+        .await
+        .unwrap();
+
+    devnet
+        .ethereum
+        .fund_eth_address(
+            market_maker_account.ethereum_address,
+            U256::from(100_000_000_000_000_000_000i128),
+        )
+        .await
+        .unwrap();
+
+    devnet
+        .ethereum
+        .mint_cbbtc(
+            market_maker_account.ethereum_address,
+            U256::from(9_000_000_000i128),
+        )
+        .await
+        .unwrap();
+
+    let mut service_join_set = JoinSet::new();
+
+    let otc_port = get_free_port().await;
+    let otc_args = build_otc_server_test_args(otc_port, &devnet, &connect_options).await;
+
+    service_join_set.spawn(async move {
+        run_server(otc_args)
+            .await
+            .expect("OTC server should not crash");
+    });
+
+    tokio::select! {
+        _ = wait_for_otc_server_to_be_ready(otc_port) => {
+            info!("OTC server is ready");
+        }
+        _ = service_join_set.join_next() => {
+            panic!("OTC server crashed");
+        }
+        _ = wallet_join_set.join_next() => {
+            panic!("Bitcoin wallet crashed");
+        }
+    }
+
+    let rfq_port = get_free_port().await;
+    let rfq_args = build_rfq_server_test_args(rfq_port);
+    service_join_set.spawn(async move {
+        rfq_server::server::run_server(rfq_args)
+            .await
+            .expect("RFQ server should not crash");
+    });
+
+    wait_for_rfq_server_to_be_ready(rfq_port).await;
+
+    let mm_args = build_mm_test_args(
+        otc_port,
+        rfq_port,
+        &market_maker_account,
+        &devnet,
+        &connect_options,
+    )
+    .await;
+    let mm_args_clone = mm_args.clone();
+
+    let mm_task_id = service_join_set.spawn(async move {
+        run_market_maker(mm_args)
+            .await
+            .expect("Market maker should not crash");
+    });
+
+    wait_for_market_maker_to_connect_to_rfq_server(rfq_port).await;
+
+    devnet
+        .bitcoin
+        .wait_for_esplora_sync(Duration::from_secs(30))
+        .await
+        .unwrap();
+
+    let client = reqwest::Client::new();
+
+    let quote_request = QuoteRequest {
+        mode: QuoteMode::ExactInput,
+        amount: U256::from(10_000_000),
+        from: Currency {
+            chain: ChainType::Bitcoin,
+            token: TokenIdentifier::Native,
+            decimals: 8,
+        },
+        to: Currency {
+            chain: ChainType::Ethereum,
+            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            decimals: 8,
+        },
+    };
+
+    let quote_response = client
+        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .json(&quote_request)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(quote_response.status(), 200);
+
+    let quote_response: rfq_server::server::QuoteResponse = quote_response.json().await.unwrap();
+
+    let quote = match quote_response.quote.expect("Quote should be present") {
+        RFQResult::Success(success) => success.quote,
+        other => panic!("Unexpected quote result: {other:#?}"),
+    };
+
+    let swap_request = CreateSwapRequest {
+        quote,
+        user_destination_address: user_account.ethereum_address.to_string(),
+        user_evm_account_address: user_account.ethereum_address,
+    };
+
+    let swap_response = client
+        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .json(&swap_request)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(swap_response.status(), StatusCode::OK);
+    let CreateSwapResponse {
+        swap_id,
+        deposit_address,
+        expected_amount,
+        decimals,
+        ..
+    } = swap_response.json().await.unwrap();
+
+    mm_task_id.abort();
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    if let Some(res) = service_join_set.join_next().await {
+        if res.is_err() {
+            info!("Initial market maker task aborted");
+        }
+    }
+
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    let tx_hash = user_bitcoin_wallet
+        .create_payment(
+            &Lot {
+                currency: Currency {
+                    chain: ChainType::Bitcoin,
+                    token: TokenIdentifier::Native,
+                    decimals,
+                },
+                amount: expected_amount,
+            },
+            &deposit_address,
+            None,
+        )
+        .await
+        .unwrap();
+
+    info!("Broadcasting user deposit tx: {tx_hash}");
+
+    devnet.bitcoin.mine_blocks(6).await.unwrap();
+
+    wait_for_swap_status(&client, otc_port, swap_id, "WaitingMMDepositInitiated").await;
+
+    let _mm_restart_task_id = service_join_set.spawn(async move {
+        run_market_maker(mm_args_clone)
+            .await
+            .expect("Market maker restart should not crash");
+    });
+
+    wait_for_market_maker_to_connect_to_rfq_server(rfq_port).await;
+
+    wait_for_swap_to_be_settled(otc_port, swap_id).await;
+
+    drop(devnet);
+    tokio::join!(wallet_join_set.shutdown(), service_join_set.shutdown());
+}
+
+#[sqlx::test]
 async fn test_swap_from_ethereum_to_bitcoin(
     _: PoolOptions<sqlx::Postgres>,
     connect_options: PgConnectOptions,
@@ -356,6 +601,7 @@ async fn test_swap_from_ethereum_to_bitcoin(
         &connect_options,
     )
     .await;
+    let mm_db_url = mm_args.database_url.clone();
     service_join_set.spawn(async move {
         run_market_maker(mm_args)
             .await
@@ -480,6 +726,13 @@ async fn test_swap_from_ethereum_to_bitcoin(
 
     info!("Tx status: {:#?}", get_tx_status);
     wait_for_swap_to_be_settled(otc_port, response_json.swap_id).await;
+
+    let payment_storage = PaymentStorage::new(&mm_db_url).await.unwrap();
+    payment_storage
+        .has_payment_been_made(response_json.swap_id)
+        .await
+        .unwrap()
+        .expect("Payment storage should have recorded the txid");
 
     drop(devnet);
     tokio::join!(wallet_join_set.shutdown(), service_join_set.shutdown());

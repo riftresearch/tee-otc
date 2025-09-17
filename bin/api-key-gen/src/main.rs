@@ -2,8 +2,8 @@ use argon2::{
     password_hash::{PasswordHasher, SaltString},
     Argon2, Params, Version,
 };
-use clap::{Parser, Subcommand};
 use blockchain_utils::init_logger;
+use clap::{Parser, Subcommand};
 use otc_models::PublicApiKeyRecord;
 use rand::{distributions::Alphanumeric, rngs::OsRng, Rng};
 use snafu::prelude::*;
@@ -42,7 +42,7 @@ struct Args {
 enum Command {
     /// Generate a new API key
     Generate {
-        /// Market maker name 
+        /// Market maker name
         #[arg(long)]
         tag: String,
     },
@@ -58,10 +58,9 @@ fn generate_api_secret() -> String {
 
 fn hash_api_key(api_key: &str) -> Result<String> {
     // OWASP recommended settings: m=19456 (19 MiB), t=2, p=1
-    let params = Params::new(19456, 2, 1, None)
-        .map_err(|e| Error::PasswordHash {
-            message: e.to_string(),
-        })?;
+    let params = Params::new(19456, 2, 1, None).map_err(|e| Error::PasswordHash {
+        message: e.to_string(),
+    })?;
 
     let argon2 = Argon2::new(argon2::Algorithm::Argon2id, Version::V0x13, params);
     let salt = SaltString::generate(&mut OsRng);
@@ -75,10 +74,7 @@ fn hash_api_key(api_key: &str) -> Result<String> {
     Ok(hash.to_string())
 }
 
-
-
 fn generate_command(tag: String) -> Result<()> {
-
     // Generate new API key
     let id = Uuid::new_v4();
     let api_secret = generate_api_secret();
@@ -89,7 +85,6 @@ fn generate_command(tag: String) -> Result<()> {
         tag: tag.clone(),
         hash: hash.clone(),
     };
-
 
     println!("Market Maker: {tag}");
     println!("ID: {id}");
