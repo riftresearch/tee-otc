@@ -5,7 +5,7 @@ configs:
       set -euo pipefail
       archive_url="https://rift-blockchain-archive.s3.us-west-1.amazonaws.com/bitcoind-datadir-2025-09-11.tar.lz4"
 
-      echo "Checking Bitcoin data directory: $$BITCOIN_DATA_DIR"
+      echo "Checking Bitcoin directory: $$BITCOIN_DATA_DIR"
 
       if [[ ! -d "$$BITCOIN_DATA_DIR/blocks" ]] && [[ ! -d "$$BITCOIN_DATA_DIR/chainstate" ]]; then
           echo "Bitcoin data directory appears to be empty. Downloading blockchain data..."
@@ -121,7 +121,6 @@ services:
       context: .
       dockerfile_inline: |
         FROM debian:bookworm-slim
-
         RUN apt-get update \
           && apt-get install -y --no-install-recommends \
              ca-certificates \
@@ -136,7 +135,6 @@ services:
         RUN useradd -m -u 1000 -s /bin/bash bitcoin \
           && mkdir -p /home/bitcoin/.bitcoin \
           && chown -R bitcoin:bitcoin /home/bitcoin/.bitcoin
-
         WORKDIR /opt/bitcoin
         RUN curl -fsSL "https://bitcoincore.org/bin/bitcoin-core-29.0/bitcoin-29.0-x86_64-linux-gnu.tar.gz" -o bitcoin.tar.gz \
           && tar -xzf bitcoin.tar.gz --strip-components=1 \

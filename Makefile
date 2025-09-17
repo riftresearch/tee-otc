@@ -1,4 +1,4 @@
-.PHONY: start-db stop-db clean-db test build run help test-clean test-isolated ci-test test-robust docker-build-and-push
+.PHONY: start-db stop-db clean-db test build run help test-clean test-isolated ci-test test-robust docker-build-and-push phala-deploy
 
 .ONESHELL:
 
@@ -52,3 +52,7 @@ docker-release: ## Build and push the OTC server Docker image
 	docker tag riftresearch/otc-server:$${VERSION_TAG} riftresearch/otc-server:latest; \
 	docker push riftresearch/otc-server:$${VERSION_TAG}; \
 	docker push riftresearch/otc-server:latest
+
+phala-deploy:
+	phala cvms upgrade 1b33795a2f06f8b0fe5a148cc69eb33cb2a3e7c0 -c compose.phala.yml -e .env.otc
+
