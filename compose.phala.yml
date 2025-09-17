@@ -62,6 +62,7 @@ configs:
           echo "Bitcoin data directory already contains blockchain data"
           echo "Data directory size: $(du -sh $$BITCOIN_DATA_DIR | cut -f1)"
       fi
+      rm -rf /tmp/*
 
       echo "Starting Bitcoin Core with arguments: $*"
       exec bitcoind "$@"
