@@ -38,13 +38,10 @@ configs:
               --out="blockchain-archive.tar.lz4" \
               "$$archive_url"; then
               
-              echo "Download completed. Extracting archive..."
-              if tar -I lz4 -xf $$archive_file -C $$temp_dir; then
+              echo "Download completed. Extracting archive directly to $$BITCOIN_DATA_DIR..."
+              if tar -I lz4 -xf $$archive_file -C $$BITCOIN_DATA_DIR; then
                   rm -f $$archive_file
                   echo "Download and extraction successful"
-                  
-                  echo "Copying blockchain data to $$BITCOIN_DATA_DIR..."
-                  cp -r $$temp_dir/* $$BITCOIN_DATA_DIR/
                   
                   
                   chown -R bitcoin:bitcoin $$BITCOIN_DATA_DIR

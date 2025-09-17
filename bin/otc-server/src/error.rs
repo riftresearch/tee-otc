@@ -136,7 +136,7 @@ impl From<crate::services::swap_manager::SwapError> for OtcServerError {
                 message: "Market maker rejected the quote".to_string(),
             },
             SwapError::MarketMakerNotConnected { .. } => OtcServerError::ServiceUnavailable {
-                service: "market_maker".to_string(),
+                service: "No market makers available".to_string(),
             },
             SwapError::MarketMakerValidationTimeout => OtcServerError::Timeout {
                 message: "Market maker validation timeout".to_string(),
