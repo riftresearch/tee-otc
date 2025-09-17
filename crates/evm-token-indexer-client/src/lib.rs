@@ -9,13 +9,25 @@ pub enum Error {
     BuildClient { source: reqwest::Error },
 
     #[snafu(display("Failed to send request: {source}"))]
-    Request { source: reqwest::Error },
+    Request {
+        source: reqwest::Error,
+        #[snafu(implicit)]
+        loc: snafu::Location,
+    },
 
     #[snafu(display("Failed to parse response: {source}"))]
-    ParseResponse { source: reqwest::Error },
+    ParseResponse {
+        source: reqwest::Error,
+        #[snafu(implicit)]
+        loc: snafu::Location,
+    },
 
     #[snafu(display("Invalid base URL: {source}"))]
-    InvalidUrl { source: url::ParseError },
+    InvalidUrl {
+        source: url::ParseError,
+        #[snafu(implicit)]
+        loc: snafu::Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -69,36 +81,28 @@ pub struct TokenIndexerClient {
 
 impl TokenIndexerClient {
     pub fn new(base_url: impl AsRef<str>) -> Result<Self> {
-        let client = Client::builder()
-            .build()
-            .context(BuildClientSnafu)?;
-        
+        let client = Client::builder().build().context(BuildClientSnafu)?;
+
+        tracing::info!(
+            "Creating TokenIndexerClient with base URL: {}",
+            base_url.as_ref()
+        );
+
         let base_url = Url::parse(base_url.as_ref()).context(InvalidUrlSnafu)?;
-        
+
         Ok(Self { client, base_url })
     }
 
-    pub async fn get_table_counts(&self) -> Result<TableCounts> {
-        let url = self.base_url.join("debug/table-counts").context(InvalidUrlSnafu)?;
-        
-        let response = self.client
-            .get(url)
-            .send()
-            .await
-            .context(RequestSnafu)?
-            .json::<TableCounts>()
-            .await
-            .context(ParseResponseSnafu)?;
-        
-        Ok(response)
-    }
-
     pub async fn get_balance(&self, address: Address) -> Result<Vec<Account>> {
-        let url = self.base_url
-            .join(&format!("balance/{:?}", address))
+        let url = self
+            .base_url
+            .join(&format!("balance/{address:?}"))
             .context(InvalidUrlSnafu)?;
-        
-        let response = self.client
+
+        tracing::info!("Getting balance for address: {}", address);
+
+        let response = self
+            .client
             .get(url)
             .send()
             .await
@@ -106,7 +110,7 @@ impl TokenIndexerClient {
             .json::<Vec<Account>>()
             .await
             .context(ParseResponseSnafu)?;
-        
+
         Ok(response)
     }
 
@@ -116,31 +120,32 @@ impl TokenIndexerClient {
         page: Option<u32>,
         min_amount: Option<U256>,
     ) -> Result<TransfersResponse> {
-        let mut url = self.base_url
-            .join(&format!("transfers/to/{:?}", address))
+        let mut url = self
+            .base_url
+            .join(&format!("transfers/to/{address:?}"))
             .context(InvalidUrlSnafu)?;
-        
+
+        tracing::info!("Getting transfers for address: {}", address);
         {
             let mut query_pairs = url.query_pairs_mut();
-            
+
             if let Some(page) = page {
                 query_pairs.append_pair("page", &page.to_string());
             }
-            
+
             if let Some(amount) = min_amount {
                 query_pairs.append_pair("amount", &amount.to_string());
             }
         }
-        
-        let response = self.client
-            .get(url)
-            .send()
-            .await
-            .context(RequestSnafu)?
+
+        let response = self.client.get(url).send().await.context(RequestSnafu)?;
+        tracing::info!("get_transfers_to response from indexer: {:?}", response);
+
+        let response = response
             .json::<TransfersResponse>()
             .await
             .context(ParseResponseSnafu)?;
-        
+
         Ok(response)
     }
 }
