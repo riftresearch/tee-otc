@@ -338,7 +338,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
             api_secret: args.api_secret.clone(),
             otc_ws_url: args.otc_ws_url.clone(),
             reconnect_interval_secs: 5,
-            max_reconnect_attempts: 5,
+            max_reconnect_attempts: 250,
         },
         quote_storage.clone(),
         deposit_key_storage.clone(),
