@@ -178,7 +178,7 @@ services:
     platform: linux/amd64
 
   otc-server:
-    image: riftresearch/otc-server:main-9169505
+    image: riftresearch/otc-server:main-354a300
     container_name: tee-otc-server
     depends_on:
       postgres:
