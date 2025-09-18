@@ -85,16 +85,16 @@ pub async fn run_rebalancer(
 
     loop {
         // --- balances (u64 sats) ---
-        let btc = btc_wallet
+        let btc_balance = btc_wallet
             .balance(&btc_token)
             .await
-            .context(GetBalanceSnafu)?
-            .to::<u64>();
-        let cbbtc = evm_wallet
+            .context(GetBalanceSnafu)?;
+        let btc = btc_balance.total_balance.to::<u64>();
+        let cbbtc_balance = evm_wallet
             .balance(&cbbtc_token)
             .await
-            .context(GetBalanceSnafu)?
-            .to::<u64>();
+            .context(GetBalanceSnafu)?;
+        let cbbtc = cbbtc_balance.total_balance.to::<u64>();
 
         let total = btc.saturating_add(cbbtc);
 
@@ -103,6 +103,17 @@ pub async fn run_rebalancer(
         gauge!("mm.balance_sats", "asset" => "btc").set(btc as f64);
         gauge!("mm.balance_sats", "asset" => "cbbtc").set(cbbtc as f64);
         gauge!("mm.total_sats").set(total as f64);
+
+        // Native vs deposit key balance metrics
+        let btc_native = btc_balance.native_balance.to::<u64>();
+        let btc_deposit_key = btc_balance.deposit_key_balance.to::<u64>();
+        let cbbtc_native = cbbtc_balance.native_balance.to::<u64>();
+        let cbbtc_deposit_key = cbbtc_balance.deposit_key_balance.to::<u64>();
+
+        gauge!("mm.native_balance_sats", "asset" => "btc").set(btc_native as f64);
+        gauge!("mm.native_balance_sats", "asset" => "cbbtc").set(cbbtc_native as f64);
+        gauge!("mm.deposit_key_balance_sats", "asset" => "btc").set(btc_deposit_key as f64);
+        gauge!("mm.deposit_key_balance_sats", "asset" => "cbbtc").set(cbbtc_deposit_key as f64);
 
         debug!(
             "inventory: btc={} sats, cbbtc={} sats, total={}",
@@ -114,12 +125,21 @@ pub async fn run_rebalancer(
             continue;
         }
 
-        // Log human-readable percentages of each asset vs total
+        // Log detailed balance information with human-readable percentages
         let btc_pct = (btc as f64 / total as f64) * 100.0;
         let cbbtc_pct = (cbbtc as f64 / total as f64) * 100.0;
+
         info!(
-            "inventory share: btc={:.2}%, cbbtc={:.2}%",
-            btc_pct, cbbtc_pct
+            message = "detailed inventory breakdown",
+            btc_total_sats = btc,
+            btc_native_sats = btc_native,
+            btc_deposit_key_sats = btc_deposit_key,
+            btc_percentage = %format!("{:.2}%", btc_pct),
+            cbbtc_total_sats = cbbtc,
+            cbbtc_native_sats = cbbtc_native,
+            cbbtc_deposit_key_sats = cbbtc_deposit_key,
+            cbbtc_percentage = %format!("{:.2}%", cbbtc_pct),
+            total_sats = total
         );
 
         // --- symmetric band around target ---

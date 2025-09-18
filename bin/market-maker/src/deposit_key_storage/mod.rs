@@ -156,30 +156,30 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
         let rows: Vec<PgRow> = sqlx::query(
             r#"
             WITH ordered AS (
-                SELECT id, amount, created_at
+                SELECT private_key, amount, created_at
                 FROM mm_deposits
                 WHERE status = 'available'
                   AND chain = $1
                   AND token = $2
                   AND decimals = $3
-                ORDER BY created_at, id
+                ORDER BY created_at, private_key
                 FOR UPDATE SKIP LOCKED
             ),
             pref AS (
-                SELECT id, amount, created_at,
-                       SUM(amount) OVER (ORDER BY created_at, id) AS run
+                SELECT private_key, amount, created_at,
+                       SUM(amount) OVER (ORDER BY created_at, private_key) AS run
                 FROM ordered
             ),
             take AS (
-                SELECT id FROM pref WHERE (run - amount) < $4::numeric
+                SELECT private_key FROM pref WHERE (run - amount) < $4::numeric
             )
             UPDATE mm_deposits i
             SET status = 'reserved',
                 reserved_by = $5,
                 reserved_at = NOW()
             FROM take
-            WHERE i.id = take.id
-            RETURNING i.id, i.private_key, i.amount::TEXT, i.funding_tx_hash;
+            WHERE i.private_key = take.private_key
+            RETURNING i.private_key, i.amount::TEXT, i.funding_tx_hash;
             "#,
         )
         .bind(&chain)
@@ -229,12 +229,13 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
         let (chain, token, decimals) = Self::serialize_currency(&deposit.holdings.currency);
         let amount = deposit.holdings.amount.to_string();
 
-        // Insert as available; never delete, lifecycle via status
+        // Use ON CONFLICT DO NOTHING to make this idempotent - if the private_key already exists,
         sqlx::query(
             r#"
             INSERT INTO mm_deposits (
                 private_key, chain, token, decimals, amount, status, funding_tx_hash
             ) VALUES ($1, $2, $3, $4, $5::numeric, 'available', $6)
+            ON CONFLICT (private_key) DO NOTHING
             "#,
         )
         .bind(&deposit.private_key)

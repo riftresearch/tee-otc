@@ -16,7 +16,7 @@ use bdk_wallet::{
     LoadParams, LoadWithPersistError, PersistedWallet,
 };
 use otc_chains::traits::MarketMakerPaymentValidation;
-use otc_models::{ChainType, Lot, TokenIdentifier};
+use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
 use snafu::{location, Location, ResultExt, Snafu};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -24,7 +24,7 @@ use tracing::info;
 
 use crate::bitcoin_wallet::transaction_broadcaster::{ForeignUtxo, TransactionRequest};
 use crate::deposit_key_storage::{DepositKeyStorage, DepositKeyStorageTrait, FillStatus};
-use crate::wallet::{self, Wallet as WalletTrait, WalletError};
+use crate::wallet::{self, Wallet as WalletTrait, WalletBalance, WalletError};
 use crate::WalletResult;
 
 const STOP_GAP: usize = 50;
@@ -324,7 +324,7 @@ impl WalletTrait for BitcoinWallet {
                                 .output
                                 .iter()
                                 .enumerate()
-                                .filter(|(i, out)| {
+                                .filter(|(_, out)| {
                                     out.value.to_sat() == lot.amount.to::<u64>()
                                         && out.script_pubkey == deposit_address.script_pubkey()
                                 })
@@ -374,7 +374,7 @@ impl WalletTrait for BitcoinWallet {
             .map_err(|e| WalletError::BitcoinWalletClient { source: e })
     }
 
-    async fn balance(&self, token: &TokenIdentifier) -> WalletResult<U256> {
+    async fn balance(&self, token: &TokenIdentifier) -> WalletResult<WalletBalance> {
         if token != &TokenIdentifier::Native {
             return Err(WalletError::UnsupportedToken {
                 token: token.clone(),
@@ -382,13 +382,36 @@ impl WalletTrait for BitcoinWallet {
             });
         }
 
-        Ok(U256::from(
-            self.get_dedicated_wallet_balance().await.map_err(|e| {
+        let native_balance =
+            U256::from(self.get_dedicated_wallet_balance().await.map_err(|e| {
                 wallet::WalletError::BalanceCheckFailed {
                     source: Box::new(e),
                 }
-            })?,
-        ))
+            })?);
+
+        let mut net_deposit_key_balance = U256::from(0);
+
+        if let Some(deposit_key_storage) = &self.deposit_key_storage {
+            let deposit_key_bal = deposit_key_storage
+                .balance(&Currency {
+                    chain: ChainType::Bitcoin,
+                    token: token.clone(),
+                    decimals: 8, //TODO(med): this should not be hardcoded
+                })
+                .await
+                .map_err(|e| WalletError::BalanceCheckFailed {
+                    source: Box::new(e),
+                })?;
+            net_deposit_key_balance += deposit_key_bal;
+        }
+
+        let total_balance = native_balance.saturating_add(net_deposit_key_balance);
+
+        Ok(WalletBalance {
+            total_balance,
+            native_balance,
+            deposit_key_balance: net_deposit_key_balance,
+        })
     }
 
     fn receive_address(&self, _token: &TokenIdentifier) -> String {

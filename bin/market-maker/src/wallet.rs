@@ -115,6 +115,16 @@ pub enum WalletError {
 
 pub type WalletResult<T, E = WalletError> = std::result::Result<T, E>;
 
+#[derive(Debug, Clone)]
+pub struct WalletBalance {
+    // total balance of the wallet, native_balance + deposit_key_balance
+    pub total_balance: U256,
+    // balance of the primary wallet
+    pub native_balance: U256,
+    // sum of balances from all deposit keys
+    pub deposit_key_balance: U256,
+}
+
 #[async_trait]
 pub trait Wallet: Send + Sync {
     /// Create a transaction for the given currency to the specified address
@@ -144,7 +154,7 @@ pub trait Wallet: Send + Sync {
     async fn guarantee_confirmations(&self, tx_hash: &str, confirmations: u64) -> WalletResult<()>;
 
     /// Return the available balance for the given token
-    async fn balance(&self, token: &TokenIdentifier) -> WalletResult<U256>;
+    async fn balance(&self, token: &TokenIdentifier) -> WalletResult<WalletBalance>;
 
     fn receive_address(&self, token: &TokenIdentifier) -> String;
 
@@ -218,10 +228,6 @@ mod tests {
             Ok("mock_txid_123".to_string())
         }
 
-        async fn balance(&self, _token: &TokenIdentifier) -> WalletResult<U256> {
-            Ok(U256::from(1000000000000000000u64))
-        }
-
         fn chain_type(&self) -> ChainType {
             ChainType::Bitcoin
         }
@@ -236,6 +242,14 @@ mod tests {
 
         fn receive_address(&self, _token: &TokenIdentifier) -> String {
             "mock_address_123".to_string()
+        }
+
+        async fn balance(&self, _token: &TokenIdentifier) -> WalletResult<WalletBalance> {
+            Ok(WalletBalance {
+                total_balance: U256::from(1000000000000000000u64),
+                native_balance: U256::from(1000000000000000000u64),
+                deposit_key_balance: U256::from(0),
+            })
         }
     }
 
@@ -261,7 +275,11 @@ mod tests {
         };
 
         // Test wallet methods
-        let bal = wallet.balance(&lot.currency.token).await.unwrap();
+        let bal = wallet
+            .balance(&lot.currency.token)
+            .await
+            .unwrap()
+            .total_balance;
         assert!(bal > U256::from(0));
 
         let txid = wallet.create_payment(&lot, "bc1q...", None).await.unwrap();

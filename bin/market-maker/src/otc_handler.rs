@@ -169,11 +169,7 @@ impl OTCMessageHandler {
                 user_deposit_tx_hash,
                 ..
             } => {
-                info!("Swap {} complete, received user's private key", swap_id);
-                info!("User deposit tx: {}", user_deposit_tx_hash);
-
-                // TODO: Implement claiming logic
-                warn!("TODO: Implement claiming from user's wallet");
+                tracing::info!(message = "Swap complete, received user's private key", swap_id = %swap_id, user_deposit_tx_hash = %user_deposit_tx_hash);
 
                 match self
                     .deposit_key_storage
@@ -184,11 +180,13 @@ impl OTCMessageHandler {
                     })
                     .await
                 {
-                    Ok(_) => {
-                        info!("Deposit stored successfully");
-                    }
+                    Ok(_) => {}
                     Err(e) => {
-                        error!("Failed to store deposit: {}", e);
+                        error!(
+                            message = format!("Failed to store deposit: {e}"),
+                            swap_id = %swap_id,
+                            user_deposit_tx_hash = %user_deposit_tx_hash
+                        );
                     }
                 }
 

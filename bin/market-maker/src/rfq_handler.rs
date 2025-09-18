@@ -76,7 +76,7 @@ impl RFQMessageHandler {
                                 "Failed to check wallet balance".to_string(),
                             )
                         } else {
-                            let balance = balance.unwrap();
+                            let balance = balance.unwrap().total_balance;
                             info!("Wallet balance: {:?}", balance);
                             if !self
                                 .balance_strategy

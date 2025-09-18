@@ -26,7 +26,7 @@ use tracing::info;
 
 use crate::{
     deposit_key_storage::{Deposit, DepositKeyStorage, DepositKeyStorageTrait, FillStatus},
-    wallet::Wallet,
+    wallet::{Wallet, WalletBalance},
     WalletError, WalletResult,
 };
 
@@ -194,7 +194,7 @@ impl Wallet for EVMWallet {
         }
     }
 
-    async fn balance(&self, token: &TokenIdentifier) -> WalletResult<U256> {
+    async fn balance(&self, token: &TokenIdentifier) -> WalletResult<WalletBalance> {
         // TODO: This check should also include a check that we can pay for gas
         if ensure_valid_token(token).is_err() {
             return Err(WalletError::UnsupportedToken {
@@ -221,8 +221,10 @@ impl Wallet for EVMWallet {
                 res.unwrap()
             }
         };
-        let mut balance =
+        let native_balance =
             get_erc20_balance(&self.provider, &token_address, &self.tx_broadcaster.sender).await?;
+
+        let mut net_deposit_key_balance = U256::from(0);
 
         if let Some(deposit_key_storage) = &self.deposit_key_storage {
             let deposit_key_bal = deposit_key_storage
@@ -235,10 +237,16 @@ impl Wallet for EVMWallet {
                 .map_err(|e| WalletError::BalanceCheckFailed {
                     source: Box::new(e),
                 })?;
-            balance += deposit_key_bal;
+            net_deposit_key_balance += deposit_key_bal;
         }
 
-        Ok(balance)
+        let total_balance = native_balance.saturating_add(net_deposit_key_balance);
+
+        Ok(WalletBalance {
+            total_balance,
+            native_balance,
+            deposit_key_balance: net_deposit_key_balance,
+        })
     }
 
     fn chain_type(&self) -> ChainType {

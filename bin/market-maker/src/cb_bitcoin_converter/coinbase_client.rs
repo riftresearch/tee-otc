@@ -388,7 +388,8 @@ pub async fn convert_btc_to_cbbtc(
     let available_balance = sender_wallet
         .balance(&TokenIdentifier::Native)
         .await
-        .context(WalletSnafu)?;
+        .context(WalletSnafu)?
+        .total_balance;
 
     if available_balance < lot.amount {
         return InsufficientBalanceSnafu {
@@ -477,7 +478,11 @@ pub async fn convert_cbbtc_to_btc(
         amount: U256::from(amount_sats),
     };
 
-    let available_balance = sender_wallet.balance(&cbbtc).await.context(WalletSnafu)?;
+    let available_balance = sender_wallet
+        .balance(&cbbtc)
+        .await
+        .context(WalletSnafu)?
+        .total_balance;
 
     if available_balance < lot.amount {
         return InsufficientBalanceSnafu {

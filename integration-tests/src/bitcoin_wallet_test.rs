@@ -95,7 +95,8 @@ async fn test_bitcoin_wallet_basic_operations(
     let can_fill_small = bitcoin_wallet
         .balance(&small_lot.currency.token)
         .await
-        .unwrap();
+        .unwrap()
+        .total_balance;
     info!("Can fill 1 satoshi (unfunded wallet): {}", can_fill_small);
     assert!(
         can_fill_small == U256::from(0),
@@ -117,7 +118,8 @@ async fn test_bitcoin_wallet_basic_operations(
     let can_fill_eth = bitcoin_wallet
         .balance(&eth_lot.currency.token)
         .await
-        .unwrap();
+        .unwrap()
+        .total_balance;
     assert!(
         can_fill_eth == U256::from(0),
         "Should return false for Ethereum currency"
@@ -305,7 +307,7 @@ async fn test_bitcoin_wallet_error_handling(
     let result = bitcoin_wallet.balance(&eth_lot.currency.token).await;
     assert!(result.is_ok(), "Should return Ok for unsupported currency");
     assert_eq!(
-        result.unwrap(),
+        result.unwrap().total_balance,
         U256::from(0u64),
         "Should return zero balance for unsupported currency"
     );
