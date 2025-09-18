@@ -425,7 +425,7 @@ impl SwapMonitoringService {
                     let private_key = user_wallet.private_key().to_string();
                     let user_deposit_tx_hash =
                         swap.user_deposit_status.as_ref().unwrap().tx_hash.clone();
-                    let lot = swap.quote.to.clone();
+                    let lot = swap.quote.from.clone();
                     tokio::spawn(async move {
                         let _ = mm_registry
                             .notify_swap_complete(

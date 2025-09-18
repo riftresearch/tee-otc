@@ -351,10 +351,10 @@ impl SwapRepository {
             let deposit_status = user_deposit_status_from_json(deposit_status_json)?;
 
             let lot = lot_from_db(
-                row.try_get::<String, _>("to_chain")?,
-                row.try_get::<serde_json::Value, _>("to_token")?,
-                row.try_get::<String, _>("to_amount")?,
-                row.try_get::<i16, _>("to_decimals")? as u8,
+                row.try_get::<String, _>("from_chain")?,
+                row.try_get::<serde_json::Value, _>("from_token")?,
+                row.try_get::<String, _>("from_amount")?,
+                row.try_get::<i16, _>("from_decimals")? as u8,
             )?;
 
             swaps.push(SettledSwapNotification {

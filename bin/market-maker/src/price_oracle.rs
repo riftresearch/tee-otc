@@ -205,7 +205,7 @@ impl BitcoinEtherPriceOracle {
 
             if old_price.map_or(true, |old| (price - old).abs() > 1e-10) {
                 let eth_per_btc = 1.0 / price;
-                info!(
+                debug!(
                     "Price update: 1 ETH = {:.8} BTC | 1 BTC = {:.6} ETH",
                     price, eth_per_btc
                 );
