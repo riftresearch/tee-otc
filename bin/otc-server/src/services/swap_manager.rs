@@ -347,4 +347,9 @@ impl SwapManager {
             },
         })
     }
+
+    #[must_use]
+    pub fn master_key_bytes(&self) -> [u8; 64] {
+        self.settings.master_key_bytes()
+    }
 }

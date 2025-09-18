@@ -1,10 +1,13 @@
-use otc_models::{Lot, MMDepositStatus, SettlementStatus, Swap, SwapStatus, UserDepositStatus};
+use otc_models::{
+    ChainType, Lot, MMDepositStatus, SettlementStatus, Swap, SwapStatus, UserDepositStatus,
+};
 use sqlx::postgres::PgPool;
 use sqlx::Row;
 use uuid::Uuid;
 
 use super::conversions::{
-    lot_from_db, mm_deposit_status_to_json, settlement_status_to_json, user_deposit_status_to_json,
+    chain_type_from_db, lot_from_db, mm_deposit_status_to_json, settlement_status_to_json,
+    user_deposit_status_from_json, user_deposit_status_to_json,
 };
 use super::row_mappers::FromRow;
 use crate::db::quote_repo::QuoteRepository;
@@ -17,6 +20,15 @@ pub struct PendingMMDepositSwap {
     pub user_destination_address: String,
     pub mm_nonce: [u8; 16],
     pub expected_lot: Lot,
+}
+
+#[derive(Debug, Clone)]
+pub struct SettledSwapNotification {
+    pub swap_id: Uuid,
+    pub user_deposit_salt: [u8; 32],
+    pub user_deposit_tx_hash: String,
+    pub lot: Lot,
+    pub deposit_chain: ChainType,
 }
 
 #[derive(Clone)]
@@ -288,6 +300,69 @@ impl SwapRepository {
                 user_destination_address: row.try_get("user_destination_address")?,
                 mm_nonce,
                 expected_lot,
+            });
+        }
+
+        Ok(swaps)
+    }
+
+    pub async fn get_settled_swaps_for_market_maker(
+        &self,
+        market_maker_id: Uuid,
+    ) -> OtcServerResult<Vec<SettledSwapNotification>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                s.id AS swap_id,
+                s.user_deposit_salt,
+                s.user_deposit_status,
+                q.from_chain,
+                q.to_chain,
+                q.to_token,
+                q.to_amount,
+                q.to_decimals
+            FROM swaps s
+            JOIN quotes q ON s.quote_id = q.id
+            WHERE s.market_maker_id = $1
+              AND s.status = $2
+              AND s.user_deposit_status IS NOT NULL
+            "#,
+        )
+        .bind(market_maker_id)
+        .bind(SwapStatus::Settled)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut swaps = Vec::with_capacity(rows.len());
+        for row in rows {
+            let salt_vec: Vec<u8> = row.try_get("user_deposit_salt")?;
+            if salt_vec.len() != 32 {
+                return Err(OtcServerError::InvalidData {
+                    message: "user_deposit_salt must be exactly 32 bytes".to_string(),
+                });
+            }
+            let mut user_deposit_salt = [0u8; 32];
+            user_deposit_salt.copy_from_slice(&salt_vec);
+
+            let from_chain: String = row.try_get("from_chain")?;
+            let deposit_chain = chain_type_from_db(&from_chain)?;
+
+            let deposit_status_json: serde_json::Value = row.try_get("user_deposit_status")?;
+            let deposit_status = user_deposit_status_from_json(deposit_status_json)?;
+
+            let lot = lot_from_db(
+                row.try_get::<String, _>("to_chain")?,
+                row.try_get::<serde_json::Value, _>("to_token")?,
+                row.try_get::<String, _>("to_amount")?,
+                row.try_get::<i16, _>("to_decimals")? as u8,
+            )?;
+
+            swaps.push(SettledSwapNotification {
+                swap_id: row.try_get("swap_id")?,
+                user_deposit_salt,
+                user_deposit_tx_hash: deposit_status.tx_hash,
+                lot,
+                deposit_chain,
             });
         }
 
