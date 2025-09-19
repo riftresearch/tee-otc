@@ -10,6 +10,9 @@ use mock_instant::global::{SystemTime, UNIX_EPOCH};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 pub fn now() -> DateTime<Utc> {
+    #[cfg(all(feature = "mock-time", not(test), not(debug_assertions)))]
+    compile_error!("mock-time feature must not be enabled in production builds");
+
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .expect("system time before Unix epoch");
