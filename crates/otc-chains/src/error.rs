@@ -1,6 +1,6 @@
 use alloy::primitives::U256;
 use otc_models::{ChainType, Lot};
-use snafu::prelude::*;
+use snafu::{prelude::*, Location};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -14,8 +14,27 @@ pub enum Error {
     #[snafu(display("Wallet creation failed: {message}"))]
     WalletCreation { message: String },
 
-    #[snafu(display("RPC error: {message}"))]
-    Rpc { message: String },
+    EVMRpcError {
+        source: alloy::transports::RpcError<alloy::transports::TransportErrorKind>,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
+    BitcoinRpcError {
+        source: bitcoincore_rpc_async::Error,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+    EsploraClientError {
+        source: esplora_client::Error,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+    EVMTokenIndexerClientError {
+        source: evm_token_indexer_client::Error,
+        #[snafu(implicit)]
+        loc: Location,
+    },
 
     #[snafu(display("Invalid lot for network {network:?}: {lot:?}"))]
     InvalidCurrency { lot: Lot, network: ChainType },
@@ -47,38 +66,6 @@ impl From<bitcoin::address::ParseError> for Error {
             address: error.to_string(),
             network: ChainType::Bitcoin,
             reason: error.to_string(),
-        }
-    }
-}
-
-impl From<esplora_client::Error> for Error {
-    fn from(error: esplora_client::Error) -> Self {
-        Error::Rpc {
-            message: format!("Esplora error: {}", error),
-        }
-    }
-}
-
-impl From<bitcoincore_rpc_async::Error> for Error {
-    fn from(error: bitcoincore_rpc_async::Error) -> Self {
-        Error::Rpc {
-            message: format!("Bitcoin Core RPC error: {}", error),
-        }
-    }
-}
-
-impl From<evm_token_indexer_client::Error> for Error {
-    fn from(error: evm_token_indexer_client::Error) -> Self {
-        Error::Rpc {
-            message: format!("EVM Token Indexer error: {}", error),
-        }
-    }
-}
-
-impl From<alloy::transports::RpcError<alloy::transports::TransportErrorKind>> for Error {
-    fn from(error: alloy::transports::RpcError<alloy::transports::TransportErrorKind>) -> Self {
-        Error::Rpc {
-            message: format!("EVM RPC error: {}", error),
         }
     }
 }

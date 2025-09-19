@@ -8,6 +8,7 @@ use bitcoin::secp256k1::{Secp256k1, SecretKey};
 use bitcoin::{Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, Transaction};
 use bitcoincore_rpc_async::{Auth, Client, RpcApi};
 use otc_models::{ChainType, Lot, TokenIdentifier, TransferInfo, TxStatus, Wallet};
+use snafu::location;
 use std::str::FromStr;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -28,14 +29,16 @@ impl BitcoinChain {
     ) -> Result<Self> {
         let rpc_client = Client::new(bitcoin_core_rpc_url.to_string(), bitcoin_core_rpc_auth)
             .await
-            .map_err(|_| crate::Error::Rpc {
-                message: "Failed to create Bitcoin RPC client".to_string(),
+            .map_err(|e| crate::Error::BitcoinRpcError {
+                source: e,
+                loc: location!(),
             })?;
 
         let esplora_client = esplora_client::Builder::new(untrusted_esplora_url)
             .build_async()
-            .map_err(|_| crate::Error::Rpc {
-                message: "Failed to create Esplora client".to_string(),
+            .map_err(|e| crate::Error::EsploraClientError {
+                source: e,
+                loc: location!(),
             })?;
 
         Ok(Self {
@@ -97,7 +100,11 @@ impl ChainOperations for BitcoinChain {
         let tx = self
             .rpc_client
             .get_raw_transaction_verbose(&bitcoin::Txid::from_str(tx_hash).unwrap())
-            .await?;
+            .await
+            .map_err(|e| crate::Error::BitcoinRpcError {
+                source: e,
+                loc: location!(),
+            })?;
         if tx.confirmations.unwrap_or(0) > 0 {
             Ok(TxStatus::Confirmed(tx.confirmations.unwrap_or(0)))
         } else {
@@ -133,7 +140,11 @@ impl ChainOperations for BitcoinChain {
         let utxos = self
             .untrusted_esplora_client
             .get_address_utxo(&sender_address)
-            .await?;
+            .await
+            .map_err(|e| crate::Error::EsploraClientError {
+                source: e,
+                loc: location!(),
+            })?;
         if utxos.is_empty() {
             return Err(crate::Error::DumpToAddress {
                 message: "No UTXOs found".to_string(),
@@ -314,7 +325,15 @@ impl ChainOperations for BitcoinChain {
     }
 
     async fn get_best_hash(&self) -> Result<String> {
-        Ok(self.rpc_client.get_best_block_hash().await?.to_string())
+        Ok(self
+            .rpc_client
+            .get_best_block_hash()
+            .await
+            .map_err(|e| crate::Error::BitcoinRpcError {
+                source: e,
+                loc: location!(),
+            })?
+            .to_string())
     }
 }
 
@@ -333,9 +352,20 @@ impl BitcoinChain {
         let utxos = self
             .untrusted_esplora_client
             .get_address_utxo(&address)
-            .await?;
+            .await
+            .map_err(|e| crate::Error::EsploraClientError {
+                source: e,
+                loc: location!(),
+            })?;
         debug!("UTXOs: {:?}", utxos);
-        let current_block_height = self.rpc_client.get_block_count().await? as u32;
+        let current_block_height =
+            self.rpc_client
+                .get_block_count()
+                .await
+                .map_err(|e| crate::Error::BitcoinRpcError {
+                    source: e,
+                    loc: location!(),
+                })? as u32;
         let mut most_confirmed_transfer: Option<TransferInfo> = None;
         for utxo in utxos {
             if utxo.value < amount.to::<u64>() {

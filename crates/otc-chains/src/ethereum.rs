@@ -10,6 +10,7 @@ use blockchain_utils::create_receive_with_authorization_execution;
 use eip3009_erc20_contract::GenericEIP3009ERC20::GenericEIP3009ERC20Instance;
 use evm_token_indexer_client::TokenIndexerClient;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier, TransferInfo, TxStatus, Wallet};
+use snafu::location;
 use std::str::FromStr;
 use std::time::Duration;
 use tracing::{debug, info};
@@ -36,7 +37,12 @@ impl EthereumChain {
             })?)
             .erased();
 
-        let evm_indexer_client = TokenIndexerClient::new(evm_indexer_url)?;
+        let evm_indexer_client = TokenIndexerClient::new(evm_indexer_url).map_err(|e| {
+            crate::Error::EVMTokenIndexerClientError {
+                source: e,
+                loc: location!(),
+            }
+        })?;
         let allowed_token =
             Address::from_str(ALLOWED_TOKEN).map_err(|_| crate::Error::Serialization {
                 message: "Invalid allowed token address".to_string(),
@@ -98,10 +104,21 @@ impl ChainOperations for EthereumChain {
         let tx = self
             .provider
             .get_transaction_receipt(tx_hash_parsed)
-            .await?;
+            .await
+            .map_err(|e| crate::Error::EVMRpcError {
+                source: e,
+                loc: location!(),
+            })?;
 
         if tx.is_some() {
-            let current_block_height = self.provider.get_block_number().await?;
+            let current_block_height =
+                self.provider
+                    .get_block_number()
+                    .await
+                    .map_err(|e| crate::Error::EVMRpcError {
+                        source: e,
+                        loc: location!(),
+                    })?;
             Ok(TxStatus::Confirmed(
                 current_block_height - tx.unwrap().block_number.unwrap(),
             ))
@@ -224,7 +241,11 @@ impl ChainOperations for EthereumChain {
         Ok(hex::encode(
             self.provider
                 .get_block_by_number(alloy::eips::BlockNumberOrTag::Latest)
-                .await?
+                .await
+                .map_err(|e| crate::Error::EVMRpcError {
+                    source: e,
+                    loc: location!(),
+                })?
                 .unwrap()
                 .hash(),
         ))
@@ -248,7 +269,11 @@ impl EthereumChain {
         let transfers = self
             .evm_indexer_client
             .get_transfers_to(*recipient_address, None, Some(*amount))
-            .await?;
+            .await
+            .map_err(|e| crate::Error::EVMTokenIndexerClientError {
+                source: e,
+                loc: location!(),
+            })?;
 
         if transfers.transfers.is_empty() {
             info!("No transfers found");
@@ -262,7 +287,11 @@ impl EthereumChain {
             let transaction_receipt = self
                 .provider
                 .get_transaction_receipt(transfer.transaction_hash)
-                .await?;
+                .await
+                .map_err(|e| crate::Error::EVMRpcError {
+                    source: e,
+                    loc: location!(),
+                })?;
 
             if transaction_receipt.is_none() {
                 debug!("Transaction receipt not found for transfer: {:?}", transfer);
@@ -304,7 +333,11 @@ impl EthereumChain {
                     let transaction = self
                         .provider
                         .get_raw_transaction_by_hash(transfer.transaction_hash)
-                        .await?;
+                        .await
+                        .map_err(|e| crate::Error::EVMRpcError {
+                            source: e,
+                            loc: location!(),
+                        })?;
                     if transaction.is_none() {
                         debug!("Transaction not found for transfer: {:?}", transfer);
                         continue;
@@ -347,7 +380,12 @@ impl EthereumChain {
                     }
                 }
                 // get the current block height
-                let current_block_height = self.provider.get_block_number().await?;
+                let current_block_height = self.provider.get_block_number().await.map_err(|e| {
+                    crate::Error::EVMRpcError {
+                        source: e,
+                        loc: location!(),
+                    }
+                })?;
                 let confirmations =
                     current_block_height - transaction_receipt.block_number.unwrap();
 
