@@ -28,6 +28,7 @@ target/
 !.env.example
 !.env.test
 .env.otc
+.env.mm
 !bin/otc-server/.env
 
 # Temporary files
