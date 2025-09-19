@@ -14,22 +14,28 @@ pub enum Error {
     #[snafu(display("Wallet creation failed: {message}"))]
     WalletCreation { message: String },
 
+    #[snafu(display("EVMRPCError at {loc}: {source}"))]
     EVMRpcError {
         source: alloy::transports::RpcError<alloy::transports::TransportErrorKind>,
         #[snafu(implicit)]
         loc: Location,
     },
 
+    #[snafu(display("BitcoinRPCError at {loc}: {source}"))]
     BitcoinRpcError {
         source: bitcoincore_rpc_async::Error,
         #[snafu(implicit)]
         loc: Location,
     },
+
+    #[snafu(display("EsploraClientError at {loc}: {source}"))]
     EsploraClientError {
         source: esplora_client::Error,
         #[snafu(implicit)]
         loc: Location,
     },
+
+    #[snafu(display("EVMTokenIndexerClientError at {loc}: {source}"))]
     EVMTokenIndexerClientError {
         source: evm_token_indexer_client::Error,
         #[snafu(implicit)]

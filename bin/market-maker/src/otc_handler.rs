@@ -137,7 +137,8 @@ impl OTCMessageHandler {
                 ..
             } => {
                 info!(
-                    message = "User deposit confirmed for swap {swap_id}: MM should send {expected_lot:?} to {user_destination_address}",
+                    message = "User deposit confirmed notice from OTC server",
+                    swap_id = swap_id.to_string(),
                     quote_id = quote_id.to_string(),
                 );
 
@@ -152,6 +153,11 @@ impl OTCMessageHandler {
                         expected_lot,
                     )
                     .await;
+
+                info!(
+                    message = "Payment manager response",
+                    response = ?response,
+                );
 
                 // TODO: Implement payment manager
                 Some(ProtocolMessage {

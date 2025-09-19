@@ -29,7 +29,7 @@ clean-db: ## Stop and remove database volumes
 test-clean: build-test | cache-devnet ## Same as test but will clean up resources on success/failure
 	@bash -c 'set -e; \
 	trap "echo \"Cleaning up...\"; $(MAKE) clean-db" EXIT; \
-	$(MAKE) dev-db; \
+	$(MAKE) start-db; \
 	cd crates/eip3009-erc20-contract/contract && forge build && cd ../../..; \
 	cargo nextest run'
 
