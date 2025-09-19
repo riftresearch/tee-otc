@@ -137,7 +137,14 @@ async fn test_refund_from_bitcoin_user_deposit(
     });
     service_handles.insert("market_maker", mm_handle);
 
-    wait_for_market_maker_to_connect_to_rfq_server(rfq_port).await;
+    tokio::select! {
+        _ = wait_for_market_maker_to_connect_to_rfq_server(rfq_port) => {
+            info!("Market maker is connected to RFQ server");
+        }
+        _ = service_join_set.join_next() => {
+            panic!("Market maker crashed");
+        }
+    }
 
     devnet
         .bitcoin

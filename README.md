@@ -5,34 +5,27 @@ Cross-chain OTC swap desk put inside a TEE
 
 - `otc-server` - Server for deposit wallet creation and handling the full swap lifecycle, runs in a TEE
 - `market-maker` - Demo market making bot that responds to RFQs and fills orders
-- `rfq-server` - Offchain Server that acts as an entrypoint for connecting market makers to users sending RFQs
+- `rfq-server` - Server that acts as an hub for connecting market makers to users sending RFQs
 - Bitcoin full node for Bitcoin state validation
 - Helios light client for EVM chain state validation
 
 ## Prerequisites
 
-- rust toolchain
-- nextest
-- orbstack/docker desktop
-- docker cli
-  // TODO: Links
+- [Rust](https://www.rust-lang.org/tools/install)
+- [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/)
+- [Docker](https://www.docker.com/get-started/)
+- [pnpm](https://pnpm.io/installation)
+- [Foundry](https://getfoundry.sh/introduction/installation/)
 
-## Development Workflow
+## Tests
 
-1. **Build the project**:
+On your first run:
+```bash
+cd evm-token-indexer && pnpm i && cd ..
+make cache-devnet
+```
 
-   ```bash
-   cargo build
-   ```
-
-2. **Run all tests**:
-   ```bash
-   make test-clean
-   ```
-
-3. **Run Dockerized OTC Server (simulates TEE environment)**
-   a. Run TEE Simulator (TODO) 
-   b. Setup services
-   ```bash
-   docker compose -f compose.phala.yml up -d
-   ```
+Then on subsequent runs, just run:
+```bash
+make test
+```

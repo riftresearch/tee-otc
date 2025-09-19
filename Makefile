@@ -30,11 +30,13 @@ test-clean: build-test | cache-devnet ## Same as test but will clean up resource
 	@bash -c 'set -e; \
 	trap "echo \"Cleaning up...\"; $(MAKE) clean-db" EXIT; \
 	$(MAKE) start-db; \
-	cd crates/eip3009-erc20-contract/contract && forge build && cd ../../..; \
 	cargo nextest run'
 
 test: build-test | ## Run all tests, assumes devnet has been cached and database is running
+	@$(MAKE) stop-db 
+	@$(MAKE) start-db
 	@cargo nextest run
+	@$(MAKE) stop-db
 
 build-test: ## Build the project for testing
 	@cargo build --tests
