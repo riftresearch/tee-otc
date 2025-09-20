@@ -14,6 +14,7 @@ use snafu::location;
 use std::str::FromStr;
 use std::time::Duration;
 use tracing::{debug, info};
+use alloy::consensus::Transaction;
 
 sol! {
     #[derive(Debug)]
@@ -332,7 +333,7 @@ impl EthereumChain {
                     let embedded_nonce = mm_payment.embedded_nonce;
                     let transaction = self
                         .provider
-                        .get_raw_transaction_by_hash(transfer.transaction_hash)
+                        .get_transaction_by_hash(transfer.transaction_hash)
                         .await
                         .map_err(|e| crate::Error::EVMRpcError {
                             source: e,
@@ -343,7 +344,7 @@ impl EthereumChain {
                         continue;
                     }
                     let transaction = transaction.unwrap();
-                    let tx_hex = alloy::hex::encode(transaction);
+                    let tx_hex = alloy::hex::encode(transaction.input());
                     let nonce_hex = alloy::hex::encode(embedded_nonce);
                     if !tx_hex.contains(&nonce_hex) {
                         debug!(

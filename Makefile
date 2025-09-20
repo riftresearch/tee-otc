@@ -56,5 +56,4 @@ docker-release: ## Build and push the OTC server Docker image
 	docker push riftresearch/otc-server:latest
 
 phala-deploy:
-	phala cvms upgrade app_1b33795a2f06f8b0fe5a148cc69eb33cb2a3e7c0 -c compose.phala.yml -e .env.otc
-
+	phala deploy --uuid 408d8b85-c215-4dda-a71b-a1b601f1d6d4 -c compose.phala.yml -e .env.otc
