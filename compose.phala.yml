@@ -192,7 +192,7 @@ services:
       GRANT_SUDO: yes
       DATABASE_URL: postgres://otc_user:otc_password@postgres:5432/otc_db
       RUST_LOG: info 
-      EVM_RPC_URL: ${UNTRUSTED_EVM_RPC_URL} # http://helios:8545
+      EVM_RPC_URL: http://helios:8545
       UNTRUSTED_EVM_TOKEN_INDEXER_URL: ${UNTRUSTED_EVM_TOKEN_INDEXER_URL}
       BITCOIN_RPC_URL: http://bitcoin-core:8332
       BITCOIN_RPC_AUTH: user:pass
