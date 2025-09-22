@@ -67,6 +67,391 @@ configs:
       echo "Starting Bitcoin Core with arguments: $*"
       exec bitcoind "$@"
 
+  prometheus-config:
+    content: |
+      global:
+        scrape_interval: 15s
+      scrape_configs:
+        - job_name: prometheus
+          static_configs:
+            - targets:
+                - prometheus:9090
+        - job_name: node-exporter
+          static_configs:
+            - targets:
+                - node-exporter:9100
+        - job_name: cadvisor
+          static_configs:
+            - targets:
+                - cadvisor:8080
+
+  grafana-datasource:
+    content: |
+      apiVersion: 1
+      deleteDatasources:
+        - name: Prometheus
+      datasources:
+        - name: Prometheus
+          uid: PBFA97CFB590B2093
+          type: prometheus
+          access: proxy
+          url: http://prometheus:9090
+          isDefault: true
+
+  grafana-dashboard-provider:
+    content: |
+      apiVersion: 1
+      providers:
+        - name: Default
+          orgId: 1
+          folder: ""
+          type: file
+          options:
+            path: /etc/grafana/provisioning/dashboards
+
+  grafana-node-dashboard:
+    content: |
+      {
+        "annotations": {
+          "list": [
+            {
+              "builtIn": 1,
+              "datasource": {
+                "type": "grafana",
+                "uid": "grafana"
+              },
+              "enable": true,
+              "hide": true,
+              "iconColor": "rgba(0, 211, 255, 1)",
+              "name": "Annotations & Alerts",
+              "type": "dashboard"
+            }
+          ]
+        },
+        "editable": true,
+        "fiscalYearStartMonth": 0,
+        "graphTooltip": 1,
+        "links": [],
+        "panels": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "mappings": [],
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 0,
+              "y": 0
+            },
+            "id": 1,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "editorMode": "code",
+                "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"tee-.*\"}[5m])) * 100",
+                "legendFormat": "{{name}}",
+                "range": true,
+                "refId": "A",
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                }
+              }
+            ],
+            "title": "Container CPU Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "bytes"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 12,
+              "y": 0
+            },
+            "id": 2,
+            "options": {
+              "legend": {
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "editorMode": "code",
+                "expr": "max by (name) (container_memory_usage_bytes{name=~\"tee-.*\"})",
+                "legendFormat": "{{name}}",
+                "range": true,
+                "refId": "A",
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                }
+              }
+            ],
+            "title": "Container Memory Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "MBs"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 24,
+              "x": 0,
+              "y": 8
+            },
+            "id": 4,
+            "options": {
+              "legend": {
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "editorMode": "code",
+                "expr": "sum by (name) (rate(container_network_receive_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
+                "legendFormat": "RX {{name}}",
+                "range": true,
+                "refId": "A",
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                }
+              },
+              {
+                "editorMode": "code",
+                "expr": "sum by (name) (rate(container_network_transmit_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
+                "legendFormat": "TX {{name}}",
+                "range": true,
+                "refId": "B",
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                }
+              }
+            ],
+            "title": "Container Network I/O",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 0,
+              "y": 16
+            },
+            "id": 5,
+            "options": {
+              "legend": {
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "editorMode": "code",
+                "expr": "(1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))) * 100",
+                "legendFormat": "CPU {{instance}}",
+                "range": true,
+                "refId": "A",
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                }
+              }
+            ],
+            "title": "Host CPU Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 12,
+              "y": 16
+            },
+            "id": 6,
+            "options": {
+              "legend": {
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "editorMode": "code",
+                "expr": "(1 - sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes)) * 100",
+                "legendFormat": "Host Memory",
+                "range": true,
+                "refId": "A",
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                }
+              }
+            ],
+            "title": "Host Memory Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "bytes"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 24,
+              "x": 0,
+              "y": 24
+            },
+            "id": 7,
+            "options": {
+              "legend": {
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "sum(node_filesystem_size_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"})",
+                "legendFormat": "Size",
+                "range": true,
+                "refId": "A"
+              },
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "sum(node_filesystem_free_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"})",
+                "legendFormat": "Free",
+                "range": true,
+                "refId": "B"
+              }
+            ],
+            "title": "Host Storage",
+            "type": "timeseries"
+          }
+        ],
+        "refresh": "30s",
+        "schemaVersion": 38,
+        "style": "dark",
+        "tags": [
+          "monitoring"
+        ],
+        "templating": {
+          "list": []
+        },
+        "time": {
+          "from": "now-1h",
+          "to": "now"
+        },
+        "timepicker": {},
+        "timezone": "",
+        "title": "TEE Monitoring",
+        "uid": "tee-monitoring",
+        "version": 1,
+        "weekStart": ""
+      }
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -84,37 +469,6 @@ services:
       retries: 5
     networks:
       - tee-network
-
-  helios:
-    container_name: tee-helios
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM ubuntu:24.04
-        RUN apt-get update && apt-get install -y curl ca-certificates && rm -rf /var/lib/apt/lists/*
-        RUN curl -L 'https://github.com/a16z/helios/releases/download/0.9.0/helios_linux_amd64.tar.gz' | tar -xzC /usr/local/bin
-        EXPOSE 8545
-        WORKDIR /root
-        CMD [ "helios", "ethereum", "--execution-rpc", "${UNTRUSTED_EVM_RPC_URL}", "--checkpoint", "0xf95f9c34be687e3cef0906d25e51f3568798fb11155b00d715416dba3d70a313", "--rpc-bind-ip", "0.0.0.0"]
-    environment:
-      UNTRUSTED_EVM_RPC_URL: ${UNTRUSTED_EVM_RPC_URL}
-      RUST_LOG: info 
-    ports:
-      - "8550:8545"
-
-    healthcheck:
-      test:
-        [
-          "CMD-SHELL",
-          'curl -s -X POST http://localhost:8545 -H "Content-Type: application/json" -d ''{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'' || exit 1',
-        ]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
-    networks:
-      - tee-network
-    platform: linux/amd64
 
   bitcoin-core:
     container_name: tee-bitcoin-core
@@ -184,15 +538,13 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      helios:
-        condition: service_started
       bitcoin-core:
         condition: service_started
     environment:
       GRANT_SUDO: yes
       DATABASE_URL: postgres://otc_user:otc_password@postgres:5432/otc_db
       RUST_LOG: info 
-      EVM_RPC_URL: http://helios:8545
+      EVM_RPC_URL: ${UNTRUSTED_EVM_RPC_URL} # Temporarily use rpc blindly until reth + lighthouse shipped here
       UNTRUSTED_EVM_TOKEN_INDEXER_URL: ${UNTRUSTED_EVM_TOKEN_INDEXER_URL}
       BITCOIN_RPC_URL: http://bitcoin-core:8332
       BITCOIN_RPC_AUTH: user:pass
@@ -212,6 +564,86 @@ services:
     platform: linux/amd64
     user: root
 
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: tee-node-exporter
+    restart: unless-stopped
+    pid: host
+    command:
+      - "--path.rootfs=/rootfs"
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    volumes:
+      - /:/rootfs:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "9100:9100"
+    networks:
+      - tee-network
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: tee-cadvisor
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - tee-network
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: tee-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    depends_on:
+      node-exporter:
+        condition: service_started
+      cadvisor:
+        condition: service_started
+    volumes:
+      - prometheus_data:/prometheus
+    configs:
+      - source: prometheus-config
+        target: /etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    networks:
+      - tee-network
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: tee-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: a02b289e6fed06928e0e5cf8ea2ab5e1b49a663781bae81a1554d937c1e0d1ea 
+    configs:
+      - source: grafana-datasource
+        target: /etc/grafana/provisioning/datasources/prometheus.yml
+      - source: grafana-dashboard-provider
+        target: /etc/grafana/provisioning/dashboards/provider.yml
+      - source: grafana-node-dashboard
+        target: /etc/grafana/provisioning/dashboards/tee-monitoring.json
+    networks:
+      - tee-network
+
 networks:
   tee-network:
     driver: bridge
@@ -220,3 +652,4 @@ volumes:
   postgres_data:
   bitcoin_data:
   otc_server_config_data:
+  prometheus_data:
