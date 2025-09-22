@@ -19,7 +19,7 @@ mod wrapped_bitcoin_quoter;
 pub use wallet::WalletError;
 pub use wallet::WalletResult;
 
-use std::{sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use alloy::{providers::Provider, signers::local::PrivateKeySigner};
 use bdk_wallet::bitcoin;
@@ -31,6 +31,12 @@ use reqwest::Url;
 use snafu::{prelude::*, ResultExt};
 use tokio::task::JoinSet;
 use tracing::info;
+
+use axum::{
+    extract::State, http::header, http::StatusCode, response::IntoResponse, routing::get, Router,
+};
+use metrics_exporter_prometheus::{BuildError, PrometheusBuilder, PrometheusHandle};
+use tokio::net::TcpListener;
 use uuid::Uuid;
 
 use crate::payment_manager::PaymentManager;
@@ -94,6 +100,18 @@ pub enum Error {
     ConversionActor {
         source: cb_bitcoin_converter::ConversionActorError,
     },
+
+    #[snafu(display("Failed to install metrics recorder: {}", source))]
+    MetricsRecorder { source: BuildError },
+
+    #[snafu(display("Failed to bind metrics listener on {}: {}", addr, source))]
+    MetricsServerBind {
+        source: std::io::Error,
+        addr: SocketAddr,
+    },
+
+    #[snafu(display("Metrics server error: {}", source))]
+    MetricsServer { source: std::io::Error },
 }
 
 impl From<blockchain_utils::ProviderError> for Error {
@@ -123,6 +141,10 @@ pub struct MarketMakerArgs {
     /// Log level
     #[arg(long, env = "RUST_LOG", default_value = "info")]
     pub log_level: String,
+
+    /// Address for the Prometheus metrics exporter (will only be exposed if address is provided)
+    #[arg(long, env = "METRICS_LISTEN_ADDR")]
+    pub metrics_listen_addr: Option<SocketAddr>,
 
     /// Market maker identifier
     #[arg(long, env = "MM_TAG")]
@@ -250,6 +272,10 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     })?;
 
     info!("Starting market maker with ID: {}", market_maker_id);
+
+    if let Some(addr) = args.metrics_listen_addr {  
+        setup_metrics(&mut join_set, addr)?;
+    }
 
     // Initialize quote storage
     let quote_storage = Arc::new(
@@ -404,4 +430,39 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     handle_background_thread_result(join_set.join_next().await).context(BackgroundThreadSnafu)?;
 
     Ok(())
+}
+
+fn setup_metrics(join_set: &mut JoinSet<Result<()>>, addr: SocketAddr) -> Result<()> {
+    let handle = PrometheusBuilder::new()
+        .install_recorder()
+        .context(MetricsRecorderSnafu)?;
+    let shared_handle = Arc::new(handle);
+
+    let metrics_state = shared_handle.clone();
+
+    join_set.spawn(async move {
+        let listener = TcpListener::bind(addr)
+            .await
+            .context(MetricsServerBindSnafu { addr })?;
+
+        let app = Router::new()
+            .route("/metrics", get(metrics_handler))
+            .with_state(metrics_state);
+
+        axum::serve(listener, app)
+            .await
+            .context(MetricsServerSnafu)?;
+
+        Ok(())
+    });
+
+    Ok(())
+}
+
+async fn metrics_handler(State(handle): State<Arc<PrometheusHandle>>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        handle.render(),
+    )
 }

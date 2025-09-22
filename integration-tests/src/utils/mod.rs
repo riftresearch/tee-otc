@@ -229,6 +229,7 @@ pub async fn build_mm_test_args(
         coinbase_exchange_api_passphrase: "".to_string(),
         coinbase_exchange_api_secret: "".to_string(),
         auto_manage_inventory: false,
+        metrics_listen_addr: None,
     }
 }
 

@@ -1,5 +1,6 @@
 use crate::traits::MarketMakerPaymentValidation;
 use crate::{key_derivation, ChainOperations, Result};
+use alloy::consensus::Transaction;
 use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::rpc::types::{Log as RpcLog, TransactionReceipt};
@@ -14,7 +15,6 @@ use snafu::location;
 use std::str::FromStr;
 use std::time::Duration;
 use tracing::{debug, info};
-use alloy::consensus::Transaction;
 
 sol! {
     #[derive(Debug)]

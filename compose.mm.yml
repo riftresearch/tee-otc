@@ -12,6 +12,10 @@ configs:
           static_configs:
             - targets:
                 - node-exporter:9100
+        - job_name: market-maker
+          static_configs:
+            - targets:
+                - rift-market-maker:9000
 
   grafana-datasource-mm:
     content: |
@@ -191,6 +195,51 @@ configs:
             ],
             "title": "Disk Usage by Mount",
             "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "currencyBTC"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 24,
+              "x": 0,
+              "y": 24
+            },
+            "id": 4,
+            "options": {
+              "legend": {
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "mm_balance_sats / 1e8",
+                "legendFormat": "{{asset}}",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Inventory Balance (BTC)",
+            "type": "timeseries"
           }
         ],
         "refresh": "30s",
@@ -210,7 +259,7 @@ configs:
         "timezone": "",
         "title": "MM System Metrics",
         "uid": "mm-system-metrics",
-        "version": 1,
+        "version": 2,
         "weekStart": ""
       }
 services:
@@ -253,6 +302,7 @@ services:
         condition: service_healthy
     environment:
       RUST_LOG: info
+      METRICS_LISTEN_ADDR: 0.0.0.0:9000
       MM_TAG: ${MM_TAG}
       MM_ID: ${MM_ID}
       MM_API_SECRET: ${MM_API_SECRET}
@@ -355,4 +405,3 @@ volumes:
   mm_postgres_data:
   market_maker_bitcoin_wallet_db_data:
   mm_prometheus_data:
-
