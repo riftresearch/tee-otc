@@ -1,3 +1,218 @@
+configs:
+  prometheus-config-mm:
+    content: |
+      global:
+        scrape_interval: 15s
+      scrape_configs:
+        - job_name: prometheus
+          static_configs:
+            - targets:
+                - prometheus:9090
+        - job_name: node-exporter
+          static_configs:
+            - targets:
+                - node-exporter:9100
+
+  grafana-datasource-mm:
+    content: |
+      apiVersion: 1
+      deleteDatasources:
+        - name: Prometheus
+      datasources:
+        - name: Prometheus
+          uid: PBFA97CFB590B2093
+          type: prometheus
+          access: proxy
+          url: http://prometheus:9090
+          isDefault: true
+
+  grafana-dashboard-provider-mm:
+    content: |
+      apiVersion: 1
+      providers:
+        - name: Default
+          orgId: 1
+          folder: ""
+          type: file
+          options:
+            path: /etc/grafana/provisioning/dashboards
+
+  grafana-node-dashboard-mm:
+    content: |
+      {
+        "annotations": {
+          "list": [
+            {
+              "builtIn": 1,
+              "datasource": {
+                "type": "grafana",
+                "uid": "grafana"
+              },
+              "enable": true,
+              "hide": true,
+              "iconColor": "rgba(0, 211, 255, 1)",
+              "name": "Annotations & Alerts",
+              "type": "dashboard"
+            }
+          ]
+        },
+        "editable": true,
+        "fiscalYearStartMonth": 0,
+        "graphTooltip": 1,
+        "links": [],
+        "panels": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 24,
+              "x": 0,
+              "y": 0
+            },
+            "id": 1,
+            "options": {
+              "legend": {
+                "displayMode": "hidden"
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "(1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))) * 100",
+                "legendFormat": "CPU Usage",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Host CPU Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "gbytes"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 24,
+              "x": 0,
+              "y": 8
+            },
+            "id": 2,
+            "options": {
+              "legend": {
+                "displayMode": "hidden"
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "(sum(node_memory_MemTotal_bytes) - sum(node_memory_MemAvailable_bytes)) / 1024 / 1024 / 1024",
+                "legendFormat": "Memory Used",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Host Memory Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "unit": "gbytes"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 24,
+              "x": 0,
+              "y": 16
+            },
+            "id": 3,
+            "options": {
+              "legend": {
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "(node_filesystem_size_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"} - node_filesystem_free_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"}) / 1024 / 1024 / 1024",
+                "legendFormat": "{{mountpoint}}",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Disk Usage by Mount",
+            "type": "timeseries"
+          }
+        ],
+        "refresh": "30s",
+        "schemaVersion": 38,
+        "style": "dark",
+        "tags": [
+          "monitoring"
+        ],
+        "templating": {
+          "list": []
+        },
+        "time": {
+          "from": "now-1h",
+          "to": "now"
+        },
+        "timepicker": {},
+        "timezone": "",
+        "title": "MM System Metrics",
+        "uid": "mm-system-metrics",
+        "version": 1,
+        "weekStart": ""
+      }
 services:
   postgres:
     image: postgres:16-alpine
@@ -69,6 +284,69 @@ services:
       - market_maker_bitcoin_wallet_db_data:/app/bitcoin-wallet-db
     platform: linux/amd64
 
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: mm-node-exporter
+    restart: unless-stopped
+    pid: host
+    command:
+      - "--path.rootfs=/rootfs"
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    volumes:
+      - /:/rootfs:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "9100:9100"
+    networks:
+      - mm-network
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: mm-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    depends_on:
+      node-exporter:
+        condition: service_started
+    volumes:
+      - mm_prometheus_data:/prometheus
+    configs:
+      - source: prometheus-config-mm
+        target: /etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    networks:
+      - mm-network
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: mm-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: a02b289e6fed06928e0e5cf8ea2ab5e1b49a663781bae81a1554d937c1e0d1ea
+    configs:
+      - source: grafana-datasource-mm
+        target: /etc/grafana/provisioning/datasources/prometheus.yml
+      - source: grafana-dashboard-provider-mm
+        target: /etc/grafana/provisioning/dashboards/provider.yml
+      - source: grafana-node-dashboard-mm
+        target: /etc/grafana/provisioning/dashboards/mm-system-metrics.json
+    networks:
+      - mm-network
+
 networks:
   mm-network:
     driver: bridge
@@ -76,3 +354,5 @@ networks:
 volumes:
   mm_postgres_data:
   market_maker_bitcoin_wallet_db_data:
+  mm_prometheus_data:
+
