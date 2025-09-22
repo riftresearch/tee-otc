@@ -40,7 +40,6 @@ configs:
           type: file
           options:
             path: /etc/grafana/provisioning/dashboards
-
   grafana-node-dashboard-mm:
     content: |
       {
@@ -50,7 +49,7 @@ configs:
               "builtIn": 1,
               "datasource": {
                 "type": "grafana",
-                "uid": "grafana"
+                "name": "grafana"
               },
               "enable": true,
               "hide": true,
@@ -68,7 +67,7 @@ configs:
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "PBFA97CFB590B2093"
+              "name": "Prometheus"
             },
             "fieldConfig": {
               "defaults": {
@@ -96,7 +95,7 @@ configs:
               {
                 "datasource": {
                   "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
+                  "name": "Prometheus"
                 },
                 "editorMode": "code",
                 "expr": "(1 - avg(rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))) * 100",
@@ -111,7 +110,7 @@ configs:
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "PBFA97CFB590B2093"
+              "name": "Prometheus"
             },
             "fieldConfig": {
               "defaults": {
@@ -139,7 +138,7 @@ configs:
               {
                 "datasource": {
                   "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
+                  "name": "Prometheus"
                 },
                 "editorMode": "code",
                 "expr": "(sum(node_memory_MemTotal_bytes) - sum(node_memory_MemAvailable_bytes)) / 1024 / 1024 / 1024",
@@ -154,7 +153,7 @@ configs:
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "PBFA97CFB590B2093"
+              "name": "Prometheus"
             },
             "fieldConfig": {
               "defaults": {
@@ -184,7 +183,7 @@ configs:
               {
                 "datasource": {
                   "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
+                  "name": "Prometheus"
                 },
                 "editorMode": "code",
                 "expr": "(node_filesystem_size_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"} - node_filesystem_free_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"}) / 1024 / 1024 / 1024",
@@ -199,7 +198,7 @@ configs:
           {
             "datasource": {
               "type": "prometheus",
-              "uid": "PBFA97CFB590B2093"
+              "name": "Prometheus"
             },
             "fieldConfig": {
               "defaults": {
@@ -229,7 +228,7 @@ configs:
               {
                 "datasource": {
                   "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
+                  "name": "Prometheus"
                 },
                 "editorMode": "code",
                 "expr": "mm_balance_sats / 1e8",
@@ -262,6 +261,8 @@ configs:
         "version": 2,
         "weekStart": ""
       }
+
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -380,7 +381,7 @@ services:
     container_name: mm-grafana
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3010:3000"
     depends_on:
       prometheus:
         condition: service_started
