@@ -22,7 +22,7 @@ use otc_protocols::rfq::{
 };
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 use tokio::sync::mpsc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, info, warn};
@@ -42,6 +42,8 @@ struct Status {
     pub version: String,
     pub connected_market_makers: usize,
 }
+
+const MM_PING_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct QuoteResponse {
@@ -244,6 +246,23 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         tx.clone(),
         "1.0.0".to_string(), // Default protocol version
     );
+
+    let ping_registry = state.mm_registry.clone();
+    tokio::spawn(async move {
+        let ping_mm_id = mm_uuid;
+        let mut interval = tokio::time::interval(MM_PING_INTERVAL);
+        loop {
+            interval.tick().await;
+            if let Err(err) = ping_registry.send_ping(&ping_mm_id).await {
+                warn!(
+                    market_maker_id = %ping_mm_id,
+                    error = %err,
+                    "Stopping RFQ keepalive pings"
+                );
+                break;
+            }
+        }
+    });
 
     // Send Connected response
     let connected_response = Connected {

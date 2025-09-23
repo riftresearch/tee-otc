@@ -28,7 +28,7 @@ use snafu::prelude::*;
 use std::{net::SocketAddr, sync::Arc};
 use tokio::{sync::mpsc, time::Duration};
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -48,12 +48,13 @@ struct Status {
     version: String,
 }
 
+const MM_PING_INTERVAL: Duration = Duration::from_secs(30);
+
 pub async fn run_server(args: OtcServerArgs) -> Result<()> {
     info!("Starting OTC server...");
 
     let addr = SocketAddr::from((args.host, args.port));
 
-    // Load configuration
     let settings =
         Arc::new(
             Settings::load(&args.config_dir).map_err(|e| crate::Error::DatabaseInit {
@@ -102,11 +103,9 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
 
     info!("Initializing services...");
 
-    // Initialize API key store
     let api_key_store = Arc::new(ApiKeyStore::new(API_KEYS.clone()).await?);
 
-    // Initialize MM registry with 5-second validation timeout
-    let mm_registry = Arc::new(MMRegistry::new(Duration::from_secs(5)));
+    let mm_registry = Arc::new(MMRegistry::new());
 
     let swap_manager = Arc::new(SwapManager::new(
         db.clone(),
@@ -466,6 +465,23 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         tx.clone(),
         "1.0.0".to_string(), // Default protocol version
     );
+
+    let ping_registry = state.mm_registry.clone();
+    tokio::spawn(async move {
+        let ping_mm_id = mm_uuid;
+        let mut interval = tokio::time::interval(MM_PING_INTERVAL);
+        loop {
+            interval.tick().await;
+            if let Err(err) = ping_registry.send_ping(&ping_mm_id).await {
+                warn!(
+                    market_maker_id = %ping_mm_id,
+                    error = %err,
+                    "Stopping OTC keepalive pings"
+                );
+                break;
+            }
+        }
+    });
 
     let mm_id = mm_uuid.to_string();
 

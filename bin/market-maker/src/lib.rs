@@ -273,7 +273,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
 
     info!("Starting market maker with ID: {}", market_maker_id);
 
-    if let Some(addr) = args.metrics_listen_addr {  
+    if let Some(addr) = args.metrics_listen_addr {
         setup_metrics(&mut join_set, addr)?;
     }
 

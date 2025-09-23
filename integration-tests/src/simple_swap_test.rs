@@ -482,7 +482,6 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
 
     wait_for_swap_status(&client, otc_port, swap_id, "WaitingMMDepositInitiated").await;
 
-
     let _mm_restart_task_id = service_join_set.spawn(async move {
         run_market_maker(mm_args_clone)
             .await

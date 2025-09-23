@@ -40,16 +40,14 @@ pub struct MarketMakerConnection {
 pub struct MMRegistry {
     connections: Arc<DashMap<Uuid, MarketMakerConnection>>,
     pending_validations: Arc<DashMap<Uuid, oneshot::Sender<Result<bool>>>>,
-    validation_timeout: Duration,
 }
 
 impl MMRegistry {
     #[must_use]
-    pub fn new(validation_timeout: Duration) -> Self {
+    pub fn new() -> Self {
         Self {
             connections: Arc::new(DashMap::new()),
             pending_validations: Arc::new(DashMap::new()),
-            validation_timeout,
         }
     }
 
@@ -180,6 +178,37 @@ impl MMRegistry {
         }
     }
 
+    pub async fn send_ping(&self, market_maker_id: &Uuid) -> Result<()> {
+        let (protocol_version, sender) = {
+            let connection = self.connections.get(market_maker_id).ok_or_else(|| {
+                MMRegistryError::MarketMakerNotConnected {
+                    market_maker_id: market_maker_id.to_string(),
+                }
+            })?;
+
+            (
+                connection.protocol_version.clone(),
+                connection.sender.clone(),
+            )
+        };
+
+        let ping = ProtocolMessage {
+            version: protocol_version,
+            sequence: 0,
+            payload: MMRequest::Ping {
+                request_id: Uuid::new_v4(),
+                timestamp: utc::now(),
+            },
+        };
+
+        sender
+            .send(ping)
+            .await
+            .map_err(|e| MMRegistryError::MessageSendError { source: e })?;
+
+        Ok(())
+    }
+
     pub async fn validate_quote(
         &self,
         market_maker_id: &Uuid,
@@ -282,7 +311,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_unregister() {
-        let registry = MMRegistry::new(Duration::from_secs(5));
+        let registry = MMRegistry::new();
         let (tx, _rx) = mpsc::channel(10);
         let mm_id = Uuid::new_v4();
 
@@ -299,7 +328,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_validate_quote_not_connected() {
-        let registry = MMRegistry::new(Duration::from_secs(5));
+        let registry = MMRegistry::new();
         let (response_tx, response_rx) = oneshot::channel();
         let unknown_mm_id = Uuid::new_v4();
 
