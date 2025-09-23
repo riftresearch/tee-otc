@@ -152,6 +152,7 @@ configs:
         "editable": true,
         "fiscalYearStartMonth": 0,
         "graphTooltip": 1,
+        "id": 2,
         "links": [],
         "panels": [
           {
@@ -164,7 +165,52 @@ configs:
                 "color": {
                   "mode": "palette-classic"
                 },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
                 "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
                 "unit": "percent"
               },
               "overrides": []
@@ -190,15 +236,15 @@ configs:
             },
             "targets": [
               {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
                 "editorMode": "code",
                 "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"tee-.*\"}[5m])) * 100",
                 "legendFormat": "{{name}}",
                 "range": true,
-                "refId": "A",
-                "datasource": {
-                  "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
-                }
+                "refId": "A"
               }
             ],
             "title": "Container CPU Usage",
@@ -211,7 +257,56 @@ configs:
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "bytes"
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "decbytes"
               },
               "overrides": []
             },
@@ -224,6 +319,7 @@ configs:
             "id": 2,
             "options": {
               "legend": {
+                "calcs": [],
                 "displayMode": "list",
                 "placement": "right",
                 "showLegend": true
@@ -235,15 +331,15 @@ configs:
             },
             "targets": [
               {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
                 "editorMode": "code",
                 "expr": "max by (name) (container_memory_usage_bytes{name=~\"tee-.*\"})",
                 "legendFormat": "{{name}}",
                 "range": true,
-                "refId": "A",
-                "datasource": {
-                  "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
-                }
+                "refId": "A"
               }
             ],
             "title": "Container Memory Usage",
@@ -256,7 +352,56 @@ configs:
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "MBs"
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "Bps"
               },
               "overrides": []
             },
@@ -269,6 +414,7 @@ configs:
             "id": 4,
             "options": {
               "legend": {
+                "calcs": [],
                 "displayMode": "list",
                 "placement": "right",
                 "showLegend": true
@@ -280,26 +426,26 @@ configs:
             },
             "targets": [
               {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
                 "editorMode": "code",
                 "expr": "sum by (name) (rate(container_network_receive_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
                 "legendFormat": "RX {{name}}",
                 "range": true,
-                "refId": "A",
+                "refId": "A"
+              },
+              {
                 "datasource": {
                   "type": "prometheus",
                   "uid": "PBFA97CFB590B2093"
-                }
-              },
-              {
+                },
                 "editorMode": "code",
                 "expr": "sum by (name) (rate(container_network_transmit_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
                 "legendFormat": "TX {{name}}",
                 "range": true,
-                "refId": "B",
-                "datasource": {
-                  "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
-                }
+                "refId": "B"
               }
             ],
             "title": "Container Network I/O",
@@ -312,6 +458,55 @@ configs:
             },
             "fieldConfig": {
               "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
                 "unit": "percent"
               },
               "overrides": []
@@ -325,6 +520,7 @@ configs:
             "id": 5,
             "options": {
               "legend": {
+                "calcs": [],
                 "displayMode": "list",
                 "placement": "right",
                 "showLegend": true
@@ -336,15 +532,15 @@ configs:
             },
             "targets": [
               {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
                 "editorMode": "code",
                 "expr": "(1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))) * 100",
                 "legendFormat": "CPU {{instance}}",
                 "range": true,
-                "refId": "A",
-                "datasource": {
-                  "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
-                }
+                "refId": "A"
               }
             ],
             "title": "Host CPU Usage",
@@ -357,6 +553,55 @@ configs:
             },
             "fieldConfig": {
               "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
                 "unit": "percent"
               },
               "overrides": []
@@ -370,6 +615,7 @@ configs:
             "id": 6,
             "options": {
               "legend": {
+                "calcs": [],
                 "displayMode": "list",
                 "placement": "right",
                 "showLegend": true
@@ -381,15 +627,15 @@ configs:
             },
             "targets": [
               {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
                 "editorMode": "code",
                 "expr": "(1 - sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes)) * 100",
                 "legendFormat": "Host Memory",
                 "range": true,
-                "refId": "A",
-                "datasource": {
-                  "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
-                }
+                "refId": "A"
               }
             ],
             "title": "Host Memory Usage",
@@ -402,7 +648,55 @@ configs:
             },
             "fieldConfig": {
               "defaults": {
-                "unit": "bytes"
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green"
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "decbytes"
               },
               "overrides": []
             },
@@ -415,6 +709,7 @@ configs:
             "id": 7,
             "options": {
               "legend": {
+                "calcs": [],
                 "displayMode": "list",
                 "placement": "right",
                 "showLegend": true
@@ -431,30 +726,18 @@ configs:
                   "uid": "PBFA97CFB590B2093"
                 },
                 "editorMode": "code",
-                "expr": "sum(node_filesystem_size_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"})",
-                "legendFormat": "Size",
+                "expr": "sum(node_filesystem_size_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"})-sum(node_filesystem_free_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"})",
+                "legendFormat": "Used",
                 "range": true,
                 "refId": "A"
-              },
-              {
-                "datasource": {
-                  "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
-                },
-                "editorMode": "code",
-                "expr": "sum(node_filesystem_free_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"})",
-                "legendFormat": "Free",
-                "range": true,
-                "refId": "B"
               }
             ],
             "title": "Host Storage",
             "type": "timeseries"
           }
         ],
-        "refresh": "30s",
-        "schemaVersion": 38,
-        "style": "dark",
+        "refresh": "",
+        "schemaVersion": 39,
         "tags": [
           "monitoring"
         ],
@@ -467,9 +750,9 @@ configs:
         },
         "timepicker": {},
         "timezone": "",
-        "title": "TEE Monitoring",
-        "uid": "tee-monitoring",
-        "version": 1,
+        "title": "TEE Monitoring dev",
+        "uid": "tee-monitoring-dev",
+        "version": 4,
         "weekStart": ""
       }
 
