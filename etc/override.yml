@@ -1,0 +1,91 @@
+services:
+  token-indexer-postgres:
+    image: postgres:16-alpine
+    container_name: token-indexer-postgres
+    environment:
+      POSTGRES_USER: token_indexer_user
+      POSTGRES_PASSWORD: token_indexer_password
+      POSTGRES_DB: token_indexer_db
+    volumes: []
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U token_indexer_user -d token_indexer_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tee-network
+
+  devnet: 
+    container_name: devnet
+    depends_on:
+      token-indexer-postgres:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile_inline: |
+        FROM rust:1.88 AS builder
+        WORKDIR /app
+        COPY . .
+        RUN cargo build --release --bin devnet --exclude integration-tests --workspace
+
+        FROM debian:bookworm-slim
+        RUN apt-get update && apt-get install -y \
+            ca-certificates \
+            curl \
+            && rm -rf /var/lib/apt/lists/*
+          
+        RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+            apt-get install -y nodejs && \
+            npm install -g pnpm@9.14.4
+
+        RUN curl -fsSL https://github.com/foundry-rs/foundry/releases/download/v1.3.6/foundry_v1.3.6_linux_amd64.tar.gz | tar -xzf - -C /usr/local/bin
+          
+        WORKDIR /app
+        COPY --from=builder /app/ /app/
+        RUN cd evm-token-indexer && pnpm install && cd ..
+        CMD ["./target/release/devnet", "server"]
+    environment:
+      TOKEN_INDEXER_DATABASE_URL: postgres://token_indexer_user:token_indexer_password@token-indexer-postgres:5432/token_indexer_db
+    networks:
+      - tee-network
+    
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://devnet:50104/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  otc-server:
+    depends_on: !override
+      devnet:
+        condition: service_healthy
+    environment:
+      GRANT_SUDO: yes
+      DATABASE_URL: postgres://otc_user:otc_password@postgres:5432/otc_db
+      RUST_LOG: info 
+      EVM_RPC_URL: http://devnet:50101
+      UNTRUSTED_EVM_TOKEN_INDEXER_URL: http://devnet:50104
+      BITCOIN_RPC_URL: http://devnet:50102
+      BITCOIN_RPC_AUTH: bitcoind:bitcoind
+      ELECTRUM_HTTP_SERVER_URL: http://devnet:50103
+      CORS_DOMAIN: "*"
+      CHAINALYSIS_HOST: ~
+      CHAINALYSIS_TOKEN: ~
+      CONFIG_DIR: /app/config
+      DSTACK_SOCK_PATH: /var/run/dstack.sock
+    volumes: []
+
+  reth: !reset null 
+
+  lighthouse: !reset null 
+
+  bitcoin-core: !reset null 
+
+  postgres:
+    volumes: [] 
+
+  prometheus:
+    volumes: []
+
+  eth-jwt-generator:
+    volumes: []

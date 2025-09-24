@@ -2195,10 +2195,10 @@ dependencies = [
 [[package]]
 name = "corepc-node"
 version = "0.8.0"
-source = "git+https://github.com/alpinevm/corepc?rev=dc4809ee032b378097c37e73e2929ceb9ee62c54#dc4809ee032b378097c37e73e2929ceb9ee62c54"
+source = "git+https://github.com/alpinevm/corepc?rev=2b21b2bfeb4b4c8bc71fccba87d86054a648f242#2b21b2bfeb4b4c8bc71fccba87d86054a648f242"
 dependencies = [
  "anyhow",
- "bitcoin_hashes 0.14.0",
+ "bitcoin_hashes 0.13.0",
  "corepc-client",
  "flate2",
  "log",

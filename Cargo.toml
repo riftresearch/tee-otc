@@ -89,5 +89,5 @@ dstack-sdk = "0.1.0"
 opt-level = 3
 
 [patch.crates-io]
-corepc-node = { git = "https://github.com/alpinevm/corepc", rev = "dc4809ee032b378097c37e73e2929ceb9ee62c54" }
+corepc-node = { git = "https://github.com/alpinevm/corepc", rev = "2b21b2bfeb4b4c8bc71fccba87d86054a648f242" }
 sqlx-sqlite = { path = "sqlx-sqlite-shim" }

@@ -1,0 +1,4 @@
+include:
+  - path : 
+      - compose.phala.yml
+      - override.yml

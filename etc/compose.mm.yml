@@ -1,0 +1,146 @@
+include:
+  - ./config/market-maker/grafana-config.yml
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: mm-postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: mm_db
+    volumes:
+      - mm_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d mm_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mm-network
+
+  rift-market-maker:
+    container_name: market-maker
+    build:
+      context: ..
+      dockerfile_inline: |
+        FROM rust:1.88 AS builder
+        WORKDIR /app
+        COPY . .
+        RUN cargo build --release --bin market-maker --exclude integration-tests --workspace
+
+        FROM debian:bookworm-slim
+        RUN apt-get update && apt-get install -y \
+            ca-certificates \
+            && rm -rf /var/lib/apt/lists/*
+        WORKDIR /app
+        COPY --from=builder /app/target/release/market-maker /app/
+        CMD ["./market-maker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      RUST_LOG: info
+      METRICS_LISTEN_ADDR: 0.0.0.0:9000
+      MM_TAG: ${MM_TAG}
+      MM_ID: ${MM_ID}
+      MM_API_SECRET: ${MM_API_SECRET}
+      OTC_WS_URL: ${OTC_WS_URL}
+      RFQ_WS_URL: ${RFQ_WS_URL}
+      BITCOIN_WALLET_DB_PATH: /app/bitcoin-wallet-db/wallet.sqlite
+      BITCOIN_WALLET_DESCRIPTOR: ${BITCOIN_WALLET_DESCRIPTOR}
+      BITCOIN_WALLET_NETWORK: bitcoin
+      BITCOIN_WALLET_ESPLORA_URL: ${BITCOIN_WALLET_ESPLORA_URL}
+      ETHEREUM_WALLET_PRIVATE_KEY: ${ETHEREUM_WALLET_PRIVATE_KEY}
+      ETHEREUM_RPC_WS_URL: ${ETHEREUM_RPC_WS_URL}
+      TRADE_SPREAD_BPS: ${TRADE_SPREAD_BPS}
+      FEE_SAFETY_MULTIPLIER: ${FEE_SAFETY_MULTIPLIER}
+      BALANCE_UTILIZATION_THRESHOLD_BPS: ${BALANCE_UTILIZATION_THRESHOLD_BPS}
+      MM_DATABASE_URL: postgres://user:pass@postgres:5432/mm_db
+      COINBASE_EXCHANGE_API_KEY: ${COINBASE_EXCHANGE_API_KEY}
+      COINBASE_EXCHANGE_API_PASSPHRASE: ${COINBASE_EXCHANGE_API_PASSPHRASE}
+      COINBASE_EXCHANGE_API_SECRET: ${COINBASE_EXCHANGE_API_SECRET}
+      COINBASE_EXCHANGE_API_BASE_URL: https://api.exchange.coinbase.com
+      INVENTORY_TARGET_RATIO_BPS: ${INVENTORY_TARGET_RATIO_BPS}
+      REBALANCE_TOLERANCE_BPS: ${REBALANCE_TOLERANCE_BPS}
+      AUTO_MANAGE_INVENTORY: ${AUTO_MANAGE_INVENTORY}
+
+    networks:
+      - mm-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - market_maker_bitcoin_wallet_db_data:/app/bitcoin-wallet-db
+    platform: linux/amd64
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: mm-node-exporter
+    restart: unless-stopped
+    pid: host
+    command:
+      - "--path.rootfs=/rootfs"
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    volumes:
+      - /:/rootfs:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "9100:9100"
+    networks:
+      - mm-network
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: mm-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    depends_on:
+      node-exporter:
+        condition: service_started
+    volumes:
+      - mm_prometheus_data:/prometheus
+    configs:
+      - source: prometheus-config-mm
+        target: /etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    networks:
+      - mm-network
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: mm-grafana
+    restart: unless-stopped
+    ports:
+      - "3010:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: a02b289e6fed06928e0e5cf8ea2ab5e1b49a663781bae81a1554d937c1e0d1ea
+    configs:
+      - source: grafana-datasource-mm
+        target: /etc/grafana/provisioning/datasources/prometheus.yml
+      - source: grafana-dashboard-provider-mm
+        target: /etc/grafana/provisioning/dashboards/provider.yml
+      - source: grafana-node-dashboard-mm
+        target: /etc/grafana/provisioning/dashboards/mm-system-metrics.json
+    networks:
+      - mm-network
+
+networks:
+  mm-network:
+    driver: bridge
+
+volumes:
+  mm_postgres_data:
+  market_maker_bitcoin_wallet_db_data:
+  mm_prometheus_data:

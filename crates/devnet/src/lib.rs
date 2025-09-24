@@ -517,6 +517,7 @@ impl RiftDevnetBuilder {
             deploy_mode,
             devnet_cache.clone(),
             self.token_indexer_database_url.clone(),
+            self.interactive,
         )
         .await
         .map_err(|e| eyre::eyre!("[devnet builder] Failed to setup Ethereum devnet: {}", e))?;

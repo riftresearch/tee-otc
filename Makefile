@@ -13,7 +13,7 @@ help: ## Show this help message
 
 start-db: ## Start development database
 	@echo "Starting PostgreSQL..."
-	@docker compose -f compose.test-db.yml up -d
+	@docker compose -f etc/compose.test-db.yml up -d
 	@echo "Waiting for database to be ready..."
 	@until docker exec otc_dev pg_isready -U postgres -d otc_dev >/dev/null 2>&1; do \
 		sleep 0.1; \
@@ -21,10 +21,10 @@ start-db: ## Start development database
 	@echo "Database ready at: $(DATABASE_URL)"
 
 stop-db: ## Stop development database
-	@docker compose -f compose.test-db.yml down
+	@docker compose -f etc/compose.test-db.yml down
 
 clean-db: ## Stop and remove database volumes
-	@docker compose -f compose.test-db.yml down -v
+	@docker compose -f etc/compose.test-db.yml down -v
 
 test-clean: build-test | cache-devnet ## Same as test but will clean up resources on success/failure
 	@bash -c 'set -e; \
@@ -50,10 +50,10 @@ docker-release: ## Build and push the OTC server Docker image
 	GIT_BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
 	VERSION_TAG="$${GIT_BRANCH}-$${GIT_COMMIT}"; \
 	echo "Building Docker image for version: $${VERSION_TAG}"; \
-	docker build -f Dockerfile.otc -t riftresearch/otc-server:$${VERSION_TAG} .; \
+	docker build -f etc/Dockerfile.otc -t riftresearch/otc-server:$${VERSION_TAG} .; \
 	docker tag riftresearch/otc-server:$${VERSION_TAG} riftresearch/otc-server:latest; \
 	docker push riftresearch/otc-server:$${VERSION_TAG}; \
 	docker push riftresearch/otc-server:latest
 
 phala-deploy:
-	phala deploy --uuid 44961b39-df94-41ce-a262-8246519a3f18 -c compose.phala.yml -e .env.otc
+	phala deploy --uuid 44961b39-df94-41ce-a262-8246519a3f18 -c etc/compose.phala.yml -e .env.otc
