@@ -688,7 +688,8 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green"
+                      "color": "green",
+                      "value": null
                     },
                     {
                       "color": "red",
@@ -726,7 +727,7 @@ configs:
                   "uid": "PBFA97CFB590B2093"
                 },
                 "editorMode": "code",
-                "expr": "sum(node_filesystem_size_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"})-sum(node_filesystem_free_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"})",
+                "expr": "node_filesystem_size_bytes{\n  mountpoint=\"/var/volatile/dstack/persistent\",\n  fstype!~\"tmpfs|overlay\"\n}\n-\nnode_filesystem_free_bytes{\n  mountpoint=\"/var/volatile/dstack/persistent\",\n  fstype!~\"tmpfs|overlay\"\n}",
                 "legendFormat": "Used",
                 "range": true,
                 "refId": "A"
@@ -736,7 +737,6 @@ configs:
             "type": "timeseries"
           }
         ],
-        "refresh": "",
         "schemaVersion": 39,
         "tags": [
           "monitoring"
@@ -752,10 +752,10 @@ configs:
         "timezone": "",
         "title": "TEE Monitoring dev",
         "uid": "tee-monitoring-dev",
-        "version": 4,
+        "version": 5,
         "weekStart": ""
-      }
-
+      } 
+          
 services:
   eth-jwt-generator:
     container_name: tee-eth-jwt-generator
