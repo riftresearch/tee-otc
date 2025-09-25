@@ -35,7 +35,7 @@ impl TokenIndexerInstance {
 
         let ponder_port = if interactive {
             50104_u16
-        } else { 
+        } else {
             let listener = TcpListener::bind((HOST, 0))
                 .await
                 .expect("Should be able to bind to port");

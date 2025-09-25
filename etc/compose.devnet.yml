@@ -1,4 +1,3 @@
 include:
-  - path : 
-      - compose.phala.yml
-      - override.yml
+    - compose.phala.yml
+    - compose.mm.yml

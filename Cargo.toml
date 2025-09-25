@@ -78,8 +78,8 @@ bdk_wallet = { version = "2.0.0", features=["rusqlite"] }
 bdk_esplora = { version = "0.22.0", features=["tokio","async"]}
 jsonwebtoken = {version="9.3.1", features=["use_pem"]}
 p256 = { version = "0.13", features = ["pem", "pkcs8"] }
-metrics = "0.24.2"
-metrics-exporter-prometheus = "0.15"
+metrics = "0.23.1"
+metrics-exporter-prometheus = "0.15.3"
 hmac = "0.12.1"
 base64 = "0.22.1"
 mock_instant = "0.6.0"

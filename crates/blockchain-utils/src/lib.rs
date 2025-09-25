@@ -40,3 +40,28 @@ pub fn init_logger(log_level: &str) -> Result<(), InitLoggerError> {
 
     Ok(())
 }
+
+/// Awaits the first shutdown signal (SIGTERM or SIGINT) and then returns.
+pub async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("failed to install handler for SIGTERM");
+        let mut sigint =
+            signal(SignalKind::interrupt()).expect("failed to install handler for SIGINT");
+
+        tokio::select! {
+            _ = sigterm.recv() => {},
+            _ = sigint.recv() => {},
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    }
+}

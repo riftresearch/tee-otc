@@ -1758,6 +1758,7 @@ name = "bitcoin-wallet-utils"
 version = "0.1.0"
 dependencies = [
  "argon2",
+ "bitcoin",
  "blockchain-utils",
  "clap",
  "dialoguer",
@@ -2198,7 +2199,7 @@ version = "0.8.0"
 source = "git+https://github.com/alpinevm/corepc?rev=2b21b2bfeb4b4c8bc71fccba87d86054a648f242#2b21b2bfeb4b4c8bc71fccba87d86054a648f242"
 dependencies = [
  "anyhow",
- "bitcoin_hashes 0.13.0",
+ "bitcoin_hashes 0.14.0",
  "corepc-client",
  "flate2",
  "log",
@@ -3727,6 +3728,7 @@ dependencies = [
  "eip3009-erc20-contract",
  "evm-token-indexer-client",
  "market-maker",
+ "metrics",
  "mock_instant",
  "otc-chains",
  "otc-models",
@@ -4068,7 +4070,7 @@ dependencies = [
  "futures-util",
  "hmac",
  "jsonwebtoken",
- "metrics 0.24.2",
+ "metrics",
  "metrics-exporter-prometheus",
  "otc-chains",
  "otc-models",
@@ -4146,16 +4148,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "metrics"
-version = "0.24.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25dea7ac8057892855ec285c440160265225438c3c45072613c25a4b26e98ef5"
-dependencies = [
- "ahash",
- "portable-atomic",
-]
-
-[[package]]
 name = "metrics-exporter-prometheus"
 version = "0.15.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4168,7 +4160,7 @@ dependencies = [
  "hyper-util",
  "indexmap 2.11.1",
  "ipnet",
- "metrics 0.23.1",
+ "metrics",
  "metrics-util",
  "quanta",
  "thiserror 1.0.69",
@@ -4185,7 +4177,7 @@ dependencies = [
  "crossbeam-epoch",
  "crossbeam-utils",
  "hashbrown 0.14.5",
- "metrics 0.23.1",
+ "metrics",
  "num_cpus",
  "quanta",
  "sketches-ddsketch",
@@ -5265,6 +5257,7 @@ version = "0.1.0"
 dependencies = [
  "alloy 1.0.30",
  "axum 0.7.9",
+ "blockchain-utils",
  "chainalysis-address-screener",
  "chrono",
  "clap",

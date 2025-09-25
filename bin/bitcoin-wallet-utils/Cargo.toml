@@ -6,6 +6,11 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[[bin]]
+name = "rand-bitcoin-wallet"
+path = "src/main.rs"
+
+
 [dependencies]
 otc-models = { workspace = true }
 clap = { workspace = true }
@@ -18,3 +23,4 @@ snafu = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 blockchain-utils = { workspace = true }
+bitcoin  = {workspace=true}

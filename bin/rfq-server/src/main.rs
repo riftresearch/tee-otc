@@ -1,3 +1,4 @@
+use blockchain_utils::shutdown_signal;
 use clap::Parser;
 use rfq_server::{server::run_server, Result, RfqServerArgs};
 use tracing_subscriber::EnvFilter;
@@ -13,5 +14,11 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    run_server(args).await
+    tokio::select! {
+        result = run_server(args) => result,
+        _ = shutdown_signal() => {
+            tracing::info!("Shutdown signal received; stopping rfq-server");
+            Ok(())
+        }
+    }
 }

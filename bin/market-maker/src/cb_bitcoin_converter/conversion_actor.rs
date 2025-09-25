@@ -79,6 +79,7 @@ pub async fn run_rebalancer(
     btc_wallet: Arc<dyn Wallet>,
     evm_wallet: Arc<dyn Wallet>,
     params: BandsParams,
+    execute_rebalance: bool,
 ) -> Result<()> {
     let btc_token = TokenIdentifier::Native;
     let cbbtc_token = TokenIdentifier::Address(CB_BTC_CONTRACT_ADDRESS.to_string());
@@ -99,10 +100,10 @@ pub async fn run_rebalancer(
         let total = btc.saturating_add(cbbtc);
 
         // --- metrics: snapshot every loop, even if no rebalance ---
-        counter!("mm.loop_iterations_total").increment(1);
-        gauge!("mm.balance_sats", "asset" => "btc").set(btc as f64);
-        gauge!("mm.balance_sats", "asset" => "cbbtc").set(cbbtc as f64);
-        gauge!("mm.total_sats").set(total as f64);
+        counter!("mm_loop_iterations_total").increment(1);
+        gauge!("mm_balance_sats", "asset" => "btc").set(btc as f64);
+        gauge!("mm_balance_sats", "asset" => "cbbtc").set(cbbtc as f64);
+        gauge!("mm_total_sats").set(total as f64);
 
         // Native vs deposit key balance metrics
         let btc_native = btc_balance.native_balance.to::<u64>();
@@ -110,17 +111,17 @@ pub async fn run_rebalancer(
         let cbbtc_native = cbbtc_balance.native_balance.to::<u64>();
         let cbbtc_deposit_key = cbbtc_balance.deposit_key_balance.to::<u64>();
 
-        gauge!("mm.native_balance_sats", "asset" => "btc").set(btc_native as f64);
-        gauge!("mm.native_balance_sats", "asset" => "cbbtc").set(cbbtc_native as f64);
-        gauge!("mm.deposit_key_balance_sats", "asset" => "btc").set(btc_deposit_key as f64);
-        gauge!("mm.deposit_key_balance_sats", "asset" => "cbbtc").set(cbbtc_deposit_key as f64);
+        gauge!("mm_native_balance_sats", "asset" => "btc").set(btc_native as f64);
+        gauge!("mm_native_balance_sats", "asset" => "cbbtc").set(cbbtc_native as f64);
+        gauge!("mm_deposit_key_balance_sats", "asset" => "btc").set(btc_deposit_key as f64);
+        gauge!("mm_deposit_key_balance_sats", "asset" => "cbbtc").set(cbbtc_deposit_key as f64);
 
         debug!(
             "inventory: btc={} sats, cbbtc={} sats, total={}",
             btc, cbbtc, total
         );
         if total == 0 {
-            gauge!("mm.inventory_ratio_bps").set(0.0);
+            gauge!("mm_inventory_ratio_bps").set(0.0);
             sleep(params.poll_interval).await;
             continue;
         }
@@ -150,7 +151,7 @@ pub async fn run_rebalancer(
         let hi = (params.target_bps + params.band_width_bps).min(BPS_DENOM);
 
         let r_bps = ratio_bps(btc, cbbtc);
-        gauge!("mm.inventory_ratio_bps").set(r_bps as f64);
+        gauge!("mm_inventory_ratio_bps").set(r_bps as f64);
 
         let side = if r_bps < lo {
             Some(Side::BtcToCbbtc) // below lower band → need more cBBTC
@@ -161,48 +162,64 @@ pub async fn run_rebalancer(
         };
 
         if let Some(side) = side {
-            // snap-to-target trade size (in sats)
-            let trade_sats = sats_to_target(total, params.target_bps, r_bps);
-            if trade_sats == 0 {
-                sleep(params.poll_interval).await;
-                continue;
-            }
+            if execute_rebalance {
+                // snap-to-target trade size (in sats)
+                let trade_sats = sats_to_target(total, params.target_bps, r_bps);
+                if trade_sats == 0 {
+                    sleep(params.poll_interval).await;
+                    continue;
+                }
 
-            match side {
-                Side::BtcToCbbtc => {
-                    let recv = evm_wallet.receive_address(&cbbtc_token);
-                    info!(
-                        "rebalance: BTC -> cBBTC | r_bps={} band=[{},{}] target={} sats={}",
-                        r_bps, lo, hi, params.target_bps, trade_sats
-                    );
-                    counter!("mm.rebalances_total", "direction" => "btc_to_cbbtc").increment(1);
-                    gauge!("mm.trade_sats", "direction" => "btc_to_cbbtc").set(trade_sats as f64);
+                match side {
+                    Side::BtcToCbbtc => {
+                        let recv = evm_wallet.receive_address(&cbbtc_token);
+                        info!(
+                            "rebalance: BTC -> cBBTC | r_bps={} band=[{},{}] target={} sats={}",
+                            r_bps, lo, hi, params.target_bps, trade_sats
+                        );
+                        counter!("mm_rebalances_total", "direction" => "btc_to_cbbtc").increment(1);
+                        gauge!("mm_trade_sats", "direction" => "btc_to_cbbtc")
+                            .set(trade_sats as f64);
 
-                    let t0 = Instant::now();
-                    convert_btc_to_cbbtc(&coinbase_client, btc_wallet.as_ref(), trade_sats, &recv)
+                        let t0 = Instant::now();
+                        convert_btc_to_cbbtc(
+                            &coinbase_client,
+                            btc_wallet.as_ref(),
+                            trade_sats,
+                            &recv,
+                        )
                         .await
                         .context(ConvertSnafu)?;
-                    let secs = t0.elapsed().as_secs_f64();
-                    histogram!("mm.convert_duration_seconds", "direction" => "btc_to_cbbtc")
-                        .record(secs);
-                }
-                Side::CbbtcToBtc => {
-                    let recv = btc_wallet.receive_address(&btc_token);
-                    info!(
-                        "rebalance: cBBTC -> BTC | r_bps={} band=[{},{}] target={} sats={}",
-                        r_bps, lo, hi, params.target_bps, trade_sats
-                    );
-                    counter!("mm.rebalances_total", "direction" => "cbbtc_to_btc").increment(1);
-                    gauge!("mm.trade_sats", "direction" => "cbbtc_to_btc").set(trade_sats as f64);
+                        let secs = t0.elapsed().as_secs_f64();
+                        histogram!("mm_convert_duration_seconds", "direction" => "btc_to_cbbtc")
+                            .record(secs);
+                    }
+                    Side::CbbtcToBtc => {
+                        let recv = btc_wallet.receive_address(&btc_token);
+                        info!(
+                            "rebalance: cBBTC -> BTC | r_bps={} band=[{},{}] target={} sats={}",
+                            r_bps, lo, hi, params.target_bps, trade_sats
+                        );
+                        counter!("mm_rebalances_total", "direction" => "cbbtc_to_btc").increment(1);
+                        gauge!("mm_trade_sats", "direction" => "cbbtc_to_btc")
+                            .set(trade_sats as f64);
 
-                    let t0 = Instant::now();
-                    convert_cbbtc_to_btc(&coinbase_client, evm_wallet.as_ref(), trade_sats, &recv)
+                        let t0 = Instant::now();
+                        convert_cbbtc_to_btc(
+                            &coinbase_client,
+                            evm_wallet.as_ref(),
+                            trade_sats,
+                            &recv,
+                        )
                         .await
                         .context(ConvertSnafu)?;
-                    let secs = t0.elapsed().as_secs_f64();
-                    histogram!("mm.convert_duration_seconds", "direction" => "cbbtc_to_btc")
-                        .record(secs);
+                        let secs = t0.elapsed().as_secs_f64();
+                        histogram!("mm_convert_duration_seconds", "direction" => "cbbtc_to_btc")
+                            .record(secs);
+                    }
                 }
+            } else {
+                info!("auto manage inventory is disabled, skipping rebalance...");
             }
         } else {
             debug!("inside band: r_bps={} ∈ [{}, {}]; no trade", r_bps, lo, hi);

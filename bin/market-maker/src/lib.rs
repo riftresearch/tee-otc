@@ -19,7 +19,7 @@ mod wrapped_bitcoin_quoter;
 pub use wallet::WalletError;
 pub use wallet::WalletResult;
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, sync::OnceLock, time::Duration};
 
 use alloy::{providers::Provider, signers::local::PrivateKeySigner};
 use bdk_wallet::bitcoin;
@@ -274,6 +274,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     info!("Starting market maker with ID: {}", market_maker_id);
 
     if let Some(addr) = args.metrics_listen_addr {
+        info!("Setting up metrics listener on {}", addr);
         setup_metrics(&mut join_set, addr)?;
     }
 
@@ -404,39 +405,71 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         })
     });
 
-    if args.auto_manage_inventory {
-        let coinbase_client = CoinbaseClient::new(
-            args.coinbase_exchange_api_base_url,
-            args.coinbase_exchange_api_key,
-            args.coinbase_exchange_api_passphrase,
-            args.coinbase_exchange_api_secret,
-        )
-        .context(CoinbaseClientSnafu)?;
+    let coinbase_client = CoinbaseClient::new(
+        args.coinbase_exchange_api_base_url,
+        args.coinbase_exchange_api_key,
+        args.coinbase_exchange_api_passphrase,
+        args.coinbase_exchange_api_secret,
+    )
+    .context(CoinbaseClientSnafu)?;
 
-        let conversion_actor = run_rebalancer(
-            coinbase_client,
-            bitcoin_wallet.clone(),
-            evm_wallet.clone(),
-            BandsParams {
-                target_bps: args.inventory_target_ratio_bps,
-                band_width_bps: args.rebalance_tolerance_bps,
-                poll_interval: Duration::from_secs(60),
-            },
-        );
+    let conversion_actor = run_rebalancer(
+        coinbase_client,
+        bitcoin_wallet.clone(),
+        evm_wallet.clone(),
+        BandsParams {
+            target_bps: args.inventory_target_ratio_bps,
+            band_width_bps: args.rebalance_tolerance_bps,
+            poll_interval: Duration::from_secs(60),
+        },
+        args.auto_manage_inventory,
+    );
 
-        join_set.spawn(async move { conversion_actor.await.context(ConversionActorSnafu) });
-    }
+    join_set.spawn(async move { conversion_actor.await.context(ConversionActorSnafu) });
 
     handle_background_thread_result(join_set.join_next().await).context(BackgroundThreadSnafu)?;
 
     Ok(())
 }
 
-fn setup_metrics(join_set: &mut JoinSet<Result<()>>, addr: SocketAddr) -> Result<()> {
+static PROMETHEUS_HANDLE: OnceLock<Arc<PrometheusHandle>> = OnceLock::new();
+
+pub fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
+    if let Some(handle) = PROMETHEUS_HANDLE.get() {
+        return Ok(handle.clone());
+    }
+
     let handle = PrometheusBuilder::new()
         .install_recorder()
         .context(MetricsRecorderSnafu)?;
     let shared_handle = Arc::new(handle);
+
+    metrics::describe_gauge!(
+        "mm_metrics_exporter_up",
+        "Set to 1 when the market-maker metrics recorder is installed."
+    );
+    metrics::gauge!("mm_metrics_exporter_up").set(1.0);
+
+    if PROMETHEUS_HANDLE.set(shared_handle.clone()).is_err() {
+        if let Some(existing) = PROMETHEUS_HANDLE.get() {
+            return Ok(existing.clone());
+        }
+    }
+
+    Ok(shared_handle)
+}
+
+fn setup_metrics(join_set: &mut JoinSet<Result<()>>, addr: SocketAddr) -> Result<()> {
+    let shared_handle = install_metrics_recorder()?;
+
+    let upkeep_handle = shared_handle.clone();
+    join_set.spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            ticker.tick().await;
+            upkeep_handle.run_upkeep();
+        }
+    });
 
     let metrics_state = shared_handle.clone();
 
