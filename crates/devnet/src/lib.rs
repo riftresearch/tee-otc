@@ -540,7 +540,7 @@ impl RiftDevnetBuilder {
             use alloy::primitives::Address;
             use std::str::FromStr;
             let address = Address::from_str(&addr_str)
-                .map_err(|e| eyre::eyre!("Failed to parse EVM address: {}", e))?; // TODO: check if this is correct
+                .map_err(|e| eyre::eyre!("Failed to parse EVM address: {}", e))?;
 
             // ~10 ETH
             ethereum_devnet

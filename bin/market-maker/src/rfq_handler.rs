@@ -65,6 +65,7 @@ impl RFQMessageHandler {
                         .wallet_manager
                         .get(quote_with_fees.quote.to.currency.chain);
 
+                    // TODO: solution for getting balance more efficiently?
                     let validated_rfq_result = if let Some(wallet) = wallet {
                         let balance = wallet
                             .balance(&quote_with_fees.quote.to.currency.token)
@@ -105,6 +106,7 @@ impl RFQMessageHandler {
                     RFQResult::InvalidRequest(_) => None,
                 };
 
+                // TODO: defer the execution of the following to a seperate async task to prevent blocking
                 if let Some(quote) = quote {
                     info!(
                         "Generated quote: id={}, from_chain={:?}, from_amount={}, to_chain={:?}, to_amount={}",

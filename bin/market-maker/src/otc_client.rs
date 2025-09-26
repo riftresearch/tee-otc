@@ -142,8 +142,7 @@ impl OtcFillClient {
                         continue;
                     }
 
-                    // TODO: Do we want to support concurrent messaging?
-                    // Otherwise, try to parse as a protocol message
+                    // TODO: Do we want to support concurrent messaging from a market maker?
                     match serde_json::from_str::<ProtocolMessage<MMRequest>>(&text) {
                         Ok(protocol_msg) => {
                             if let Some(response) = self.handler.handle_request(&protocol_msg).await

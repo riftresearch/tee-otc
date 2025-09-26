@@ -78,8 +78,8 @@ impl OTCMessageHandler {
                 };
 
                 let (accepted, rejection_reason) = if quote_exists {
-                    self.strategy
-                        .validate_quote(quote_id, quote_hash, user_destination_address)
+                    // TODO: Ensure quote is valid (not timed out) here
+                    (true, Some("Blindly accepting known quote".to_string()))
                 } else {
                     (false, Some("Quote not found in database".to_string()))
                 };
@@ -93,7 +93,7 @@ impl OTCMessageHandler {
                     request_id: *request_id,
                     quote_id: *quote_id,
                     accepted,
-                    rejection_reason,
+                    rejection_reason: rejection_reason.clone(),
                     timestamp: utc::now(),
                 };
 
@@ -113,16 +113,12 @@ impl OTCMessageHandler {
                 ..
             } => {
                 info!(
-                    "User deposited for swap {}: to address {}",
-                    swap_id, deposit_address
+                    message = "ACK User Deposit",
+                    swap_id = %swap_id,
+                    user_tx_hash = user_tx_hash
                 );
-                info!("Quote ID: {}", quote_id);
-                info!("User tx hash: {}", user_tx_hash);
 
-                warn!(
-                    "TODO: implement locking up funds for this user {}",
-                    deposit_address
-                );
+                // TODO: Lock up funds for confirmed user deposits
 
                 None // For now, we don't respond to this
             }
@@ -137,7 +133,7 @@ impl OTCMessageHandler {
                 ..
             } => {
                 info!(
-                    message = "User deposit confirmed notice from OTC server",
+                    message = "Making payment",
                     swap_id = swap_id.to_string(),
                     quote_id = quote_id.to_string(),
                 );
@@ -159,7 +155,6 @@ impl OTCMessageHandler {
                     response = ?response,
                 );
 
-                // TODO: Implement payment manager
                 Some(ProtocolMessage {
                     version: msg.version.clone(),
                     sequence: msg.sequence + 1,

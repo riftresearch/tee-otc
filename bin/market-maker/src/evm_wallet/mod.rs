@@ -182,7 +182,6 @@ impl Wallet for EVMWallet {
             .map_err(|e| WalletError::TransactionCreationFailed {
                 reason: e.to_string(),
             })?;
-        // we need a method to get some erc20 calldata
         match broadcast_result {
             transaction_broadcaster::TransactionExecutionResult::Success(tx_receipt) => {
                 info!("Payment created for swap [evm_wallet] {tx_receipt:?}");
