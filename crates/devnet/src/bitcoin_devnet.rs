@@ -71,6 +71,8 @@ impl BitcoinDevnet {
         if fixed_esplora_url {
             conf.bind = Some(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 50102_u16));
             conf.args.push("-rpcauth=bitcoind:cccd5d7fd36e55c1b8576b8077dc1b83$60b5676a09f8518dcb4574838fb86f37700cd690d99bd2fdc2ea2bf2ab80ead6");
+            conf.args.push("-rpcbind=0.0.0.0");
+            conf.args.push("-rpcallowip=0.0.0.0/0");
         }
 
         let bitcoin_datadir = if let Some(devnet_cache) = devnet_cache.clone() {

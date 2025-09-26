@@ -42,7 +42,7 @@ configs:
             path: /etc/grafana/provisioning/dashboards
 
   grafana-node-dashboard-mm:
-    content: |
+    content: | 
       {
         "annotations": {
           "list": [
@@ -65,6 +65,179 @@ configs:
         "graphTooltip": 1,
         "links": [],
         "panels": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 40,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "normal"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "none"
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "cbbtc-native"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#0052ff",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "cbbtc-cum-vaults"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#4986ff",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "btc-native"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#f09200",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "btc-cum-vaults"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#f6b064",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            "gridPos": {
+              "h": 13,
+              "w": 24,
+              "x": 0,
+              "y": 0
+            },
+            "id": 4,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "name": "Prometheus",
+                  "type": "prometheus"
+                },
+                "editorMode": "builder",
+                "expr": "mm_deposit_key_balance_sats{instance=\"market-maker:9000\"}",
+                "legendFormat": "{{asset}}-cum-vaults",
+                "range": true,
+                "refId": "A"
+              },
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "disableTextWrap": false,
+                "editorMode": "code",
+                "expr": "mm_native_balance_sats{instance=\"market-maker:9000\"}",
+                "fullMetaSearch": false,
+                "hide": false,
+                "includeNullMetadata": true,
+                "instant": false,
+                "legendFormat": "{{asset}}-native",
+                "range": true,
+                "refId": "B",
+                "useBackend": false
+              }
+            ],
+            "title": "Inventory Balance (Sats)",
+            "type": "timeseries"
+          },
           {
             "datasource": {
               "name": "Prometheus",
@@ -126,10 +299,10 @@ configs:
               "overrides": []
             },
             "gridPos": {
-              "h": 8,
-              "w": 24,
+              "h": 7,
+              "w": 7,
               "x": 0,
-              "y": 0
+              "y": 13
             },
             "id": 1,
             "options": {
@@ -221,10 +394,10 @@ configs:
               "overrides": []
             },
             "gridPos": {
-              "h": 8,
-              "w": 24,
-              "x": 0,
-              "y": 8
+              "h": 7,
+              "w": 9,
+              "x": 7,
+              "y": 13
             },
             "id": 2,
             "options": {
@@ -316,10 +489,10 @@ configs:
               "overrides": []
             },
             "gridPos": {
-              "h": 8,
-              "w": 24,
-              "x": 0,
-              "y": 16
+              "h": 7,
+              "w": 8,
+              "x": 16,
+              "y": 13
             },
             "id": 3,
             "options": {
@@ -349,104 +522,9 @@ configs:
             ],
             "title": "Disk Usage by Mount",
             "type": "timeseries"
-          },
-          {
-            "datasource": {
-              "name": "Prometheus",
-              "type": "prometheus"
-            },
-            "fieldConfig": {
-              "defaults": {
-                "color": {
-                  "mode": "palette-classic"
-                },
-                "custom": {
-                  "axisBorderShow": false,
-                  "axisCenteredZero": false,
-                  "axisColorMode": "text",
-                  "axisLabel": "",
-                  "axisPlacement": "auto",
-                  "barAlignment": 0,
-                  "drawStyle": "line",
-                  "fillOpacity": 0,
-                  "gradientMode": "none",
-                  "hideFrom": {
-                    "legend": false,
-                    "tooltip": false,
-                    "viz": false
-                  },
-                  "insertNulls": false,
-                  "lineInterpolation": "linear",
-                  "lineWidth": 1,
-                  "pointSize": 5,
-                  "scaleDistribution": {
-                    "type": "linear"
-                  },
-                  "showPoints": "auto",
-                  "spanNulls": false,
-                  "stacking": {
-                    "group": "A",
-                    "mode": "none"
-                  },
-                  "thresholdsStyle": {
-                    "mode": "off"
-                  }
-                },
-                "mappings": [],
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "red",
-                      "value": 80
-                    }
-                  ]
-                },
-                "unit": "currencyBTC"
-              },
-              "overrides": []
-            },
-            "gridPos": {
-              "h": 8,
-              "w": 24,
-              "x": 0,
-              "y": 24
-            },
-            "id": 4,
-            "options": {
-              "legend": {
-                "calcs": [],
-                "displayMode": "list",
-                "placement": "right",
-                "showLegend": true
-              },
-              "tooltip": {
-                "mode": "multi",
-                "sort": "none"
-              }
-            },
-            "targets": [
-              {
-                "datasource": {
-                  "name": "Prometheus",
-                  "type": "prometheus"
-                },
-                "editorMode": "code",
-                "expr": "mm_balance_sats / 1e8",
-                "legendFormat": "{{asset}}",
-                "range": true,
-                "refId": "A"
-              }
-            ],
-            "title": "Inventory Balance (BTC)",
-            "type": "timeseries"
           }
         ],
-        "refresh": "30s",
+        "refresh": "",
         "schemaVersion": 39,
         "tags": [
           "monitoring"
@@ -464,7 +542,8 @@ configs:
         "uid": "mm-system-metrics",
         "version": 1,
         "weekStart": ""
-      }
+      } 
+
 
 
 services:
@@ -490,12 +569,25 @@ services:
     build:
       context: ..
       dockerfile_inline: |
-        FROM rust:1.88 AS builder
+        FROM rust:1.88 AS chef
+        RUN cargo install cargo-chef 
         WORKDIR /app
+
+        FROM chef AS planner
+        COPY . .
+        RUN cargo chef prepare  --recipe-path recipe.json
+
+        FROM chef AS builder
+        COPY --from=planner /app/recipe.json recipe.json
+        # Copy the sqlx-sqlite-shim directory which is needed for the path dependency
+        COPY --from=planner /app/sqlx-sqlite-shim ./sqlx-sqlite-shim
+        # Build dependencies - this is the caching Docker layer!
+        RUN cargo chef cook --release --recipe-path recipe.json
+        # Build application
         COPY . .
         RUN cargo build --release --bin market-maker --exclude integration-tests --workspace
 
-        FROM debian:bookworm-slim
+        FROM debian:bookworm-slim AS runtime
         RUN apt-get update && apt-get install -y \
             ca-certificates \
             && rm -rf /var/lib/apt/lists/*

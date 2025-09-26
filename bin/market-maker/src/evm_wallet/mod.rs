@@ -22,7 +22,7 @@ use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
 use snafu::location;
 use tokio::task::JoinSet;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::{
     deposit_key_storage::{Deposit, DepositKeyStorage, DepositKeyStorageTrait, FillStatus},
@@ -412,7 +412,7 @@ async fn create_evm_transfer_transaction(
 
             let executions = [erc20_funding_executions, payment_executions].concat();
 
-            println!("executions: {executions:?}");
+            debug!("executions: {executions:?}");
 
             let delegator_contract = EIP7702DelegatorInstance::new(
                 Address::from_str(EIP7702_DELEGATOR_CROSSCHAIN_ADDRESS).unwrap(),

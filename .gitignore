@@ -44,3 +44,4 @@ tmp/
 !.sqlx/
 
 **/postgres-data/
+demo-bitcoin-wallet.sqlite

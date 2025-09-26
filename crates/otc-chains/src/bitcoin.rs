@@ -394,7 +394,7 @@ impl BitcoinChain {
                     .await;
 
                 if tx_hex.is_err() {
-                    info!(
+                    debug!(
                         message = "Failed to get raw transaction, skipping",
                         tx_hash = utxo.txid.to_string()
                     );
@@ -403,7 +403,7 @@ impl BitcoinChain {
                 let tx_hex = tx_hex.unwrap();
                 let tx_bytes = hex::decode(&tx_hex);
                 if tx_bytes.is_err() {
-                    info!(
+                    debug!(
                         message = "Failed to decode raw transaction, skipping",
                         tx_hash = utxo.txid.to_string()
                     );
@@ -422,7 +422,7 @@ impl BitcoinChain {
                     != 1
                 {
                     // Either not a mm payment OR invalid payment that has multiple OP_RETURN outputs
-                    info!(
+                    debug!(
                         message = "Invalid mm payment, either not a mm payment or invalid payment that has multiple OP_RETURN outputs",
                         tx_hash = utxo.txid.to_string()
                     );
@@ -438,7 +438,7 @@ impl BitcoinChain {
                     .any(|output| output.script_pubkey.to_bytes() == needle)
                 {
                     // The embedded nonce is not in the OP_RETURN output
-                    info!(
+                    debug!(
                         message =
                             "Invalid mm payment, embedded nonce is not in the OP_RETURN output",
                         tx_hash = utxo.txid.to_string()
@@ -455,7 +455,7 @@ impl BitcoinChain {
                         && output.value >= Amount::from_sat(fee.to::<u64>())
                 }) {
                     // The fee is not in the OP_RETURN output
-                    info!(
+                    debug!(
                         message = "Invalid mm payment, invalid fee amount or fee address",
                         tx_hash = utxo.txid.to_string()
                     );

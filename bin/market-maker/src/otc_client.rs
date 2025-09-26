@@ -1,8 +1,8 @@
+use crate::config::Config;
 use crate::deposit_key_storage::DepositKeyStorage;
 use crate::otc_handler::OTCMessageHandler;
 use crate::payment_manager::PaymentManager;
 use crate::quote_storage::QuoteStorage;
-use crate::{config::Config, wallet::WalletManager};
 use futures_util::{SinkExt, StreamExt};
 use otc_protocols::mm::{MMRequest, ProtocolMessage};
 use snafu::prelude::*;

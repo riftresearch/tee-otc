@@ -609,6 +609,8 @@ impl RiftDevnetBuilder {
             alloy::primitives::Address::from_str("0x42c0ca15451F626B83f6BA80fDB13A4F59167213")
                 .unwrap();
 
+        let funding_amount = bitcoin::Amount::from_btc(1.0).unwrap().to_sat();
+
         let demo_account = MultichainAccount::new(110101);
 
         // Fund market maker with ETH
@@ -632,7 +634,7 @@ impl RiftDevnetBuilder {
         ethereum_devnet
             .mint_cbbtc(
                 market_maker_ethereum_address,
-                alloy::primitives::U256::from(bitcoin::Amount::from_btc(1000.0).unwrap().to_sat()),
+                alloy::primitives::U256::from(funding_amount),
             )
             .await?;
 
@@ -641,7 +643,7 @@ impl RiftDevnetBuilder {
         bitcoin_devnet
             .deal_bitcoin(
                 &market_maker_bitcoin_address,
-                &bitcoin::Amount::from_btc(1000.0).unwrap(),
+                &bitcoin::Amount::from_sat(funding_amount),
             )
             .await
             .map_err(|e| {
@@ -671,7 +673,7 @@ impl RiftDevnetBuilder {
         ethereum_devnet
             .mint_cbbtc(
                 demo_account.ethereum_address,
-                alloy::primitives::U256::from(bitcoin::Amount::from_btc(1000.0).unwrap().to_sat()),
+                alloy::primitives::U256::from(funding_amount),
             )
             .await?;
 
@@ -680,7 +682,7 @@ impl RiftDevnetBuilder {
         bitcoin_devnet
             .deal_bitcoin(
                 &demo_account.bitcoin_wallet.address,
-                &bitcoin::Amount::from_btc(1000.0).unwrap(),
+                &bitcoin::Amount::from_sat(funding_amount),
             )
             .await
             .map_err(|e| {

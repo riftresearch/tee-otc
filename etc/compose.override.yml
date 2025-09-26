@@ -23,8 +23,18 @@ services:
     build:
       context: ..
       dockerfile_inline: |
-        FROM rust:1.88 AS builder
+        FROM rust:1.88 AS chef
+        RUN cargo install cargo-chef
         WORKDIR /app
+
+        FROM chef AS planner
+        COPY . .
+        RUN cargo chef prepare --recipe-path recipe.json
+
+        FROM chef AS builder
+        COPY --from=planner /app/recipe.json recipe.json
+        COPY --from=planner /app/sqlx-sqlite-shim ./sqlx-sqlite-shim
+        RUN cargo chef cook --release --recipe-path recipe.json
         COPY . .
         RUN cargo build --release --bin devnet --exclude integration-tests --workspace
 
@@ -54,13 +64,30 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+    ports:
+      - "50100:50100"
+      - "50101:50101"
+      - "50102:50102"
+      - "50103:50103"
+      - "50104:50104"
 
   otc-server:
+    image: !reset null
     build:
       context: ..
       dockerfile_inline: |
-        FROM rust:1.88 AS builder
+        FROM rust:1.88 AS chef
+        RUN cargo install cargo-chef
         WORKDIR /app
+
+        FROM chef AS planner
+        COPY . .
+        RUN cargo chef prepare --recipe-path recipe.json
+
+        FROM chef AS builder
+        COPY --from=planner /app/recipe.json recipe.json
+        COPY --from=planner /app/sqlx-sqlite-shim ./sqlx-sqlite-shim
+        RUN cargo chef cook --release --recipe-path recipe.json
         COPY . .
         RUN cargo build --release --bin otc-server --features integration-test --exclude integration-tests --workspace
 
@@ -90,14 +117,25 @@ services:
       CHAINALYSIS_TOKEN: ~
       CONFIG_DIR: /app/config
       DSTACK_SOCK_PATH: /var/run/dstack.sock
+      BITCOIN_NETWORK: regtest
     volumes: []
   
   rfq-server:
     build:
       context: ..
       dockerfile_inline: |
-        FROM rust:1.88 AS builder
+        FROM rust:1.88 AS chef
+        RUN cargo install cargo-chef
         WORKDIR /app
+
+        FROM chef AS planner
+        COPY . .
+        RUN cargo chef prepare --recipe-path recipe.json
+
+        FROM chef AS builder
+        COPY --from=planner /app/recipe.json recipe.json
+        COPY --from=planner /app/sqlx-sqlite-shim ./sqlx-sqlite-shim
+        RUN cargo chef cook --release --recipe-path recipe.json
         COPY . .
         RUN cargo build --release --bin rfq-server --features integration-test --exclude integration-tests --workspace
 
@@ -121,6 +159,8 @@ services:
       CHAINALYSIS_TOKEN: ~
     networks:
       - tee-network
+    ports:
+      - "3001:3001"
     volumes: []
 
   reth: !reset null 
@@ -195,5 +235,3 @@ services:
   
   mm-grafana:
     volumes: []
-
-

@@ -102,8 +102,12 @@ pub enum WalletError {
         loc: Location,
     },
 
-    #[snafu(display("Failed to get dedicated wallet balance: {}", source))]
-    BitcoinWalletClient { source: BitcoinWalletError },
+    #[snafu(display("Bitcoin wallet client error: {}", source))]
+    BitcoinWalletClient {
+        source: BitcoinWalletError,
+        #[snafu(implicit)]
+        loc: Location,
+    },
 
     #[snafu(display("Invalid descriptor: {}", reason))]
     InvalidDescriptor {
