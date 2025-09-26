@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tokio::time;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 #[derive(Debug, Snafu)]
 pub enum PriceOracleError {
@@ -123,19 +123,33 @@ impl BitcoinEtherPriceOracle {
         const RECONNECT_DELAY: Duration = Duration::from_secs(1);
 
         loop {
-            match self.connect_and_stream(WS_URI, PRODUCT_ID).await {
-                Ok(_) => {
-                    warn!("WebSocket stream ended unexpectedly, reconnecting...");
+            #[cfg(not(feature = "mock-price-oracle"))]
+            {
+                match self.connect_and_stream(WS_URI, PRODUCT_ID).await {
+                    Ok(_) => {
+                        warn!("WebSocket stream ended unexpectedly, reconnecting...");
+                    }
+                    Err(e) => {
+                        error!(
+                            "WebSocket error: {}, reconnecting in {:?}...",
+                            e, RECONNECT_DELAY
+                        );
+                    }
                 }
-                Err(e) => {
-                    error!(
-                        "WebSocket error: {}, reconnecting in {:?}...",
-                        e, RECONNECT_DELAY
-                    );
-                }
+            }
+
+            #[cfg(feature = "mock-price-oracle")]
+            {
+                #[cfg(all(feature = "mock-price-oracle", not(test), not(debug_assertions)))]
+                compile_error!(
+                    "mock-price-oracle feature must not be enabled in production builds"
+                );
+                let mut price_writer = self.inner.btc_per_eth.write().await;
+                *price_writer = Some(30.7894736842);
             }
             time::sleep(RECONNECT_DELAY).await;
         }
+        Ok(())
     }
 
     async fn connect_and_stream(&self, ws_uri: &str, product_id: &str) -> Result<()> {
