@@ -1,0 +1,1070 @@
+configs:
+  bitcoin-entrypoint:
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      archive_url="https://rift-blockchain-archive.s3.us-west-1.amazonaws.com/bitcoind-datadir-2025-09-11.tar.lz4"
+
+      echo "Checking Bitcoin directory: $$BITCOIN_DATA_DIR"
+
+      # If both core subdirs are missing, treat as empty
+      if [[ ! -d "$$BITCOIN_DATA_DIR/blocks" ]] && [[ ! -d "$$BITCOIN_DATA_DIR/chainstate" ]]; then
+          echo "Bitcoin data directory appears to be empty. Downloading blockchain data..."
+          echo "Download will be streamed and decompressed on the fly (lz4)."
+
+          # Ensure target dir exists
+          mkdir -p "$$BITCOIN_DATA_DIR"
+
+          echo "Downloading from: $$archive_url"
+          echo "Extracting directly to: $$BITCOIN_DATA_DIR"
+
+          # Stream download -> lz4 decode -> tar extract
+          if wget -O - "$$archive_url" | tar -I lz4 -xvf - -C "$$BITCOIN_DATA_DIR"; then
+              echo "Download and extraction successful"
+
+              # Ensure correct ownership if running as root
+              if id -u bitcoin >/dev/null 2>&1; then
+                  chown -R bitcoin:bitcoin "$$BITCOIN_DATA_DIR" || true
+              fi
+
+              echo "Data directory size: $$(du -sh $$BITCOIN_DATA_DIR | cut -f1)"
+          else
+              echo "Warning: Failed to download or extract blockchain data. Bitcoin Core will sync from genesis."
+              echo "This will take significantly longer but is still functional."
+          fi
+      else
+          echo "Bitcoin data directory already contains blockchain data"
+          echo "Data directory size: $$(du -sh $$BITCOIN_DATA_DIR | cut -f1)"
+      fi
+
+      # Clean up any temporary files
+      rm -rf /tmp/*
+
+      echo "Starting Bitcoin Core with arguments: $*"
+      exec bitcoind "$@"
+
+
+  reth-entrypoint:
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      
+      # Reth snapshot configuration
+      archive_url="https://downloads.merkle.io/reth-2025-09-18.tar.lz4"
+      reth_data_dir="$$RETH_DATA_DIR"
+      
+      echo "Checking Reth data directory: $$reth_data_dir"
+      
+      # Check if the mainnet directory is empty (no db or static_files folders)
+      if [[ ! -d "$$reth_data_dir/db" ]] && [[ ! -d "$$reth_data_dir/static_files" ]]; then
+          echo "Reth data directory appears to be empty. Downloading Reth snapshot..."
+          
+          # Ensure the data directory exists
+          mkdir -p "$$reth_data_dir"
+          
+          echo "Downloading Reth snapshot from: $$archive_url"
+          echo "Extracting directly to: $$reth_data_dir"
+          
+          # Download and extract directly using wget and tar with lz4
+          # This follows the exact pattern from the Merkle documentation
+          if wget -O - "$$archive_url" | tar -I lz4 -xvf - -C "$$reth_data_dir"; then
+              echo "Reth snapshot download and extraction successful"
+              echo "Data directory size: $$(du -sh $$reth_data_dir | cut -f1)"
+          else
+              echo "Warning: Failed to download Reth snapshot. Reth will sync from genesis block."
+              echo "This will take approximately 48 hours on powerful hardware but is still functional."
+          fi
+      else
+          echo "Reth data directory already contains blockchain data"
+          if [[ -d "$$reth_data_dir" ]]; then
+              echo "Data directory size: $$(du -sh $$reth_data_dir | cut -f1)"
+          fi
+      fi
+      
+      # Clean up any temporary files
+      rm -rf /tmp/*
+      
+      echo "Starting Reth with arguments: $*"
+      exec reth "$@"
+
+  prometheus-config:
+    content: |
+      global:
+        scrape_interval: 15s
+      scrape_configs:
+        - job_name: prometheus
+          static_configs:
+            - targets:
+                - prometheus:9090
+        - job_name: node-exporter
+          static_configs:
+            - targets:
+                - node-exporter:9100
+        - job_name: cadvisor
+          static_configs:
+            - targets:
+                - cadvisor:8080
+
+  grafana-datasource:
+    content: |
+      apiVersion: 1
+      deleteDatasources:
+        - name: Prometheus
+      datasources:
+        - name: Prometheus
+          uid: PBFA97CFB590B2093
+          type: prometheus
+          access: proxy
+          url: http://prometheus:9090
+          isDefault: true
+
+  grafana-dashboard-provider:
+    content: |
+      apiVersion: 1
+      providers:
+        - name: Default
+          orgId: 1
+          folder: ""
+          type: file
+          options:
+            path: /etc/grafana/provisioning/dashboards
+
+  grafana-node-dashboard:
+    content: |
+      {
+        "annotations": {
+          "list": [
+            {
+              "builtIn": 1,
+              "datasource": {
+                "type": "grafana",
+                "uid": "grafana"
+              },
+              "enable": true,
+              "hide": true,
+              "iconColor": "rgba(0, 211, 255, 1)",
+              "name": "Annotations & Alerts",
+              "type": "dashboard"
+            }
+          ]
+        },
+        "editable": true,
+        "fiscalYearStartMonth": 0,
+        "graphTooltip": 1,
+        "id": 2,
+        "links": [],
+        "panels": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 0,
+              "y": 0
+            },
+            "id": 1,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "sum by (name) (rate(container_cpu_usage_seconds_total{name=~\"tee-.*\"}[5m])) * 100",
+                "legendFormat": "{{name}}",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Container CPU Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "decbytes"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 12,
+              "y": 0
+            },
+            "id": 2,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "max by (name) (container_memory_usage_bytes{name=~\"tee-.*\"})",
+                "legendFormat": "{{name}}",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Container Memory Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "Bps"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 24,
+              "x": 0,
+              "y": 8
+            },
+            "id": 4,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "sum by (name) (rate(container_network_receive_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
+                "legendFormat": "RX {{name}}",
+                "range": true,
+                "refId": "A"
+              },
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "sum by (name) (rate(container_network_transmit_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
+                "legendFormat": "TX {{name}}",
+                "range": true,
+                "refId": "B"
+              }
+            ],
+            "title": "Container Network I/O",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 0,
+              "y": 16
+            },
+            "id": 5,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "(1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))) * 100",
+                "legendFormat": "CPU {{instance}}",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Host CPU Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 12,
+              "y": 16
+            },
+            "id": 6,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "(1 - sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes)) * 100",
+                "legendFormat": "Host Memory",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Host Memory Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "decbytes"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 24,
+              "x": 0,
+              "y": 24
+            },
+            "id": 7,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "node_filesystem_size_bytes{\n  mountpoint=\"/var/volatile/dstack/persistent\",\n  fstype!~\"tmpfs|overlay\"\n}\n-\nnode_filesystem_free_bytes{\n  mountpoint=\"/var/volatile/dstack/persistent\",\n  fstype!~\"tmpfs|overlay\"\n}",
+                "legendFormat": "Used",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Host Storage",
+            "type": "timeseries"
+          }
+        ],
+        "schemaVersion": 39,
+        "tags": [
+          "monitoring"
+        ],
+        "templating": {
+          "list": []
+        },
+        "time": {
+          "from": "now-1h",
+          "to": "now"
+        },
+        "timepicker": {},
+        "timezone": "",
+        "title": "TEE Monitoring dev",
+        "uid": "tee-monitoring-dev",
+        "version": 5,
+        "weekStart": ""
+      } 
+          
+services:
+  eth-jwt-generator:
+    container_name: tee-eth-jwt-generator
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM alpine:3.22.1
+        RUN apk add --no-cache openssl
+        WORKDIR /app
+        ENTRYPOINT ["sh", "-c"]
+    command: >
+      "mkdir -p /jwt &&
+      if [ ! -f /jwt/jwt.hex ]; then
+        echo 'Generating new JWT secret...' &&
+        openssl rand -hex 32 > /jwt/jwt.hex &&
+        echo 'JWT secret generated and saved to /jwt/jwt.hex'
+      else
+        echo 'JWT secret already exists, skipping generation'
+      fi &&
+      echo 'JWT secret is ready for use' &&
+      echo 'JWT Generator service completed successfully'"
+    volumes:
+      - eth_jwt_data:/jwt
+    restart: "no"
+    networks:
+      - tee-network
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: tee-otc-postgres
+    environment:
+      POSTGRES_USER: otc_user
+      POSTGRES_PASSWORD: otc_password
+      POSTGRES_DB: otc_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U otc_user -d otc_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tee-network
+
+  bitcoin-core:
+    container_name: tee-bitcoin-core
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM debian:bookworm-slim
+        RUN apt-get update \
+          && apt-get install -y --no-install-recommends \
+             ca-certificates \
+             curl \
+             tar \
+             bash \
+             lz4 \
+             wget \
+             aria2 \
+          && rm -rf /var/lib/apt/lists/*
+
+        RUN useradd -m -u 1000 -s /bin/bash bitcoin \
+          && mkdir -p /home/bitcoin/.bitcoin \
+          && chown -R bitcoin:bitcoin /home/bitcoin/.bitcoin
+        WORKDIR /opt/bitcoin
+        RUN curl -fsSL "https://bitcoincore.org/bin/bitcoin-core-29.0/bitcoin-29.0-x86_64-linux-gnu.tar.gz" -o bitcoin.tar.gz \
+          && tar -xzf bitcoin.tar.gz --strip-components=1 \
+          && install -m 0755 -o root -g root -t /usr/local/bin bin/* \
+          && rm -rf /opt/bitcoin
+
+        EXPOSE 8332 8333
+        VOLUME ["/home/bitcoin/.bitcoin"]
+        USER bitcoin
+        WORKDIR /home/bitcoin
+        ENTRYPOINT ["/usr/local/bin/bitcoin-entrypoint.sh"]
+    environment:
+      BITCOIN_DATA_DIR: /home/bitcoin/.bitcoin
+    command:
+      - "-server=1"
+      - "-txindex=1"
+      - "-rpcbind=0.0.0.0"
+      - "-rpcallowip=0.0.0.0/0"
+      - "-rpcuser=user"
+      - "-rpcpassword=pass"
+      - "-datadir=/home/bitcoin/.bitcoin"
+      - "-fallbackfee=0.0002"
+    volumes:
+      - bitcoin_data:/home/bitcoin/.bitcoin
+    configs:
+      - source: bitcoin-entrypoint
+        target: /usr/local/bin/bitcoin-entrypoint.sh
+        mode: 0755
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bitcoin-cli -rpcuser=user -rpcpassword=pass getblockchaininfo > /dev/null || exit 1",
+        ]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - tee-network
+    platform: linux/amd64
+
+  otc-server:
+    image: riftresearch/otc-server:main-675ea06
+    container_name: tee-otc-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      bitcoin-core:
+        condition: service_started
+    environment:
+      GRANT_SUDO: yes
+      DATABASE_URL: postgres://otc_user:otc_password@postgres:5432/otc_db
+      RUST_LOG: info 
+      EVM_RPC_URL: http://reth:8545
+      UNTRUSTED_EVM_TOKEN_INDEXER_URL: ${UNTRUSTED_EVM_TOKEN_INDEXER_URL}
+      BITCOIN_RPC_URL: http://bitcoin-core:8332
+      BITCOIN_RPC_AUTH: user:pass
+      ELECTRUM_HTTP_SERVER_URL: ${UNTRUSTED_ELECTRUM_HTTP_SERVER_URL}
+      CORS_DOMAIN: "*"
+      CHAINALYSIS_HOST: ${CHAINALYSIS_HOST}
+      CHAINALYSIS_TOKEN: ${CHAINALYSIS_TOKEN}
+      CONFIG_DIR: /app/config
+      DSTACK_SOCK_PATH: /var/run/dstack.sock
+    ports:
+      - "4422:4422"
+    networks:
+      - tee-network
+    volumes:
+      - ${DSTACK_SOCK_PATH:-/var/run/dstack.sock}:/var/run/dstack.sock
+      - otc_server_config_data:/app/config
+    platform: linux/amd64
+    user: root
+
+  reth:
+    restart: unless-stopped
+    container_name: tee-reth
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM ghcr.io/paradigmxyz/reth:v1.8.1
+        
+        USER root
+        
+        RUN apt-get update && apt-get install -y \
+            wget \
+            lz4 \
+            bash \
+            coreutils \
+            && rm -rf /var/lib/apt/lists/*
+        
+        # Create reth user and data directory
+        RUN useradd -m -u 1000 -s /bin/bash reth \
+            && mkdir -p /root/.local/share/reth/mainnet \
+            && chown -R reth:reth /root/.local/share/reth
+        
+        ENTRYPOINT ["/usr/local/bin/reth-entrypoint.sh"]
+    depends_on:
+      eth-jwt-generator:
+        condition: service_completed_successfully
+    environment:
+      RETH_DATA_DIR: /root/.local/share/reth/mainnet
+    ports:
+      - "9001:9001" # metrics
+      - "30303:30303" # eth/66 peering
+      - "8545:8545" # rpc
+      - "8551:8551" # engine
+    volumes:
+      - reth_mainnet_data:/root/.local/share/reth/mainnet
+      - reth_logs:/root/logs
+      - eth_jwt_data:/root/jwt:ro
+    configs:
+      - source: reth-entrypoint
+        target: /usr/local/bin/reth-entrypoint.sh
+        mode: 0755
+    pid: host
+    command: >
+      node
+      --chain mainnet
+      --metrics 0.0.0.0:9001
+      --log.file.directory /root/logs
+      --authrpc.addr 0.0.0.0
+      --authrpc.port 8551
+      --authrpc.jwtsecret /root/jwt/jwt.hex
+      --http --http.addr 0.0.0.0 --http.port 8545
+      --http.api "eth,net,web3"
+    
+  lighthouse:
+    restart: unless-stopped
+    image: sigp/lighthouse:v7.0.1
+    container_name: tee-lighthouse
+    depends_on:
+      eth-jwt-generator:
+        condition: service_completed_successfully
+      reth:
+        condition: service_started
+    ports:
+      - "5052:5052/tcp" # rpc
+      - "5053:5053/tcp"
+      - "5054:5054/tcp" # metrics
+      - "9000:9000/tcp" # p2p
+      - "9000:9000/udp" # p2p
+    volumes:
+      - lighthouse_data:/root/.lighthouse
+      - eth_jwt_data:/root/jwt:ro
+    command: >
+      lighthouse bn
+      --network mainnet
+      --http --http-address 0.0.0.0
+      --execution-endpoint http://reth:8551
+      --metrics --metrics-address 0.0.0.0
+      --execution-jwt /root/jwt/jwt.hex
+      --checkpoint-sync-url https://sync-mainnet.beaconcha.in
+      --checkpoint-sync-url-timeout=300
+
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: tee-node-exporter
+    restart: unless-stopped
+    pid: host
+    command:
+      - "--path.rootfs=/rootfs"
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    volumes:
+      - /:/rootfs:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    ports:
+      - "9100:9100"
+    networks:
+      - tee-network
+
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: tee-cadvisor
+    restart: unless-stopped
+    privileged: true
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - tee-network
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: tee-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    depends_on:
+      node-exporter:
+        condition: service_started
+      cadvisor:
+        condition: service_started
+    volumes:
+      - prometheus_data:/prometheus
+    configs:
+      - source: prometheus-config
+        target: /etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    networks:
+      - tee-network
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    container_name: tee-grafana
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      prometheus:
+        condition: service_started
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER}
+      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+    configs:
+      - source: grafana-datasource
+        target: /etc/grafana/provisioning/datasources/prometheus.yml
+      - source: grafana-dashboard-provider
+        target: /etc/grafana/provisioning/dashboards/provider.yml
+      - source: grafana-node-dashboard
+        target: /etc/grafana/provisioning/dashboards/tee-monitoring.json
+    networks:
+      - tee-network
+
+networks:
+  tee-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  bitcoin_data:
+  otc_server_config_data:
+  prometheus_data:
+  reth_logs:
+  eth_jwt_data:
+  lighthouse_data:
+  reth_mainnet_data:

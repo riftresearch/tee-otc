@@ -19,6 +19,7 @@ pub struct TokenIndexerInstance {
 
 impl TokenIndexerInstance {
     pub async fn new(
+        interactive: bool,
         rpc_url: &str,
         ws_url: &str,
         pipe_output: bool,
@@ -32,14 +33,18 @@ impl TokenIndexerInstance {
 
         let token_indexer_dir = workspace_root.join("evm-token-indexer");
 
-        let listener = TcpListener::bind((HOST, 0))
-            .await
-            .expect("Should be able to bind to port");
+        let ponder_port = if interactive {
+            50104_u16
+        } else {
+            let listener = TcpListener::bind((HOST, 0))
+                .await
+                .expect("Should be able to bind to port");
 
-        let ponder_port = listener
-            .local_addr()
-            .expect("Should have a local address")
-            .port();
+            listener
+                .local_addr()
+                .expect("Should have a local address")
+                .port()
+        };
 
         // uuid for the schema
         let schema_uuid = Uuid::new_v4();

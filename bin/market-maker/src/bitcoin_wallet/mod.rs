@@ -12,8 +12,8 @@ use bdk_wallet::descriptor;
 use bdk_wallet::keys::DescriptorPublicKey;
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
-    bitcoin::Network, error::CreateTxError, signer::SignerError, CreateParams, KeychainKind,
-    LoadParams, LoadWithPersistError, PersistedWallet,
+    bitcoin::Network, error::CreateTxError, signer::SignerError, AddForeignUtxoError, CreateParams,
+    KeychainKind, LoadParams, LoadWithPersistError, PersistedWallet,
 };
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
@@ -27,7 +27,6 @@ use crate::deposit_key_storage::{DepositKeyStorage, DepositKeyStorageTrait, Fill
 use crate::wallet::{self, Wallet as WalletTrait, WalletBalance, WalletError};
 use crate::WalletResult;
 
-const STOP_GAP: usize = 50;
 const PARALLEL_REQUESTS: usize = 5;
 const BALANCE_BUFFER_PERCENT: u64 = 25; // 25% buffer
 
@@ -95,6 +94,13 @@ pub enum BitcoinWalletError {
     #[snafu(display("Failed to sign transaction: {source} at {loc:#?}"))]
     SignTransaction {
         source: SignerError,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
+    #[snafu(display("Failed to add foreign UTXO: {source} at {loc:#?}"))]
+    AddForeignUtxo {
+        source: AddForeignUtxoError,
         #[snafu(implicit)]
         loc: Location,
     },
@@ -284,7 +290,10 @@ impl WalletTrait for BitcoinWallet {
                                 loc: location!(),
                             })?;
                         // Parse the descriptor string to get the address
-                        let descriptor_str = &deposit.private_key;
+                        let mut descriptor_str = deposit.private_key.clone();
+                        if !descriptor_str.starts_with("wpkh(") {
+                            descriptor_str = format!("wpkh({})", descriptor_str);
+                        }
                         let network = self.wallet.lock().await.network();
                         let secp = Secp256k1::new();
 
@@ -292,7 +301,7 @@ impl WalletTrait for BitcoinWallet {
                         let (public_desc, _key_map) =
                             descriptor::Descriptor::<DescriptorPublicKey>::parse_descriptor(
                                 &secp,
-                                descriptor_str,
+                                &descriptor_str,
                             )
                             .map_err(|e| {
                                 WalletError::InvalidDescriptor {
@@ -371,7 +380,7 @@ impl WalletTrait for BitcoinWallet {
                 mm_payment_validation,
             )
             .await
-            .map_err(|e| WalletError::BitcoinWalletClient { source: e })
+            .map_err(|e| WalletError::BitcoinWalletClient { source: e, loc: location!() })
     }
 
     async fn balance(&self, token: &TokenIdentifier) -> WalletResult<WalletBalance> {
@@ -441,6 +450,13 @@ fn ensure_valid_lot(lot: &Lot) -> Result<(), WalletError> {
     Ok(())
 }
 
-fn balance_with_buffer(balance_sats: u64) -> u64 {
-    balance_sats + (balance_sats * BALANCE_BUFFER_PERCENT) / 100
-}
+
+/*
+
+2025-09-26T01:21:19.673201Z ERROR rfq_server::server: Quote aggregation failed: No quotes received from market makers
+2025-09-26T01:21:19.673220Z ERROR rfq_server::server: Quote aggregation failed: No quotes received from market makers
+2025-09-26T01:21:19.673228Z ERROR rfq_server::server: Quote aggregation failed: No quotes received from market makers
+2025-09-26T01:21:19.770195Z  WARN rfq_server::mm_registry: Failed to send quote response to aggregator request_id=f5635286-835d-42bb-8868-f3a3f7aa606e error=SendError { .. }
+2025-09-26T01:21:19.871681Z  WARN rfq_server::mm_registry: Failed to send quote response to aggregator request_id=f65457f0-792c-49fc-a0bc-fb472500df54 error=SendError { .. }
+2025-09-26T01:21:20.021496Z  WARN rfq_server::mm_registry: Failed to send quote response to aggregator request_id=217ef535-9f5e-4382-8b00-36abca7296ff error=SendError { .. }
+*/

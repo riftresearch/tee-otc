@@ -124,6 +124,37 @@ impl RfqMMRegistry {
         receivers
     }
 
+    pub async fn send_ping(&self, market_maker_id: &Uuid) -> Result<()> {
+        let (protocol_version, sender) = {
+            let connection = self.connections.get(market_maker_id).ok_or_else(|| {
+                MMRegistryError::MarketMakerNotConnected {
+                    market_maker_id: market_maker_id.to_string(),
+                }
+            })?;
+
+            (
+                connection.protocol_version.clone(),
+                connection.sender.clone(),
+            )
+        };
+
+        let ping = ProtocolMessage {
+            version: protocol_version,
+            sequence: 0,
+            payload: RFQRequest::Ping {
+                request_id: Uuid::new_v4(),
+                timestamp: utc::now(),
+            },
+        };
+
+        sender
+            .send(ping)
+            .await
+            .map_err(|e| MMRegistryError::MessageSendError { source: e })?;
+
+        Ok(())
+    }
+
     /// Notify a market maker that their quote was selected
     pub async fn notify_quote_selected(
         &self,

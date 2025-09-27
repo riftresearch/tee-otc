@@ -10,8 +10,8 @@ pub use evm_devnet::EthDevnet;
 
 use evm_devnet::ForkConfig;
 use log::info;
-use std::path::PathBuf;
 use std::sync::Arc;
+use std::{path::PathBuf, str::FromStr};
 use tempfile::{NamedTempFile, TempDir};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
@@ -517,6 +517,7 @@ impl RiftDevnetBuilder {
             deploy_mode,
             devnet_cache.clone(),
             self.token_indexer_database_url.clone(),
+            self.interactive,
         )
         .await
         .map_err(|e| eyre::eyre!("[devnet builder] Failed to setup Ethereum devnet: {}", e))?;
@@ -600,29 +601,25 @@ impl RiftDevnetBuilder {
         join_set: &mut JoinSet<Result<()>>,
     ) -> Result<()> {
         let setup_start = Instant::now();
-        let hypernode_account = MultichainAccount::new(151);
-        let market_maker_account = MultichainAccount::new(152);
+        let market_maker_bitcoin_address =
+            bitcoin::Address::from_str("bcrt1qn65u46clcspgdg7ylgdvd5848cg0jzgy0a8lee")
+                .unwrap()
+                .assume_checked();
+        let market_maker_ethereum_address =
+            alloy::primitives::Address::from_str("0x42c0ca15451F626B83f6BA80fDB13A4F59167213")
+                .unwrap();
 
-        // Fund accounts with ETH
+        let funding_amount = bitcoin::Amount::from_btc(1.0).unwrap().to_sat();
+
+        let demo_account = MultichainAccount::new(110101);
+
+        // Fund market maker with ETH
         let funding_start = Instant::now();
-        info!("[Interactive Setup] Funding accounts with ETH...");
-        ethereum_devnet
-            .fund_eth_address(
-                hypernode_account.ethereum_address,
-                alloy::primitives::U256::from_str_radix("1000000000000000000000000", 10)
-                    .map_err(|e| eyre::eyre!("Conversion error: {}", e))?,
-            )
-            .await
-            .map_err(|e| {
-                eyre::eyre!(
-                    "[devnet builder-hypernode] Failed to fund ETH address: {}",
-                    e
-                )
-            })?;
+        info!("[Interactive Setup] Funding market maker with ETH...");
 
         ethereum_devnet
             .fund_eth_address(
-                market_maker_account.ethereum_address,
+                market_maker_ethereum_address,
                 alloy::primitives::U256::from_str_radix("1000000000000000000000000", 10)
                     .map_err(|e| eyre::eyre!("Conversion error: {}", e))?,
             )
@@ -634,12 +631,19 @@ impl RiftDevnetBuilder {
                 )
             })?;
 
+        ethereum_devnet
+            .mint_cbbtc(
+                market_maker_ethereum_address,
+                alloy::primitives::U256::from(funding_amount),
+            )
+            .await?;
+
         // Fund market maker with Bitcoin
         info!("[Interactive Setup] Funding market maker with Bitcoin...");
         bitcoin_devnet
             .deal_bitcoin(
-                &market_maker_account.bitcoin_wallet.address,
-                &bitcoin::Amount::from_btc(100.0).unwrap(),
+                &market_maker_bitcoin_address,
+                &bitcoin::Amount::from_sat(funding_amount),
             )
             .await
             .map_err(|e| {
@@ -648,6 +652,46 @@ impl RiftDevnetBuilder {
                     e
                 )
             })?;
+
+        // Fund demo_account with ETH
+        info!("[Interactive Setup] Funding demo_account with ETH...");
+        ethereum_devnet
+            .fund_eth_address(
+                demo_account.ethereum_address,
+                alloy::primitives::U256::from_str_radix("1000000000000000000000000", 10)
+                    .map_err(|e| eyre::eyre!("Conversion error: {}", e))?,
+            )
+            .await
+            .map_err(|e| {
+                eyre::eyre!(
+                    "[devnet builder-demo_account] Failed to fund ETH address: {}",
+                    e
+                )
+            })?;
+
+        // Fund demo_account with cbBTC
+        ethereum_devnet
+            .mint_cbbtc(
+                demo_account.ethereum_address,
+                alloy::primitives::U256::from(funding_amount),
+            )
+            .await?;
+
+        // Fund demo_account with Bitcoin
+        info!("[Interactive Setup] Funding demo_account with Bitcoin...");
+        bitcoin_devnet
+            .deal_bitcoin(
+                &demo_account.bitcoin_wallet.address,
+                &bitcoin::Amount::from_sat(funding_amount),
+            )
+            .await
+            .map_err(|e| {
+                eyre::eyre!(
+                    "[devnet builder-demo_account] Failed to deal bitcoin: {}",
+                    e
+                )
+            })?;
+
         info!(
             "[Interactive Setup] Account funding took {:?}",
             funding_start.elapsed()
@@ -694,6 +738,22 @@ impl RiftDevnetBuilder {
             setup_start.elapsed()
         );
         println!("---RIFT DEVNET---");
+        println!(
+            "Demo EVM Address:           {}",
+            demo_account.ethereum_address
+        );
+        println!(
+            "Demo BTC Address:           {}",
+            demo_account.bitcoin_wallet.address
+        );
+        println!(
+            "Demo EVM Private Key:       {}",
+            alloy::hex::encode(demo_account.secret_bytes)
+        );
+        println!(
+            "Demo BTC Descriptor:        {}",
+            demo_account.bitcoin_wallet.descriptor()
+        );
         println!(
             "Anvil HTTP Url:             http://0.0.0.0:{}",
             ethereum_devnet.anvil.port()

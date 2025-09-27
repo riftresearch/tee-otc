@@ -46,9 +46,10 @@ impl EthDevnet {
         deploy_mode: Mode,
         devnet_cache: Option<Arc<RiftDevnetCache>>,
         token_indexer_database_url: Option<String>,
+        interactive: bool,
     ) -> Result<Self> {
         let (anvil, anvil_datadir, anvil_dump_path) =
-            spawn_anvil(deploy_mode.clone(), devnet_cache.clone()).await?;
+            spawn_anvil(interactive, deploy_mode.clone(), devnet_cache.clone()).await?;
         info!(
             "Anvil spawned at {}, chain_id={}",
             anvil.endpoint(),
@@ -72,6 +73,7 @@ impl EthDevnet {
         let token_indexer = if let Some(database_url) = token_indexer_database_url {
             Some(
                 TokenIndexerInstance::new(
+                    interactive,
                     anvil.endpoint_url().to_string().as_str(),
                     anvil.ws_endpoint_url().to_string().as_str(),
                     false,
@@ -234,6 +236,7 @@ async fn deploy_contracts(
 
 /// Spawns Anvil in a blocking task.
 async fn spawn_anvil(
+    interactive: bool,
     mode: Mode,
     devnet_cache: Option<Arc<RiftDevnetCache>>,
 ) -> Result<(AnvilInstance, Option<tempfile::TempDir>, tempfile::TempDir)> {
@@ -293,7 +296,11 @@ async fn spawn_anvil(
                     anvil = anvil.fork_block_number(block_number);
                 }
             }
-            Mode::Local => {}
+            Mode::Local => {
+                if interactive {
+                    anvil = anvil.port(50101_u16);
+                }
+            }
         }
         anvil.try_spawn().map_err(|e| {
             eprintln!("Failed to spawn Anvil: {e:?}");

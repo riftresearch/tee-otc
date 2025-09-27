@@ -11,25 +11,28 @@ use tracing_subscriber::EnvFilter;
 #[command(author, version, about)]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Commands>,
-
-    /// Address to fund with cbBTC and Ether (used when no subcommand provided)
-    #[arg(short = 'a', long, global = true)]
-    fund_address: Vec<String>,
-
-    /// RPC URL to fork from, if unset will not fork (used when no subcommand provided)
-    #[arg(short = 'f', long, global = true)]
-    fork_url: Option<String>,
-
-    /// Block number to fork from, if unset and `fork_url` is set, will use the latest block (used when no subcommand provided)
-    #[arg(short = 'b', long, global = true)]
-    fork_block_number: Option<u64>,
+    command: Commands,
 }
 
 #[derive(Subcommand)]
 enum Commands {
     /// Run devnet server (interactive mode)
-    Server,
+    Server {
+        /// Address to fund with cbBTC and Ether
+        #[arg(short = 'a', long)]
+        fund_address: Vec<String>,
+
+        /// RPC URL to fork from, if unset will not fork
+        #[arg(short = 'f', long)]
+        fork_url: Option<String>,
+
+        /// Block number to fork from, if unset and `fork_url` is set, will use the latest block
+        #[arg(short = 'b', long)]
+        fork_block_number: Option<u64>,
+
+        #[arg(env = "TOKEN_INDEXER_DATABASE_URL", short = 't', long)]
+        token_indexer_database_url: Option<String>,
+    },
     /// Create and save a cached devnet for faster subsequent runs
     Cache,
 }
@@ -41,26 +44,30 @@ async fn main() -> Result<(), Whatever> {
     let cli = Cli::parse();
 
     match cli.command {
-        Some(Commands::Server) | None => {
-            // Default to server mode when no subcommand is provided
-            // For server mode, fork_url is required
-            let fork_config = if let Some(fork_url) = cli.fork_url {
+        Commands::Server {
+            fund_address,
+            fork_url,
+            fork_block_number,
+            token_indexer_database_url,
+        } => {
+            let fork_config = if let Some(fork_url) = fork_url {
                 Some(ForkConfig {
                     url: fork_url,
-                    block_number: cli.fork_block_number,
+                    block_number: fork_block_number,
                 })
             } else {
                 None
             };
-            run_server(cli.fund_address, fork_config).await
+            run_server(fund_address, fork_config, token_indexer_database_url).await
         }
-        Some(Commands::Cache) => run_cache().await,
+        Commands::Cache => run_cache().await,
     }
 }
 
 async fn run_server(
     fund_address: Vec<String>,
     fork_config: Option<ForkConfig>,
+    token_indexer_database_url: Option<String>,
 ) -> Result<(), Whatever> {
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -75,6 +82,9 @@ async fn run_server(
 
     for address in fund_address {
         devnet_builder = devnet_builder.funded_evm_address(address);
+    }
+    if let Some(token_indexer_database_url) = token_indexer_database_url {
+        devnet_builder = devnet_builder.using_token_indexer(token_indexer_database_url);
     }
 
     if let Some(fork_config) = fork_config {

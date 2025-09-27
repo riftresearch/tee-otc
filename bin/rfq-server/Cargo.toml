@@ -34,6 +34,7 @@ dashmap = { workspace = true }
 futures-util = { workspace = true }
 alloy = { workspace = true }
 chainalysis-address-screener = { workspace = true }
+blockchain-utils = { workspace = true }
 
 [features]
 integration-test = ["otc-auth/integration-test"]

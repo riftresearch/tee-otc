@@ -1,5 +1,6 @@
 use crate::traits::MarketMakerPaymentValidation;
 use crate::{key_derivation, ChainOperations, Result};
+use alloy::consensus::Transaction;
 use alloy::primitives::{Address, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::rpc::types::{Log as RpcLog, TransactionReceipt};
@@ -332,7 +333,7 @@ impl EthereumChain {
                     let embedded_nonce = mm_payment.embedded_nonce;
                     let transaction = self
                         .provider
-                        .get_raw_transaction_by_hash(transfer.transaction_hash)
+                        .get_transaction_by_hash(transfer.transaction_hash)
                         .await
                         .map_err(|e| crate::Error::EVMRpcError {
                             source: e,
@@ -343,7 +344,7 @@ impl EthereumChain {
                         continue;
                     }
                     let transaction = transaction.unwrap();
-                    let tx_hex = alloy::hex::encode(transaction);
+                    let tx_hex = alloy::hex::encode(transaction.input());
                     let nonce_hex = alloy::hex::encode(embedded_nonce);
                     if !tx_hex.contains(&nonce_hex) {
                         debug!(

@@ -32,3 +32,6 @@ mod deposit_key_vault_test;
 
 #[cfg(test)]
 mod refund_test;
+
+#[cfg(test)]
+mod metrics_export_test;

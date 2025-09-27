@@ -1,0 +1,697 @@
+configs:
+  prometheus-config-mm:
+    content: |
+      global:
+        scrape_interval: 15s
+      scrape_configs:
+        - job_name: prometheus
+          static_configs:
+            - targets:
+                - mm-prometheus:9090
+        - job_name: node-exporter
+          static_configs:
+            - targets:
+                - mm-node-exporter:9100
+        - job_name: market-maker
+          static_configs:
+            - targets:
+                - market-maker:9000
+
+  grafana-datasource-mm:
+    content: |
+      apiVersion: 1
+      deleteDatasources:
+        - name: Prometheus
+      datasources:
+        - name: Prometheus
+          uid: PBFA97CFB590B2093
+          type: prometheus
+          access: proxy
+          url: http://mm-prometheus:9090
+          isDefault: true
+
+  grafana-dashboard-provider-mm:
+    content: |
+      apiVersion: 1
+      providers:
+        - name: Default
+          orgId: 1
+          folder: ""
+          type: file
+          options:
+            path: /etc/grafana/provisioning/dashboards
+
+  grafana-node-dashboard-mm:
+    content: | 
+      {
+        "annotations": {
+          "list": [
+            {
+              "builtIn": 1,
+              "datasource": {
+                "name": "grafana",
+                "type": "grafana"
+              },
+              "enable": true,
+              "hide": true,
+              "iconColor": "rgba(0, 211, 255, 1)",
+              "name": "Annotations & Alerts",
+              "type": "dashboard"
+            }
+          ]
+        },
+        "editable": true,
+        "fiscalYearStartMonth": 0,
+        "graphTooltip": 1,
+        "links": [],
+        "panels": [
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 40,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "normal"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "none"
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "cbbtc-native"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#0052ff",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "cbbtc-cum-vaults"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#4986ff",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "btc-native"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#f09200",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "btc-cum-vaults"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#f6b064",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            "gridPos": {
+              "h": 13,
+              "w": 24,
+              "x": 0,
+              "y": 0
+            },
+            "id": 4,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "name": "Prometheus",
+                  "type": "prometheus"
+                },
+                "editorMode": "builder",
+                "expr": "mm_deposit_key_balance_sats{instance=\"market-maker:9000\"}",
+                "legendFormat": "{{asset}}-cum-vaults",
+                "range": true,
+                "refId": "A"
+              },
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "disableTextWrap": false,
+                "editorMode": "code",
+                "expr": "mm_native_balance_sats{instance=\"market-maker:9000\"}",
+                "fullMetaSearch": false,
+                "hide": false,
+                "includeNullMetadata": true,
+                "instant": false,
+                "legendFormat": "{{asset}}-native",
+                "range": true,
+                "refId": "B",
+                "useBackend": false
+              }
+            ],
+            "title": "Inventory Balance (Sats)",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "name": "Prometheus",
+              "type": "prometheus"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "percent"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 7,
+              "w": 7,
+              "x": 0,
+              "y": 13
+            },
+            "id": 1,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "hidden",
+                "placement": "bottom",
+                "showLegend": false
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "name": "Prometheus",
+                  "type": "prometheus"
+                },
+                "editorMode": "code",
+                "expr": "(1 - avg by (instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m]))) * 100",
+                "legendFormat": "CPU {{instance}}",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Host CPU Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "name": "Prometheus",
+              "type": "prometheus"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "gbytes"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 7,
+              "w": 9,
+              "x": 7,
+              "y": 13
+            },
+            "id": 2,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "hidden",
+                "placement": "bottom",
+                "showLegend": false
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "name": "Prometheus",
+                  "type": "prometheus"
+                },
+                "editorMode": "code",
+                "expr": "(1 - sum(node_memory_MemAvailable_bytes) / sum(node_memory_MemTotal_bytes)) * 100",
+                "legendFormat": "Host Memory",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Host Memory Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "name": "Prometheus",
+              "type": "prometheus"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "gbytes"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 7,
+              "w": 8,
+              "x": 16,
+              "y": 13
+            },
+            "id": 3,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "name": "Prometheus",
+                  "type": "prometheus"
+                },
+                "editorMode": "code",
+                "expr": "(node_filesystem_size_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"} - node_filesystem_free_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"}) / 1024 / 1024 / 1024",
+                "legendFormat": "{{mountpoint}}",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Disk Usage by Mount",
+            "type": "timeseries"
+          }
+        ],
+        "refresh": "",
+        "schemaVersion": 39,
+        "tags": [
+          "monitoring"
+        ],
+        "templating": {
+          "list": []
+        },
+        "time": {
+          "from": "now-1h",
+          "to": "now"
+        },
+        "timepicker": {},
+        "timezone": "",
+        "title": "MM System Metrics",
+        "uid": "mm-system-metrics",
+        "version": 1,
+        "weekStart": ""
+      } 
+
+
+
+services:
+  mm-postgres:
+    image: postgres:16-alpine
+    container_name: mm-postgres
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: mm_db
+    volumes:
+      - mm_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d mm_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mm-network
+
+  market-maker:
+    container_name: market-maker
+    build:
+      context: ..
+      dockerfile_inline: |
+        FROM rust:1.88 AS chef
+        RUN cargo install cargo-chef 
+        WORKDIR /app
+
+        FROM chef AS planner
+        COPY . .
+        RUN cargo chef prepare  --recipe-path recipe.json
+
+        FROM chef AS builder
+        COPY --from=planner /app/recipe.json recipe.json
+        # Copy the sqlx-sqlite-shim directory which is needed for the path dependency
+        COPY --from=planner /app/sqlx-sqlite-shim ./sqlx-sqlite-shim
+        # Build dependencies - this is the caching Docker layer!
+        RUN cargo chef cook --release --recipe-path recipe.json
+        # Build application
+        COPY . .
+        RUN cargo build --release --bin market-maker --exclude integration-tests --workspace
+
+        FROM debian:bookworm-slim AS runtime
+        RUN apt-get update && apt-get install -y \
+            ca-certificates \
+            && rm -rf /var/lib/apt/lists/*
+        WORKDIR /app
+        COPY --from=builder /app/target/release/market-maker /app/
+        CMD ["./market-maker"]
+    depends_on:
+      mm-postgres:
+        condition: service_healthy
+    environment:
+      RUST_LOG: info
+      METRICS_LISTEN_ADDR: 0.0.0.0:9000
+      MM_TAG: ${MM_TAG}
+      MM_ID: ${MM_ID}
+      MM_API_SECRET: ${MM_API_SECRET}
+      OTC_WS_URL: ${OTC_WS_URL}
+      RFQ_WS_URL: ${RFQ_WS_URL}
+      BITCOIN_WALLET_DB_PATH: /app/bitcoin-wallet-db/wallet.sqlite
+      BITCOIN_WALLET_DESCRIPTOR: ${BITCOIN_WALLET_DESCRIPTOR}
+      BITCOIN_WALLET_NETWORK: bitcoin
+      BITCOIN_WALLET_ESPLORA_URL: ${BITCOIN_WALLET_ESPLORA_URL}
+      ETHEREUM_WALLET_PRIVATE_KEY: ${ETHEREUM_WALLET_PRIVATE_KEY}
+      ETHEREUM_RPC_WS_URL: ${ETHEREUM_RPC_WS_URL}
+      TRADE_SPREAD_BPS: ${TRADE_SPREAD_BPS}
+      FEE_SAFETY_MULTIPLIER: ${FEE_SAFETY_MULTIPLIER}
+      BALANCE_UTILIZATION_THRESHOLD_BPS: ${BALANCE_UTILIZATION_THRESHOLD_BPS}
+      MM_DATABASE_URL: postgres://user:pass@mm-postgres:5432/mm_db
+      COINBASE_EXCHANGE_API_KEY: ${COINBASE_EXCHANGE_API_KEY}
+      COINBASE_EXCHANGE_API_PASSPHRASE: ${COINBASE_EXCHANGE_API_PASSPHRASE}
+      COINBASE_EXCHANGE_API_SECRET: ${COINBASE_EXCHANGE_API_SECRET}
+      COINBASE_EXCHANGE_API_BASE_URL: https://api.exchange.coinbase.com
+      INVENTORY_TARGET_RATIO_BPS: ${INVENTORY_TARGET_RATIO_BPS}
+      REBALANCE_TOLERANCE_BPS: ${REBALANCE_TOLERANCE_BPS}
+      AUTO_MANAGE_INVENTORY: ${AUTO_MANAGE_INVENTORY}
+
+    networks:
+      - mm-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - market_maker_bitcoin_wallet_db_data:/app/bitcoin-wallet-db
+    platform: linux/amd64
+
+  mm-node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: mm-node-exporter
+    restart: unless-stopped
+    pid: host
+    command:
+      - "--path.rootfs=/rootfs"
+      - "--path.procfs=/host/proc"
+      - "--path.sysfs=/host/sys"
+      - "--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)"
+    volumes:
+      - /:/rootfs:ro
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+    networks:
+      - mm-network
+
+  mm-prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: mm-prometheus
+    restart: unless-stopped
+    depends_on:
+      mm-node-exporter:
+        condition: service_started
+    volumes:
+      - mm_prometheus_data:/prometheus
+    configs:
+      - source: prometheus-config-mm
+        target: /etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    networks:
+      - mm-network
+
+  mm-grafana:
+    image: grafana/grafana:10.4.2
+    container_name: mm-grafana
+    restart: unless-stopped
+    ports:
+      - "3010:3000"
+    depends_on:
+      mm-prometheus:
+        condition: service_started
+    configs:
+      - source: grafana-datasource-mm
+        target: /etc/grafana/provisioning/datasources/prometheus.yml
+      - source: grafana-dashboard-provider-mm
+        target: /etc/grafana/provisioning/dashboards/provider.yml
+      - source: grafana-node-dashboard-mm
+        target: /etc/grafana/provisioning/dashboards/mm-system-metrics.json
+    networks:
+      - mm-network
+
+networks:
+  mm-network:
+    driver: bridge
+
+volumes:
+  mm_postgres_data:
+  market_maker_bitcoin_wallet_db_data:
+  mm_prometheus_data:

@@ -1,0 +1,685 @@
+use std::{collections::VecDeque, io, thread, time::Duration};
+
+use anyhow::Result;
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use otc_models::ChainType;
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
+    Frame, Terminal,
+};
+use tokio::sync::{
+    mpsc::{error::TryRecvError, UnboundedReceiver},
+    oneshot,
+};
+use uuid::Uuid;
+
+use crate::status::{SwapStage, SwapUpdate, UiEvent};
+
+pub type TuiHandle = thread::JoinHandle<Result<()>>;
+
+pub fn spawn_tui(
+    receiver: UnboundedReceiver<UiEvent>,
+    total_swaps: usize,
+    deposit_chain: ChainType,
+) -> (TuiHandle, oneshot::Receiver<()>) {
+    let (exit_tx, exit_rx) = oneshot::channel();
+    let handle = thread::spawn(move || run(receiver, total_swaps, deposit_chain, exit_tx));
+    (handle, exit_rx)
+}
+
+fn run(
+    mut receiver: UnboundedReceiver<UiEvent>,
+    total_swaps: usize,
+    deposit_chain: ChainType,
+    exit_tx: oneshot::Sender<()>,
+) -> Result<()> {
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    crossterm::execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut app = App::new(total_swaps, deposit_chain, exit_tx);
+    let tick_rate = Duration::from_millis(200);
+
+    loop {
+        let mut redraw = true;
+        loop {
+            match receiver.try_recv() {
+                Ok(event) => {
+                    app.handle_event(event);
+                    redraw = true;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    app.mark_channel_closed();
+                    break;
+                }
+            }
+        }
+
+        if redraw {
+            terminal.draw(|f| app.draw(f))?;
+        }
+
+        if app.should_exit() {
+            break;
+        }
+
+        if event::poll(tick_rate)? {
+            if let Event::Key(key_event) = event::read()? {
+                app.handle_key_event(key_event);
+            }
+            terminal.draw(|f| app.draw(f))?;
+            if app.should_exit() {
+                break;
+            }
+        }
+    }
+
+    disable_raw_mode()?;
+    crossterm::execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    terminal.show_cursor()?;
+    Ok(())
+}
+
+struct App {
+    rows: Vec<SwapRow>,
+    total: usize,
+    deposit_chain: ChainType,
+    shutdown: bool,
+    receiver_closed: bool,
+    exit_notifier: Option<oneshot::Sender<()>>,
+    logs: VecDeque<String>,
+    view_mode: ViewMode,
+    table_scroll: TableScroll,
+    log_scroll: LogScroll,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ViewMode {
+    Dashboard,
+    Logs,
+}
+
+#[derive(Default)]
+struct TableScroll {
+    state: TableState,
+}
+
+impl TableScroll {
+    fn ensure_in_bounds(&mut self, len: usize) {
+        if len == 0 {
+            self.state.select(None);
+            return;
+        }
+        match self.state.selected() {
+            Some(idx) if idx < len => {}
+            _ => self.state.select(Some(len - 1)),
+        }
+    }
+
+    fn scroll_up(&mut self, lines: usize, len: usize) {
+        if len == 0 {
+            self.state.select(None);
+            return;
+        }
+        let current = self.state.selected().unwrap_or(len - 1);
+        let new_index = current.saturating_sub(lines);
+        self.state.select(Some(new_index));
+    }
+
+    fn scroll_down(&mut self, lines: usize, len: usize) {
+        if len == 0 {
+            self.state.select(None);
+            return;
+        }
+        let current = self.state.selected().unwrap_or(0);
+        let new_index = std::cmp::min(current.saturating_add(lines), len - 1);
+        self.state.select(Some(new_index));
+    }
+
+    fn scroll_to_start(&mut self, len: usize) {
+        if len == 0 {
+            self.state.select(None);
+        } else {
+            self.state.select(Some(0));
+        }
+    }
+
+    fn snap_to_end(&mut self, len: usize) {
+        if len == 0 {
+            self.state.select(None);
+        } else {
+            self.state.select(Some(len - 1));
+        }
+    }
+
+    fn is_at_end(&self, len: usize) -> bool {
+        if len == 0 {
+            true
+        } else {
+            match self.state.selected() {
+                Some(idx) => idx >= len.saturating_sub(1),
+                None => true,
+            }
+        }
+    }
+
+    fn state_mut(&mut self) -> &mut TableState {
+        &mut self.state
+    }
+}
+
+#[derive(Default)]
+struct LogScroll {
+    offset: usize,
+}
+
+impl LogScroll {
+    fn scroll_up(&mut self, lines: usize, _len: usize) {
+        self.offset = self.offset.saturating_sub(lines);
+    }
+
+    fn scroll_down(&mut self, lines: usize, len: usize) {
+        if len == 0 {
+            self.offset = 0;
+        } else {
+            let max_offset = len.saturating_sub(1);
+            self.offset = std::cmp::min(self.offset.saturating_add(lines), max_offset);
+        }
+    }
+
+    fn scroll_to_start(&mut self) {
+        self.offset = 0;
+    }
+
+    fn snap_to_end(&mut self, len: usize) {
+        if len == 0 {
+            self.offset = 0;
+        } else {
+            self.offset = len - 1;
+        }
+    }
+
+    fn ensure_in_bounds(&mut self, len: usize) {
+        if len == 0 {
+            self.offset = 0;
+        } else {
+            let max_offset = len.saturating_sub(1);
+            if self.offset > max_offset {
+                self.offset = max_offset;
+            }
+        }
+    }
+
+    fn is_at_end(&self, len: usize) -> bool {
+        len == 0 || self.offset >= len.saturating_sub(1)
+    }
+
+    fn on_pop_front(&mut self) {
+        if self.offset > 0 {
+            self.offset -= 1;
+        }
+    }
+
+    fn view_start(&self, len: usize, view_height: usize) -> usize {
+        if len == 0 || view_height == 0 {
+            0
+        } else {
+            let max_start = len.saturating_sub(view_height);
+            std::cmp::min(self.offset, max_start)
+        }
+    }
+}
+
+impl App {
+    fn new(total: usize, deposit_chain: ChainType, exit_notifier: oneshot::Sender<()>) -> Self {
+        let rows = (0..total).map(SwapRow::new).collect();
+        let mut app = Self {
+            rows,
+            total,
+            deposit_chain,
+            shutdown: false,
+            receiver_closed: false,
+            exit_notifier: Some(exit_notifier),
+            logs: VecDeque::new(),
+            view_mode: ViewMode::Dashboard,
+            table_scroll: TableScroll::default(),
+            log_scroll: LogScroll::default(),
+        };
+        app.table_scroll.snap_to_end(app.rows.len());
+        app
+    }
+
+    fn handle_event(&mut self, event: UiEvent) {
+        match event {
+            UiEvent::Swap(update) => self.apply_swap_update(update),
+            UiEvent::Log(line) => self.push_log(line),
+        }
+    }
+
+    fn apply_swap_update(&mut self, update: SwapUpdate) {
+        if matches!(update.stage, SwapStage::Shutdown) {
+            self.shutdown = true;
+            self.notify_exit();
+            return;
+        }
+        if update.index >= self.rows.len() {
+            return;
+        }
+        let follow = self.table_scroll.is_at_end(self.rows.len());
+        if let Some(row) = self.rows.get_mut(update.index) {
+            row.apply(update);
+        }
+        if follow {
+            self.table_scroll.snap_to_end(self.rows.len());
+        } else {
+            self.table_scroll.ensure_in_bounds(self.rows.len());
+        }
+    }
+
+    fn mark_channel_closed(&mut self) {
+        self.receiver_closed = true;
+    }
+
+    fn push_log(&mut self, line: String) {
+        const MAX_LOG_LINES: usize = 500;
+        let was_at_end = self.log_scroll.is_at_end(self.logs.len());
+        if self.logs.len() >= MAX_LOG_LINES {
+            self.logs.pop_front();
+            self.log_scroll.on_pop_front();
+        }
+        self.logs.push_back(line);
+        if was_at_end {
+            self.log_scroll.snap_to_end(self.logs.len());
+        } else {
+            self.log_scroll.ensure_in_bounds(self.logs.len());
+        }
+    }
+
+    fn should_exit(&self) -> bool {
+        self.shutdown
+    }
+
+    fn handle_key_event(&mut self, key: KeyEvent) {
+        if key.kind != KeyEventKind::Press {
+            return;
+        }
+        let ctrl_c = key.modifiers.contains(KeyModifiers::CONTROL)
+            && matches!(key.code, KeyCode::Char('c' | 'C'));
+        let quit_key = matches!(key.code, KeyCode::Char('q' | 'Q') | KeyCode::Esc);
+
+        if ctrl_c || quit_key {
+            self.shutdown = true;
+            self.notify_exit();
+            return;
+        }
+
+        match key.code {
+            KeyCode::Tab => self.toggle_view_mode(),
+            KeyCode::Char('l') | KeyCode::Char('L') => self.set_view_mode(ViewMode::Logs),
+            KeyCode::Char('d') | KeyCode::Char('D') => self.set_view_mode(ViewMode::Dashboard),
+            KeyCode::Up | KeyCode::Char('k') => self.scroll_up(1),
+            KeyCode::Down | KeyCode::Char('j') => self.scroll_down(1),
+            KeyCode::PageUp | KeyCode::Char('b')
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.scroll_up(10)
+            }
+            KeyCode::PageDown | KeyCode::Char('f')
+                if key.modifiers.contains(KeyModifiers::CONTROL) =>
+            {
+                self.scroll_down(10)
+            }
+            KeyCode::Home | KeyCode::Char('g') => self.scroll_to_start(),
+            KeyCode::End | KeyCode::Char('G') => self.scroll_to_end(),
+            _ => {}
+        }
+    }
+
+    fn set_view_mode(&mut self, mode: ViewMode) {
+        self.view_mode = mode;
+        match self.view_mode {
+            ViewMode::Dashboard => self.table_scroll.ensure_in_bounds(self.rows.len()),
+            ViewMode::Logs => self.log_scroll.ensure_in_bounds(self.logs.len()),
+        }
+    }
+
+    fn toggle_view_mode(&mut self) {
+        let next = match self.view_mode {
+            ViewMode::Dashboard => ViewMode::Logs,
+            ViewMode::Logs => ViewMode::Dashboard,
+        };
+        self.set_view_mode(next);
+    }
+
+    fn scroll_up(&mut self, lines: usize) {
+        match self.view_mode {
+            ViewMode::Dashboard => self.table_scroll.scroll_up(lines, self.rows.len()),
+            ViewMode::Logs => self.log_scroll.scroll_up(lines, self.logs.len()),
+        }
+    }
+
+    fn scroll_down(&mut self, lines: usize) {
+        match self.view_mode {
+            ViewMode::Dashboard => self.table_scroll.scroll_down(lines, self.rows.len()),
+            ViewMode::Logs => self.log_scroll.scroll_down(lines, self.logs.len()),
+        }
+    }
+
+    fn scroll_to_start(&mut self) {
+        match self.view_mode {
+            ViewMode::Dashboard => self.table_scroll.scroll_to_start(self.rows.len()),
+            ViewMode::Logs => self.log_scroll.scroll_to_start(),
+        }
+    }
+
+    fn scroll_to_end(&mut self) {
+        match self.view_mode {
+            ViewMode::Dashboard => self.table_scroll.snap_to_end(self.rows.len()),
+            ViewMode::Logs => self.log_scroll.snap_to_end(self.logs.len()),
+        }
+    }
+
+    fn notify_exit(&mut self) {
+        if let Some(tx) = self.exit_notifier.take() {
+            let _ = tx.send(());
+        }
+    }
+
+    fn completed_count(&self) -> usize {
+        self.rows.iter().filter(|row| row.is_terminal).count()
+    }
+
+    fn draw(&mut self, frame: &mut Frame<'_>) {
+        match self.view_mode {
+            ViewMode::Dashboard => self.draw_dashboard(frame),
+            ViewMode::Logs => self.draw_logs(frame),
+        }
+    }
+
+    fn draw_dashboard(&mut self, frame: &mut Frame<'_>) {
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(5),
+                Constraint::Length(1),
+            ])
+            .split(frame.area());
+
+        let header = format!(
+            "Completed {}/{} | Deposit: {:?} | View: Dashboard (j/k scroll, g/G top/bottom, Tab toggles)",
+            self.completed_count(),
+            self.total,
+            self.deposit_chain
+        );
+        let header_block = Block::default()
+            .title(header)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Blue));
+        frame.render_widget(header_block, layout[0]);
+
+        self.table_scroll.ensure_in_bounds(self.rows.len());
+
+        let rows = self.rows.iter().map(SwapRow::to_table_row);
+        let table = Table::new(
+            rows,
+            [
+                Constraint::Length(4),
+                Constraint::Length(12),
+                Constraint::Length(20),
+                Constraint::Percentage(40),
+                Constraint::Length(18),
+                Constraint::Length(10),
+            ],
+        )
+        .header(
+            Row::new([
+                Cell::from("#"),
+                Cell::from("Swap"),
+                Cell::from("Stage"),
+                Cell::from("Detail"),
+                Cell::from("Tx Hash"),
+                Cell::from("Updated"),
+            ])
+            .style(Style::default().add_modifier(Modifier::BOLD)),
+        )
+        .block(Block::default().borders(Borders::ALL))
+        .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
+        .highlight_symbol("▶ ");
+
+        frame.render_stateful_widget(table, layout[1], self.table_scroll.state_mut());
+
+        let footer = if self.shutdown {
+            "Shutting down..."
+        } else if self.completed_count() >= self.total && self.receiver_closed {
+            "Swaps complete. Press Ctrl+C or Q to exit"
+        } else if self.completed_count() >= self.total {
+            "Swaps complete"
+        } else if self.receiver_closed {
+            "No more updates"
+        } else {
+            "Running"
+        };
+
+        let footer_block = Block::default()
+            .title(footer)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(footer_block, layout[2]);
+    }
+
+    fn draw_logs(&mut self, frame: &mut Frame<'_>) {
+        let layout = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([Constraint::Min(1), Constraint::Length(1)])
+            .split(frame.area());
+
+        let log_area = layout[0];
+        let inner_height = log_area.height.saturating_sub(2) as usize;
+        let view_height = inner_height.max(1);
+        let len = self.logs.len();
+        self.log_scroll.ensure_in_bounds(len);
+        let start = self.log_scroll.view_start(len, view_height);
+
+        let mut log_lines: Vec<Line> = if len == 0 {
+            vec![Line::from("No log messages yet")]
+        } else {
+            self.logs
+                .iter()
+                .skip(start)
+                .take(view_height)
+                .map(|line| Line::from(line.as_str()))
+                .collect()
+        };
+
+        if log_lines.is_empty() {
+            log_lines.push(Line::from(""));
+        }
+
+        let log_block = Paragraph::new(log_lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .title("Logs (j/k scroll, g/G top/bottom, Tab toggles)")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+        frame.render_widget(log_block, layout[0]);
+
+        let footer_text = if self.receiver_closed {
+            "No more updates"
+        } else {
+            "Streaming logs"
+        };
+
+        let footer_line = Line::from(vec![Span::styled(
+            format!("{} | View: Logs", footer_text),
+            Style::default().fg(Color::Gray),
+        )]);
+
+        let footer = Paragraph::new(footer_line).block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        );
+
+        frame.render_widget(footer, layout[1]);
+    }
+}
+
+struct SwapRow {
+    index: usize,
+    swap_id: Option<Uuid>,
+    status_text: String,
+    detail_text: String,
+    tx_hash: Option<String>,
+    last_update: Option<String>,
+    is_terminal: bool,
+    is_error: bool,
+}
+
+impl SwapRow {
+    fn new(index: usize) -> Self {
+        Self {
+            index,
+            swap_id: None,
+            status_text: "pending".to_string(),
+            detail_text: String::new(),
+            tx_hash: None,
+            last_update: None,
+            is_terminal: false,
+            is_error: false,
+        }
+    }
+
+    fn apply(&mut self, update: SwapUpdate) {
+        self.last_update = Some(update.timestamp.format("%H:%M:%S").to_string());
+        match update.stage {
+            SwapStage::QuoteRequested => {
+                self.status_text = "quote requested".to_string();
+                self.detail_text.clear();
+                self.is_error = false;
+                self.is_terminal = false;
+                self.tx_hash = None;
+            }
+            SwapStage::QuoteFailed { reason } => {
+                self.status_text = "quote failed".to_string();
+                self.detail_text = reason;
+                self.is_terminal = true;
+                self.is_error = true;
+            }
+            SwapStage::QuoteReceived { quote_id } => {
+                self.status_text = "quote received".to_string();
+                self.detail_text = format!("quote {}", short_uuid(&quote_id));
+                self.is_terminal = false;
+                self.is_error = false;
+                self.tx_hash = None;
+            }
+            SwapStage::SwapSubmitted { swap_id } => {
+                self.swap_id = Some(swap_id);
+                self.status_text = "swap submitted".to_string();
+                self.detail_text = short_uuid(&swap_id);
+                self.is_terminal = false;
+                self.is_error = false;
+            }
+            SwapStage::PaymentBroadcast { swap_id, tx_hash } => {
+                self.swap_id = Some(swap_id);
+                self.status_text = "payment broadcast".to_string();
+                self.tx_hash = Some(short_hash(&tx_hash));
+                self.detail_text = format!("tx {}", short_hash(&tx_hash));
+                self.is_terminal = false;
+                self.is_error = false;
+            }
+            SwapStage::PaymentFailed { swap_id, reason } => {
+                if let Some(id) = swap_id {
+                    self.swap_id = Some(id);
+                }
+                self.status_text = "payment failed".to_string();
+                self.detail_text = reason;
+                self.is_terminal = true;
+                self.is_error = true;
+            }
+            SwapStage::StatusUpdated { swap_id, status } => {
+                self.swap_id = Some(swap_id);
+                self.status_text = status;
+                self.is_error = false;
+                self.is_terminal = false;
+            }
+            SwapStage::Settled { swap_id } => {
+                self.swap_id = Some(swap_id);
+                self.status_text = "Settled".to_string();
+                self.detail_text.clear();
+                self.is_terminal = true;
+                self.is_error = false;
+            }
+            SwapStage::FinishedWithError { swap_id, reason } => {
+                if let Some(id) = swap_id {
+                    self.swap_id = Some(id);
+                }
+                self.status_text = "error".to_string();
+                self.detail_text = reason;
+                self.is_terminal = true;
+                self.is_error = true;
+            }
+            SwapStage::Shutdown => {}
+        }
+    }
+
+    fn to_table_row(&self) -> Row {
+        let swap_cell = self
+            .swap_id
+            .map(|id| short_uuid(&id).to_string())
+            .unwrap_or_else(|| "-".to_string());
+        let tx_cell = self.tx_hash.clone().unwrap_or_else(|| "-".to_string());
+        let updated = self
+            .last_update
+            .clone()
+            .unwrap_or_else(|| "--:--:--".to_string());
+
+        let style = if self.is_terminal {
+            if self.is_error {
+                Style::default().fg(Color::Red)
+            } else {
+                Style::default().fg(Color::Green)
+            }
+        } else {
+            Style::default()
+        };
+
+        Row::new(vec![
+            Cell::from(self.index.to_string()),
+            Cell::from(swap_cell),
+            Cell::from(self.status_text.clone()),
+            Cell::from(self.detail_text.clone()),
+            Cell::from(tx_cell),
+            Cell::from(updated),
+        ])
+        .style(style)
+    }
+}
+
+fn short_uuid(id: &Uuid) -> String {
+    id.to_string()
+        .split('-')
+        .next()
+        .unwrap_or_default()
+        .to_string()
+}
+
+fn short_hash(hash: &str) -> String {
+    if hash.len() <= 10 {
+        hash.to_string()
+    } else {
+        let prefix = &hash[..6];
+        let suffix = &hash[hash.len() - 4..];
+        format!("{}...{}", prefix, suffix)
+    }
+}

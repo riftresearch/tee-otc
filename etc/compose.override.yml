@@ -1,0 +1,237 @@
+services:
+  token-indexer-postgres:
+    image: postgres:16-alpine
+    container_name: token-indexer-postgres
+    environment:
+      POSTGRES_USER: token_indexer_user
+      POSTGRES_PASSWORD: token_indexer_password
+      POSTGRES_DB: token_indexer_db
+    volumes: []
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U token_indexer_user -d token_indexer_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - tee-network
+
+  devnet: 
+    container_name: devnet
+    depends_on:
+      token-indexer-postgres:
+        condition: service_healthy
+    build:
+      context: ..
+      dockerfile_inline: |
+        FROM rust:1.88 AS chef
+        RUN cargo install cargo-chef
+        WORKDIR /app
+
+        FROM chef AS planner
+        COPY . .
+        RUN cargo chef prepare --recipe-path recipe.json
+
+        FROM chef AS builder
+        COPY --from=planner /app/recipe.json recipe.json
+        COPY --from=planner /app/sqlx-sqlite-shim ./sqlx-sqlite-shim
+        RUN cargo chef cook --release --recipe-path recipe.json
+        COPY . .
+        RUN cargo build --release --bin devnet --exclude integration-tests --workspace
+
+        FROM debian:bookworm-slim
+        RUN apt-get update && apt-get install -y \
+            ca-certificates \
+            curl \
+            && rm -rf /var/lib/apt/lists/*
+          
+        RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+            apt-get install -y nodejs && \
+            npm install -g pnpm@9.14.4
+
+        RUN curl -fsSL https://github.com/foundry-rs/foundry/releases/download/v1.3.6/foundry_v1.3.6_linux_amd64.tar.gz | tar -xzf - -C /usr/local/bin
+          
+        WORKDIR /app
+        COPY --from=builder /app/ /app/
+        RUN cd evm-token-indexer && pnpm install && cd ..
+        CMD ["./target/release/devnet", "server"]
+    environment:
+      TOKEN_INDEXER_DATABASE_URL: postgres://token_indexer_user:token_indexer_password@token-indexer-postgres:5432/token_indexer_db
+    networks:
+      - tee-network
+    
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://devnet:50104/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "50100:50100"
+      - "50101:50101"
+      - "50102:50102"
+      - "50103:50103"
+      - "50104:50104"
+
+  otc-server:
+    image: !reset null
+    build:
+      context: ..
+      dockerfile_inline: |
+        FROM rust:1.88 AS chef
+        RUN cargo install cargo-chef
+        WORKDIR /app
+
+        FROM chef AS planner
+        COPY . .
+        RUN cargo chef prepare --recipe-path recipe.json
+
+        FROM chef AS builder
+        COPY --from=planner /app/recipe.json recipe.json
+        COPY --from=planner /app/sqlx-sqlite-shim ./sqlx-sqlite-shim
+        RUN cargo chef cook --release --recipe-path recipe.json
+        COPY . .
+        RUN cargo build --release --bin otc-server --features integration-test --exclude integration-tests --workspace
+
+        FROM debian:bookworm-slim
+        RUN apt-get update && apt-get install -y \
+            ca-certificates \
+            && rm -rf /var/lib/apt/lists/*
+        WORKDIR /app
+        COPY --from=builder /app/target/release/otc-server /app/
+        EXPOSE 4422
+        CMD ["./otc-server", "--host", "0.0.0.0", "--port", "4422"]
+
+    depends_on: !override
+      devnet:
+        condition: service_healthy
+    environment:
+      GRANT_SUDO: yes
+      DATABASE_URL: postgres://otc_user:otc_password@postgres:5432/otc_db
+      RUST_LOG: info 
+      EVM_RPC_URL: http://devnet:50101
+      UNTRUSTED_EVM_TOKEN_INDEXER_URL: http://devnet:50104
+      BITCOIN_RPC_URL: http://devnet:50102
+      BITCOIN_RPC_AUTH: bitcoind:bitcoind
+      ELECTRUM_HTTP_SERVER_URL: http://devnet:50103
+      CORS_DOMAIN: "*"
+      CHAINALYSIS_HOST: ~
+      CHAINALYSIS_TOKEN: ~
+      CONFIG_DIR: /app/config
+      DSTACK_SOCK_PATH: /var/run/dstack.sock
+      BITCOIN_NETWORK: regtest
+    volumes: []
+  
+  rfq-server:
+    build:
+      context: ..
+      dockerfile_inline: |
+        FROM rust:1.88 AS chef
+        RUN cargo install cargo-chef
+        WORKDIR /app
+
+        FROM chef AS planner
+        COPY . .
+        RUN cargo chef prepare --recipe-path recipe.json
+
+        FROM chef AS builder
+        COPY --from=planner /app/recipe.json recipe.json
+        COPY --from=planner /app/sqlx-sqlite-shim ./sqlx-sqlite-shim
+        RUN cargo chef cook --release --recipe-path recipe.json
+        COPY . .
+        RUN cargo build --release --bin rfq-server --features integration-test --exclude integration-tests --workspace
+
+        FROM debian:bookworm-slim
+        RUN apt-get update && apt-get install -y \
+            ca-certificates \
+            && rm -rf /var/lib/apt/lists/*
+        WORKDIR /app
+        COPY --from=builder /app/target/release/rfq-server /app/
+        EXPOSE 3001
+        CMD ["./rfq-server", "--host", "0.0.0.0", "--port", "3001"]
+  
+    depends_on:
+      devnet:
+        condition: service_healthy
+    environment:
+      RUST_LOG: info
+      QUOTE_TIMEOUT_MILLISECONDS: 500
+      CORS_DOMAIN: "*"
+      CHAINALYSIS_HOST: ~
+      CHAINALYSIS_TOKEN: ~
+    networks:
+      - tee-network
+    ports:
+      - "3001:3001"
+    volumes: []
+
+  reth: !reset null 
+
+  lighthouse: !reset null 
+
+  bitcoin-core: !reset null 
+
+  eth-jwt-generator: !reset null
+
+  postgres:
+    networks:
+    volumes: [] 
+
+  prometheus:
+    networks:
+    volumes: []
+
+  mm-postgres:
+    networks:
+    volumes: []
+  
+  market-maker:
+    ports:
+      - "9000:9000"
+    depends_on:
+      mm-postgres:
+        condition: service_healthy
+      devnet:
+        condition: service_healthy
+      otc-server:
+        condition: service_started
+      rfq-server:
+        condition: service_started
+    environment:
+      RUST_LOG: info
+      METRICS_LISTEN_ADDR: 0.0.0.0:9000
+      MM_TAG: test-mm
+      MM_ID: a4c6da0d-a071-40ea-b69c-e23d49327d42
+      MM_API_SECRET: l3f2zYpsLHwI8Qx3mOiYOeef51r0PCk5
+      OTC_WS_URL: ws://otc-server:4422/ws/mm
+      RFQ_WS_URL: ws://rfq-server:3001/ws/mm
+      BITCOIN_WALLET_DB_PATH: /app/bitcoin-wallet-db/wallet.sqlite
+      # bitcoin address: bcrt1qn65u46clcspgdg7ylgdvd5848cg0jzgy0a8lee
+      BITCOIN_WALLET_DESCRIPTOR: wpkh(cQzMQbLioizdTAVPHtYWN5bpNoCuZvgDCPvfK2Aker5Q5abnnybJ)
+      BITCOIN_WALLET_NETWORK: regtest
+      BITCOIN_WALLET_ESPLORA_URL: http://devnet:50103
+      # ethereum address: 0x42c0ca15451F626B83f6BA80fDB13A4F59167213
+      ETHEREUM_WALLET_PRIVATE_KEY: 1b3a3180231b9b22aee5e31606a33da3685e83d948d7f569f6623143371fceb5
+      ETHEREUM_RPC_WS_URL: ws://devnet:50101
+      TRADE_SPREAD_BPS: 0
+      FEE_SAFETY_MULTIPLIER: 1.5
+      BALANCE_UTILIZATION_THRESHOLD_BPS: 9500
+      MM_DATABASE_URL: postgres://user:pass@mm-postgres:5432/mm_db
+      INVENTORY_TARGET_RATIO_BPS: 5000
+      REBALANCE_TOLERANCE_BPS: 2500
+      COINBASE_EXCHANGE_API_KEY: ""
+      COINBASE_EXCHANGE_API_PASSPHRASE: ""
+      COINBASE_EXCHANGE_API_SECRET: ""
+      COINBASE_EXCHANGE_API_BASE_URL: https://api.exchange.coinbase.com
+      AUTO_MANAGE_INVENTORY: false
+    volumes: []
+    networks:
+      - tee-network
+      - mm-network
+  
+  mm-node-exporter:
+    volumes: []
+  
+  mm-prometheus:
+    volumes: []
+  
+  mm-grafana:
+    volumes: []

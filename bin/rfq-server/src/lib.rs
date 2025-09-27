@@ -43,7 +43,7 @@ pub struct RfqServerArgs {
     pub log_level: String,
 
     /// Quote request timeout in milliseconds
-    #[arg(long, env = "QUOTE_TIMEOUT_MILLISECONDS", default_value = "500")]
+    #[arg(long, env = "QUOTE_TIMEOUT_MILLISECONDS", default_value = "3000")]
     pub quote_timeout_milliseconds: u64,
 
     /// CORS domain to allow (supports wildcards like "*.example.com")

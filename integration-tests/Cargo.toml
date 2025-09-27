@@ -35,3 +35,4 @@ mock_instant = {workspace=true}
 # Enable mock-time so integration tests can advance utc::now()
 utc = {workspace=true, features=["mock-time"]}
 eip3009-erc20-contract = {workspace = true}
+metrics = {workspace = true}
