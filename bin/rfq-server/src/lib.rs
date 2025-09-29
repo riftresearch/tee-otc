@@ -1,6 +1,7 @@
 use clap::Parser;
+use metrics_exporter_prometheus::BuildError;
 use snafu::prelude::*;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 
 pub mod error;
 pub mod mm_registry;
@@ -22,6 +23,18 @@ pub enum Error {
 
     #[snafu(display("Failed to load API keys: {}", source))]
     ApiKeyLoad { source: snafu::Whatever },
+
+    #[snafu(display("Failed to install metrics recorder: {}", source))]
+    MetricsRecorder { source: BuildError },
+
+    #[snafu(display("Failed to bind metrics listener on {}: {}", addr, source))]
+    MetricsServerBind {
+        source: std::io::Error,
+        addr: SocketAddr,
+    },
+
+    #[snafu(display("Metrics server error: {}", source))]
+    MetricsServer { source: std::io::Error },
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
@@ -41,6 +54,10 @@ pub struct RfqServerArgs {
     /// Log level
     #[arg(long, env = "RUST_LOG", default_value = "info")]
     pub log_level: String,
+
+    /// Address for the Prometheus metrics exporter
+    #[arg(long, env = "METRICS_LISTEN_ADDR")]
+    pub metrics_listen_addr: Option<SocketAddr>,
 
     /// Quote request timeout in milliseconds
     #[arg(long, env = "QUOTE_TIMEOUT_MILLISECONDS", default_value = "3000")]

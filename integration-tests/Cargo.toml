@@ -14,13 +14,13 @@ ctor = {workspace = true}
 tracing-subscriber = { workspace = true }
 otc-server = {workspace = true, features = ["integration-test"] }
 rfq-server = {workspace= true, features = ["integration-test"]}
-market-maker = {workspace = true, features = ["mock-price-oracle"] }
+market-maker = {workspace = true, features = []}
 sqlx = {workspace = true}
 reqwest = {workspace = true}
 serde_json = {workspace = true}
 devnet = {workspace = true}
-alloy = {workspace =true}
-tracing = {workspace =true}
+alloy = {workspace = true}
+tracing = {workspace = true}
 evm-token-indexer-client = {workspace = true}
 bitcoincore-rpc-async = {workspace = true}
 bitcoin = {workspace = true}

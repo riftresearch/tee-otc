@@ -127,12 +127,13 @@ impl BitcoinEtherPriceOracle {
             {
                 match self.connect_and_stream(WS_URI, PRODUCT_ID).await {
                     Ok(_) => {
-                        warn!("WebSocket stream ended unexpectedly, reconnecting...");
+                        tracing::warn!("WebSocket stream ended unexpectedly, reconnecting...");
                     }
                     Err(e) => {
-                        error!(
+                        tracing::error!(
                             "WebSocket error: {}, reconnecting in {:?}...",
-                            e, RECONNECT_DELAY
+                            e,
+                            RECONNECT_DELAY
                         );
                     }
                 }

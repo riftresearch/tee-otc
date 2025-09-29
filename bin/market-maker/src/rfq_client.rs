@@ -1,11 +1,9 @@
-use crate::quote_storage::QuoteStorage;
+use crate::config::Config;
 use crate::rfq_handler::RFQMessageHandler;
-use crate::wallet::WalletManager;
-use crate::{config::Config, wrapped_bitcoin_quoter::WrappedBitcoinQuoter};
 use futures_util::{SinkExt, StreamExt};
 use otc_protocols::rfq::{ProtocolMessage, RFQRequest};
 use snafu::prelude::*;
-use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{
     connect_async_with_config,
@@ -38,10 +36,43 @@ pub enum RfqClientError {
 
 type Result<T, E = RfqClientError> = std::result::Result<T, E>;
 
+type WebSocketMessage = Message;
+
+#[derive(Clone)]
+pub struct WebSocketSender {
+    tx: mpsc::Sender<WebSocketMessage>,
+}
+
+impl WebSocketSender {
+    #[allow(dead_code)]
+    pub async fn send(
+        &self,
+        message: WebSocketMessage,
+    ) -> Result<(), mpsc::error::SendError<WebSocketMessage>> {
+        self.tx.send(message).await
+    }
+
+    #[allow(dead_code)]
+    pub async fn send_protocol_message<T>(&self, message: &ProtocolMessage<T>) -> Result<()>
+    where
+        T: serde::Serialize,
+    {
+        let json = serde_json::to_string(message).context(SerializationSnafu)?;
+        self.tx
+            .send(Message::Text(json))
+            .await
+            .map_err(|_| RfqClientError::MessageSend {
+                source: tokio_tungstenite::tungstenite::Error::ConnectionClosed,
+            })?;
+        Ok(())
+    }
+}
+
 pub struct RfqClient {
     config: Config,
     handler: RFQMessageHandler,
     rfq_ws_url: String,
+    sender: Option<WebSocketSender>,
 }
 
 impl RfqClient {
@@ -50,10 +81,16 @@ impl RfqClient {
             config,
             handler: rfq_handler,
             rfq_ws_url,
+            sender: None,
         }
     }
 
-    pub async fn run(&self) -> Result<()> {
+    #[allow(dead_code)]
+    pub fn get_sender(&self) -> Option<WebSocketSender> {
+        self.sender.clone()
+    }
+
+    pub async fn run(&mut self) -> Result<()> {
         let mut reconnect_attempts = 0;
 
         loop {
@@ -85,7 +122,7 @@ impl RfqClient {
         }
     }
 
-    async fn connect_and_run(&self) -> Result<()> {
+    async fn connect_and_run(&mut self) -> Result<()> {
         let url = Url::parse(&self.rfq_ws_url).context(UrlParseSnafu)?;
         info!("Connecting to RFQ server at {}", url);
 
@@ -119,30 +156,61 @@ impl RfqClient {
 
         info!("RFQ WebSocket connected, authenticated via headers");
 
-        let (mut write, mut read) = ws_stream.split();
+        let (ws_sink, mut ws_stream) = ws_stream.split();
 
-        // Handle messages
-        while let Some(msg) = read.next().await {
+        // Create channel for writer task (buffer size of 1024 messages)
+        let (websocket_tx, mut websocket_rx) = mpsc::channel::<WebSocketMessage>(1024);
+
+        // Store sender in self for external access
+        self.sender = Some(WebSocketSender {
+            tx: websocket_tx.clone(),
+        });
+
+        // Spawn single writer task that owns the sink
+        // This ensures all messages are sent in the order they are queued,
+        // without interleaving that could corrupt the protocol
+        let writer_handle = tokio::spawn(async move {
+            let mut sink = ws_sink;
+            while let Some(message) = websocket_rx.recv().await {
+                if let Err(e) = sink.send(message).await {
+                    error!("Failed to send WebSocket message: {}", e);
+                    break;
+                }
+            }
+            // Gracefully close the sink
+            let _ = sink.flush().await;
+            let _ = sink.close().await;
+            info!("WebSocket writer task finished");
+        });
+
+        // Handle incoming messages
+        while let Some(msg) = ws_stream.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
-                    // First check if it's a Connected response
-                    if text.contains("Connected") {
-                        info!("Received Connected acknowledgment from RFQ server");
-                        continue;
-                    }
-
-                    // Otherwise, try to parse as a protocol message
+                    // Try to parse as a protocol message
                     match serde_json::from_str::<ProtocolMessage<RFQRequest>>(&text) {
                         Ok(protocol_msg) => {
-                            if let Some(response) = self.handler.handle_request(&protocol_msg).await
-                            {
-                                let response_json =
-                                    serde_json::to_string(&response).context(SerializationSnafu)?;
-                                write
-                                    .send(Message::Text(response_json))
-                                    .await
-                                    .context(MessageSendSnafu)?;
-                            }
+                            let handler = self.handler.clone();
+                            let websocket_sender = websocket_tx.clone();
+                            tokio::spawn(async move {
+                                if let Some(response) = handler.handle_request(&protocol_msg).await
+                                {
+                                    let response_json = match serde_json::to_string(&response) {
+                                        Ok(json) => json,
+                                        Err(e) => {
+                                            error!("Failed to serialize response: {}", e);
+                                            return;
+                                        }
+                                    };
+
+                                    // Send response through the fan-in channel to the writer task
+                                    if let Err(e) =
+                                        websocket_sender.send(Message::Text(response_json)).await
+                                    {
+                                        error!("Failed to queue response message: {}", e);
+                                    }
+                                }
+                            });
                         }
                         Err(e) => {
                             error!("Failed to parse RFQ message: {}", e);
@@ -160,6 +228,13 @@ impl RfqClient {
                 _ => {}
             }
         }
+
+        // Clean up: drop sender to signal writer task to exit
+        self.sender = None;
+        drop(websocket_tx);
+
+        // Wait for writer task to finish
+        let _ = writer_handle.await;
 
         Ok(())
     }

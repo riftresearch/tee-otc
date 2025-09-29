@@ -43,6 +43,8 @@ bitcoin = { workspace = true }
 bitcoincore-rpc-async = {workspace=true}
 chainalysis-address-screener = { workspace = true }
 dstack-sdk = {workspace=true}
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 
 [dev-dependencies]
 sqlx = { workspace = true }
@@ -51,4 +53,3 @@ bitcoin = { workspace = true }
 
 [features]
 integration-test = ["otc-auth/integration-test"]
-

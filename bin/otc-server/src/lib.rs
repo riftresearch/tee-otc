@@ -1,7 +1,12 @@
-use std::{fs, net::IpAddr, path::PathBuf, time::Duration};
+use std::{
+    fs,
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+};
 
 use bitcoincore_rpc_async::Auth;
 use clap::Parser;
+use metrics_exporter_prometheus::BuildError;
 use snafu::{prelude::*, Whatever};
 
 pub mod api;
@@ -35,6 +40,18 @@ pub enum Error {
 
     #[snafu(display("Generic error: {}", source))]
     Generic { source: Whatever },
+
+    #[snafu(display("Failed to install metrics recorder: {}", source))]
+    MetricsRecorder { source: BuildError },
+
+    #[snafu(display("Failed to bind metrics listener on {}: {}", addr, source))]
+    MetricsServerBind {
+        source: std::io::Error,
+        addr: SocketAddr,
+    },
+
+    #[snafu(display("Metrics server error: {}", source))]
+    MetricsServer { source: std::io::Error },
 }
 
 impl From<Whatever> for Error {
@@ -56,6 +73,10 @@ pub struct OtcServerArgs {
     /// Port to bind to
     #[arg(short, long, default_value = "3000")]
     pub port: u16,
+
+    /// Address for the Prometheus metrics exporter
+    #[arg(long, env = "METRICS_LISTEN_ADDR")]
+    pub metrics_listen_addr: Option<SocketAddr>,
 
     /// Database URL
     #[arg(

@@ -14,6 +14,9 @@ use crate::bitcoin_wallet::BitcoinWalletError;
 
 #[derive(Debug, Snafu)]
 pub enum WalletError {
+    #[snafu(display("Failed to update fee map: {}", error))]
+    UpdateFeeMapFailed { error: String },
+
     #[snafu(display("Crafting receive with authorization execution failed: {}", source))]
     ReceiveAuthorizationFailed {
         source: blockchain_utils::ReceiveAuthorizationError,

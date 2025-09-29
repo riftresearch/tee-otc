@@ -20,12 +20,18 @@ use axum::{
 use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use dstack_sdk::dstack_client::{DstackClient, GetQuoteResponse, InfoResponse};
 use futures_util::{SinkExt, StreamExt};
+use metrics::{describe_gauge, describe_histogram, gauge, histogram};
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
 use otc_chains::{bitcoin::BitcoinChain, ethereum::EthereumChain, ChainRegistry};
-use otc_protocols::mm::{Connected, MMRequest, MMResponse, ProtocolMessage};
+use otc_protocols::mm::{MMRequest, MMResponse, ProtocolMessage};
 use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
-use std::{net::SocketAddr, sync::Arc};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, OnceLock},
+    time::Instant,
+};
 use tokio::{sync::mpsc, time::Duration};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, info, warn};
@@ -49,6 +55,9 @@ struct Status {
 }
 
 const MM_PING_INTERVAL: Duration = Duration::from_secs(30);
+const QUOTE_LATENCY_METRIC: &str = "otc_quote_response_seconds";
+
+static PROMETHEUS_HANDLE: OnceLock<Arc<PrometheusHandle>> = OnceLock::new();
 
 pub async fn run_server(args: OtcServerArgs) -> Result<()> {
     info!("Starting OTC server...");
@@ -167,6 +176,12 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         dstack_client,
     };
 
+    if let Some(metrics_addr) = args.metrics_listen_addr {
+        setup_metrics(metrics_addr).await?;
+    } else {
+        install_metrics_recorder()?;
+    }
+
     let mut app = Router::new()
         // Health check
         .route("/status", get(status_handler))
@@ -243,6 +258,77 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         .context(crate::ServerStartSnafu)?;
 
     Ok(())
+}
+
+fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
+    if let Some(handle) = PROMETHEUS_HANDLE.get() {
+        return Ok(handle.clone());
+    }
+
+    let handle = PrometheusBuilder::new()
+        .install_recorder()
+        .context(crate::MetricsRecorderSnafu)?;
+    let shared_handle = Arc::new(handle);
+
+    describe_gauge!(
+        "otc_metrics_exporter_up",
+        "Set to 1 when the OTC server metrics recorder is installed."
+    );
+    gauge!("otc_metrics_exporter_up").set(1.0);
+
+    describe_histogram!(
+        QUOTE_LATENCY_METRIC,
+        "Latency in seconds for responding to quote requests."
+    );
+
+    if PROMETHEUS_HANDLE.set(shared_handle.clone()).is_err() {
+        if let Some(existing) = PROMETHEUS_HANDLE.get() {
+            return Ok(existing.clone());
+        }
+    }
+
+    Ok(shared_handle)
+}
+
+async fn setup_metrics(addr: SocketAddr) -> Result<()> {
+    let shared_handle = install_metrics_recorder()?;
+
+    let upkeep_handle = shared_handle.clone();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            ticker.tick().await;
+            upkeep_handle.run_upkeep();
+        }
+    });
+
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .context(crate::MetricsServerBindSnafu { addr })?;
+
+    let metrics_state = shared_handle.clone();
+    tokio::spawn(async move {
+        let app = Router::new()
+            .route("/metrics", get(metrics_handler))
+            .with_state(metrics_state);
+
+        if let Err(error) = axum::serve(listener, app).await {
+            error!("Metrics server error: {}", error);
+        }
+    });
+
+    Ok(())
+}
+
+async fn metrics_handler(State(handle): State<Arc<PrometheusHandle>>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
+        handle.render(),
+    )
 }
 
 async fn status_handler() -> impl IntoResponse {
@@ -485,28 +571,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
 
     let mm_id = mm_uuid.to_string();
 
-    // Send Connected response
-    let connected_response = Connected {
-        session_id: Uuid::new_v4(),
-        server_version: env!("CARGO_PKG_VERSION").to_string(),
-        timestamp: utc::now(),
-    };
-
-    let response = serde_json::json!({
-        "Connected": connected_response
-    });
-
     let (sender_tx, mut sender_rx) = mpsc::channel::<Message>(100);
-
-    // Send initial connected response
-    if sender_tx
-        .send(Message::Text(response.to_string()))
-        .await
-        .is_err()
-    {
-        error!("Failed to send Connected response");
-        return;
-    }
 
     // Spawn task to handle outgoing messages from the registry
     let mm_id_clone = mm_id.clone();
@@ -687,17 +752,39 @@ async fn get_tdx_quote(
     State(state): State<AppState>,
     Query(params): Query<TDXQuoteParams>,
 ) -> Result<Json<GetQuoteResponse>, crate::error::OtcServerError> {
+    let start = Instant::now();
     let challenge_hex = params.challenge_hex;
-    let challenge = alloy::hex::decode(challenge_hex).map_err(|e| {
-        crate::error::OtcServerError::BadRequest {
-            message: format!("Invalid challenge hex: {e}"),
-        }
-    })?;
+    let challenge = match alloy::hex::decode(&challenge_hex) {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            histogram!(
+                QUOTE_LATENCY_METRIC,
+                "endpoint" => "tdx_quote",
+                "status" => "error",
+                "reason" => "decode"
+            )
+            .record(start.elapsed().as_secs_f64());
 
-    state
-        .dstack_client
-        .get_quote(challenge)
-        .await
+            return Err(crate::error::OtcServerError::BadRequest {
+                message: format!("Invalid challenge hex: {e}"),
+            });
+        }
+    };
+
+    let result = state.dstack_client.get_quote(challenge).await;
+    let latency = start.elapsed().as_secs_f64();
+    let status = if result.is_ok() { "ok" } else { "error" };
+    let reason = if result.is_ok() { "none" } else { "dstack" };
+
+    histogram!(
+        QUOTE_LATENCY_METRIC,
+        "endpoint" => "tdx_quote",
+        "status" => status,
+        "reason" => reason
+    )
+    .record(latency);
+
+    result
         .map(Json)
         .map_err(|e| crate::error::OtcServerError::Internal {
             message: format!("TDX get quote failed: {e}"),

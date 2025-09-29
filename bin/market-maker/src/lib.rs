@@ -75,6 +75,11 @@ pub enum Error {
     #[snafu(display("Esplora client error: {}", source))]
     EsploraInitialization { source: esplora_client::Error },
 
+    #[snafu(display("Wrapped bitcoin quoter error: {}", source))]
+    WrappedBitcoinQuoter {
+        source: wrapped_bitcoin_quoter::WrappedBitcoinQuoterError,
+    },
+
     #[snafu(display("Deposit key storage error: {}", source))]
     DepositKeyStorage { source: deposit_key_storage::Error },
 
@@ -339,13 +344,14 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
 
     let btc_eth_price_oracle = price_oracle::BitcoinEtherPriceOracle::new(&mut join_set);
 
-    let wrapped_bitcoin_quoter = WrappedBitcoinQuoter::new(
+    let wrapped_bitcoin_quoter = Arc::new(WrappedBitcoinQuoter::new(
         btc_eth_price_oracle,
         esplora_client,
         provider.clone().erased(),
         args.trade_spread_bps,
         args.fee_safety_multiplier,
-    );
+        &mut join_set,
+    ));
 
     let payment_storage = Arc::new(
         PaymentStorage::new(&args.database_url)
@@ -378,14 +384,14 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
 
     let rfq_handler = rfq_handler::RFQMessageHandler::new(
         market_maker_id,
-        wrapped_bitcoin_quoter,
+        wrapped_bitcoin_quoter.clone(),
         quote_storage,
         wallet_manager.clone(),
         balance_strategy,
     );
 
     // Add RFQ client for handling quote requests
-    let rfq_client = rfq_client::RfqClient::new(
+    let mut rfq_client = rfq_client::RfqClient::new(
         Config {
             market_maker_id,
             market_maker_tag: args.market_maker_tag.clone(),
@@ -397,6 +403,11 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         rfq_handler,
         args.rfq_ws_url,
     );
+    // make sure fees are initiailized before quotes can be computed
+    wrapped_bitcoin_quoter
+        .ensure_fees_available()
+        .await
+        .context(WrappedBitcoinQuoterSnafu)?;
     join_set.spawn(async move {
         rfq_client.run().await.map_err(|e| Error::Client {
             source: otc_client::ClientError::BackgroundThreadExited {
@@ -432,6 +443,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     Ok(())
 }
 
+pub const QUOTE_LATENCY_METRIC: &str = "mm_quote_response_seconds";
 static PROMETHEUS_HANDLE: OnceLock<Arc<PrometheusHandle>> = OnceLock::new();
 
 pub fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
@@ -449,6 +461,11 @@ pub fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
         "Set to 1 when the market-maker metrics recorder is installed."
     );
     metrics::gauge!("mm_metrics_exporter_up").set(1.0);
+
+    metrics::describe_histogram!(
+        QUOTE_LATENCY_METRIC,
+        "Latency in seconds for responding to RFQ quote requests."
+    );
 
     if PROMETHEUS_HANDLE.set(shared_handle.clone()).is_err() {
         if let Some(existing) = PROMETHEUS_HANDLE.get() {

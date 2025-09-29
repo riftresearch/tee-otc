@@ -240,6 +240,107 @@ configs:
           },
           {
             "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 2,
+                  "pointSize": 4,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 2
+                    }
+                  ]
+                },
+                "unit": "s"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 7,
+              "w": 24,
+              "x": 0,
+              "y": 13
+            },
+            "id": 5,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "disableTextWrap": false,
+                "editorMode": "builder",
+                "expr": "mm_quote_response_seconds{quantile=\"0.95\"}",
+                "fullMetaSearch": false,
+                "hide": false,
+                "includeNullMetadata": true,
+                "instant": false,
+                "legendFormat": "{{quantile}}",
+                "range": true,
+                "refId": "A",
+                "useBackend": false
+              }
+            ],
+            "title": "Quote Latency",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
               "name": "Prometheus",
               "type": "prometheus"
             },
@@ -302,7 +403,7 @@ configs:
               "h": 7,
               "w": 7,
               "x": 0,
-              "y": 13
+              "y": 20
             },
             "id": 1,
             "options": {
@@ -397,7 +498,7 @@ configs:
               "h": 7,
               "w": 9,
               "x": 7,
-              "y": 13
+              "y": 20
             },
             "id": 2,
             "options": {
@@ -492,7 +593,7 @@ configs:
               "h": 7,
               "w": 8,
               "x": 16,
-              "y": 13
+              "y": 20
             },
             "id": 3,
             "options": {
@@ -533,7 +634,7 @@ configs:
           "list": []
         },
         "time": {
-          "from": "now-1h",
+          "from": "now-30m",
           "to": "now"
         },
         "timepicker": {},
@@ -542,8 +643,7 @@ configs:
         "uid": "mm-system-metrics",
         "version": 1,
         "weekStart": ""
-      } 
-
+      }
 
 
 services:

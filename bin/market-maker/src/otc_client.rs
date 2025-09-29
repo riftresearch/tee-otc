@@ -136,12 +136,6 @@ impl OtcFillClient {
         while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
-                    // TODO: Create a dedicated ProtocolMessage for this
-                    if text.contains("Connected") {
-                        info!("Received Connected acknowledgment from server");
-                        continue;
-                    }
-
                     // TODO: Do we want to support concurrent messaging from a market maker?
                     match serde_json::from_str::<ProtocolMessage<MMRequest>>(&text) {
                         Ok(protocol_msg) => {

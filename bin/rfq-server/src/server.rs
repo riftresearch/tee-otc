@@ -2,7 +2,6 @@ use crate::{
     error::RfqServerError, mm_registry::RfqMMRegistry, quote_aggregator::QuoteAggregator, Result,
     RfqServerArgs,
 };
-use alloy::primitives::U256;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -15,14 +14,18 @@ use axum::{
 };
 use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use futures_util::{SinkExt, StreamExt};
+use metrics::{describe_gauge, gauge};
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
-use otc_models::{Currency, Lot, Quote, QuoteRequest};
-use otc_protocols::rfq::{
-    Connected, ProtocolMessage, QuoteWithFees, RFQRequest, RFQResponse, RFQResult,
-};
+use otc_models::QuoteRequest;
+use otc_protocols::rfq::{ProtocolMessage, QuoteWithFees, RFQRequest, RFQResponse, RFQResult};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 use tokio::sync::mpsc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, info, warn};
@@ -44,6 +47,7 @@ struct Status {
 }
 
 const MM_PING_INTERVAL: Duration = Duration::from_secs(30);
+static PROMETHEUS_HANDLE: OnceLock<Arc<PrometheusHandle>> = OnceLock::new();
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct QuoteResponse {
@@ -56,6 +60,10 @@ pub struct QuoteResponse {
 pub async fn run_server(args: RfqServerArgs) -> Result<()> {
     info!("Starting RFQ server...");
     let addr = SocketAddr::from((args.host, args.port));
+
+    if let Some(metrics_addr) = args.metrics_listen_addr {
+        setup_metrics(metrics_addr).await?;
+    }
 
     // Initialize API key store
     let api_key_store = Arc::new(
@@ -168,6 +176,72 @@ pub async fn run_server(args: RfqServerArgs) -> Result<()> {
     Ok(())
 }
 
+fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
+    if let Some(handle) = PROMETHEUS_HANDLE.get() {
+        return Ok(handle.clone());
+    }
+
+    let handle = PrometheusBuilder::new()
+        .install_recorder()
+        .context(crate::MetricsRecorderSnafu)?;
+    let shared_handle = Arc::new(handle);
+
+    describe_gauge!(
+        "rfq_metrics_exporter_up",
+        "Set to 1 when the RFQ server metrics recorder is installed."
+    );
+    gauge!("rfq_metrics_exporter_up").set(1.0);
+
+    if PROMETHEUS_HANDLE.set(shared_handle.clone()).is_err() {
+        if let Some(existing) = PROMETHEUS_HANDLE.get() {
+            return Ok(existing.clone());
+        }
+    }
+
+    Ok(shared_handle)
+}
+
+async fn setup_metrics(addr: SocketAddr) -> Result<()> {
+    let shared_handle = install_metrics_recorder()?;
+
+    let upkeep_handle = shared_handle.clone();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            ticker.tick().await;
+            upkeep_handle.run_upkeep();
+        }
+    });
+
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .context(crate::MetricsServerBindSnafu { addr })?;
+
+    let metrics_state = shared_handle.clone();
+    tokio::spawn(async move {
+        let app = Router::new()
+            .route("/metrics", get(metrics_handler))
+            .with_state(metrics_state);
+
+        if let Err(error) = axum::serve(listener, app).await {
+            error!("Metrics server error: {}", error);
+        }
+    });
+
+    Ok(())
+}
+
+async fn metrics_handler(State(handle): State<Arc<PrometheusHandle>>) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
+        handle.render(),
+    )
+}
+
 async fn status_handler(State(state): State<AppState>) -> Json<Status> {
     Json(Status {
         status: "ok".to_string(),
@@ -264,28 +338,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         }
     });
 
-    // Send Connected response
-    let connected_response = Connected {
-        session_id: Uuid::new_v4(),
-        server_version: env!("CARGO_PKG_VERSION").to_string(),
-        timestamp: utc::now(),
-    };
-
-    let response = serde_json::json!({
-        "Connected": connected_response
-    });
-
     let (sender_tx, mut sender_rx) = mpsc::channel::<Message>(100);
-
-    // Send initial connected response
-    if sender_tx
-        .send(Message::Text(response.to_string()))
-        .await
-        .is_err()
-    {
-        error!("Failed to send Connected response");
-        return;
-    }
 
     // Spawn task to handle outgoing messages from the registry
     let mm_id_clone = mm_uuid.clone();
@@ -420,7 +473,6 @@ async fn request_quotes(
                 request_id = %result.request_id,
                 "Quote aggregation successful"
             );
-
             Ok(Json(QuoteResponse {
                 request_id: result.request_id,
                 quote: result.best_quote,
@@ -430,21 +482,20 @@ async fn request_quotes(
         }
         Err(e) => {
             error!("Quote aggregation failed: {}", e);
-            match e {
-                crate::quote_aggregator::QuoteAggregatorError::NoMarketMakersConnected => {
-                    Err(RfqServerError::ServiceUnavailable {
+            use crate::quote_aggregator::QuoteAggregatorError;
+
+            let err = match e {
+                QuoteAggregatorError::NoMarketMakersConnected => {
+                    RfqServerError::ServiceUnavailable {
                         service: "market_makers".to_string(),
-                    })
+                    }
                 }
-                crate::quote_aggregator::QuoteAggregatorError::NoQuotesReceived => {
-                    Err(RfqServerError::NoQuotesAvailable)
-                }
-                crate::quote_aggregator::QuoteAggregatorError::AggregationTimeout => {
-                    Err(RfqServerError::Timeout {
-                        message: "Quote collection timeout".to_string(),
-                    })
-                }
-            }
+                QuoteAggregatorError::NoQuotesReceived => RfqServerError::NoQuotesAvailable,
+                QuoteAggregatorError::AggregationTimeout => RfqServerError::Timeout {
+                    message: "Quote collection timeout".to_string(),
+                },
+            };
+            Err(err)
         }
     }
 }

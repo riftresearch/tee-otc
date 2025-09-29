@@ -257,6 +257,7 @@ pub fn build_rfq_server_test_args(rfq_port: u16) -> RfqServerArgs {
         cors_domain: None,
         chainalysis_host: None,
         chainalysis_token: None,
+        metrics_listen_addr: None,
     }
 }
 
@@ -294,6 +295,7 @@ pub async fn build_otc_server_test_args(
             .to_string_lossy()
             .to_string(),
         dstack_sock_path: "/var/run/dstack.sock".to_string(),
+        metrics_listen_addr: None,
     }
 }
 

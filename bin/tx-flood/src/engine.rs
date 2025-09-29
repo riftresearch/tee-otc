@@ -230,9 +230,18 @@ async fn request_quote(client: &Client, url: &Url, request: &QuoteRequest) -> Re
         .json(request)
         .send()
         .await
-        .with_context(|| format!("failed to send quote request to {}", url))?
-        .error_for_status()
-        .with_context(|| format!("quote request returned error status from {}", url))?;
+        .with_context(|| format!("failed to send quote request to {}", url))?;
+
+    if !response.status().is_success() {
+        let response_text = response
+            .text()
+            .await
+            .context("failed to get response text")?;
+        return Err(anyhow!(
+            "quote request returned error text: {}",
+            response_text
+        ));
+    }
 
     let body: QuoteResponse = response
         .json()

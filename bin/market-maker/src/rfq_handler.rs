@@ -1,17 +1,18 @@
-use otc_models::{Currency, Lot, Quote};
 use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse, RFQResult};
-use std::sync::Arc;
-use tracing::{debug, error, info, warn};
+use std::{sync::Arc, time::Instant};
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::balance_strat::QuoteBalanceStrategy;
 use crate::quote_storage::QuoteStorage;
 use crate::wallet::WalletManager;
 use crate::wrapped_bitcoin_quoter::WrappedBitcoinQuoter;
+use crate::QUOTE_LATENCY_METRIC;
 
+#[derive(Clone)]
 pub struct RFQMessageHandler {
     market_maker_id: Uuid,
-    wrapped_bitcoin_quoter: WrappedBitcoinQuoter,
+    wrapped_bitcoin_quoter: Arc<WrappedBitcoinQuoter>,
     quote_storage: Arc<QuoteStorage>,
     wallet_manager: Arc<WalletManager>,
     balance_strategy: QuoteBalanceStrategy,
@@ -20,7 +21,7 @@ pub struct RFQMessageHandler {
 impl RFQMessageHandler {
     pub fn new(
         market_maker_id: Uuid,
-        wrapped_bitcoin_quoter: WrappedBitcoinQuoter,
+        wrapped_bitcoin_quoter: Arc<WrappedBitcoinQuoter>,
         quote_storage: Arc<QuoteStorage>,
         wallet_manager: Arc<WalletManager>,
         balance_strategy: QuoteBalanceStrategy,
@@ -44,6 +45,7 @@ impl RFQMessageHandler {
                 request,
                 timestamp: _,
             } => {
+                let start = Instant::now();
                 info!(
                     "Received RFQ quote request: request_id={}, mode={:?}, from_chain={:?}, amount={}, to_chain={:?}",
                     request_id, request.mode, request.from.chain, request.amount, request.to.chain
@@ -53,11 +55,14 @@ impl RFQMessageHandler {
                     .wrapped_bitcoin_quoter
                     .compute_quote(self.market_maker_id, request)
                     .await;
-                if quote.is_err() {
-                    tracing::error!("Failed to compute quote: {:?}", quote.err());
-                    return None;
-                }
-                let mut rfq_result = quote.unwrap();
+                let mut rfq_result = match quote {
+                    Ok(quote) => quote,
+                    Err(error) => {
+                        error!("Failed to compute quote: {error:?}");
+                        record_quote_latency(&start, "error", "quote_computation_failed");
+                        return None;
+                    }
+                };
 
                 // Check if we have sufficient balance to fulfill the quote
                 if let RFQResult::Success(ref quote_with_fees) = rfq_result {
@@ -65,7 +70,7 @@ impl RFQMessageHandler {
                         .wallet_manager
                         .get(quote_with_fees.quote.to.currency.chain);
 
-                    // TODO: solution for getting balance more efficiently?
+                    // TODO: consider getting balance more efficiently?
                     let validated_rfq_result = if let Some(wallet) = wallet {
                         let balance = wallet
                             .balance(&quote_with_fees.quote.to.currency.token)
@@ -106,7 +111,15 @@ impl RFQMessageHandler {
                     RFQResult::InvalidRequest(_) => None,
                 };
 
-                // TODO: defer the execution of the following to a seperate async task to prevent blocking
+                let (status, reason) = match &rfq_result {
+                    RFQResult::Success(_) => ("ok", "none"),
+                    RFQResult::MakerUnavailable(_) => ("error", "maker_unavailable"),
+                    RFQResult::InvalidRequest(_) => ("error", "invalid_request"),
+                };
+
+                record_quote_latency(&start, status, reason);
+
+                // TODO: consider deferring the execution of the following to a seperate async task to prevent blocking?
                 if let Some(quote) = quote {
                     info!(
                         "Generated quote: id={}, from_chain={:?}, from_amount={}, to_chain={:?}, to_amount={}",
@@ -166,4 +179,15 @@ impl RFQMessageHandler {
             }
         }
     }
+}
+
+fn record_quote_latency(start: &Instant, status: &'static str, reason: &'static str) {
+    let elapsed = start.elapsed().as_secs_f64();
+    metrics::histogram!(
+        QUOTE_LATENCY_METRIC,
+        "endpoint" => "quotes_request",
+        "status" => status,
+        "reason" => reason
+    )
+    .record(elapsed);
 }

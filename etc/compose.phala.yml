@@ -105,6 +105,14 @@ configs:
           static_configs:
             - targets:
                 - cadvisor:8080
+        - job_name: otc-server
+          static_configs:
+            - targets:
+                - otc-server:9000
+        - job_name: rfq-server
+          static_configs:
+            - targets:
+                - rfq-server:9000
 
   grafana-datasource:
     content: |
@@ -735,6 +743,123 @@ configs:
             ],
             "title": "Host Storage",
             "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 2
+                    }
+                  ]
+                },
+                "unit": "s"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 24,
+              "x": 0,
+              "y": 32
+            },
+            "id": 8,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "histogram_quantile(0.5, sum by (le) (rate(rfq_quote_response_seconds_bucket{endpoint=\"quotes_request\", status=\"ok\"}[5m])))",
+                "legendFormat": "p50",
+                "range": true,
+                "refId": "A"
+              },
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "histogram_quantile(0.9, sum by (le) (rate(rfq_quote_response_seconds_bucket{endpoint=\"quotes_request\", status=\"ok\"}[5m])))",
+                "legendFormat": "p90",
+                "range": true,
+                "refId": "B"
+              },
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "histogram_quantile(0.99, sum by (le) (rate(rfq_quote_response_seconds_bucket{endpoint=\"quotes_request\", status=\"ok\"}[5m])))",
+                "legendFormat": "p99",
+                "range": true,
+                "refId": "C"
+              }
+            ],
+            "title": "RFQ Quote Latency (p50/p90/p99)",
+            "type": "timeseries"
           }
         ],
         "schemaVersion": 39,
@@ -884,8 +1009,11 @@ services:
       CHAINALYSIS_TOKEN: ${CHAINALYSIS_TOKEN}
       CONFIG_DIR: /app/config
       DSTACK_SOCK_PATH: /var/run/dstack.sock
+      METRICS_LISTEN_ADDR: 0.0.0.0:9000
     ports:
       - "4422:4422"
+    expose:
+      - "9000"
     networks:
       - tee-network
     volumes:

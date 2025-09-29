@@ -380,7 +380,10 @@ impl WalletTrait for BitcoinWallet {
                 mm_payment_validation,
             )
             .await
-            .map_err(|e| WalletError::BitcoinWalletClient { source: e, loc: location!() })
+            .map_err(|e| WalletError::BitcoinWalletClient {
+                source: e,
+                loc: location!(),
+            })
     }
 
     async fn balance(&self, token: &TokenIdentifier) -> WalletResult<WalletBalance> {
@@ -449,14 +452,3 @@ fn ensure_valid_lot(lot: &Lot) -> Result<(), WalletError> {
     info!("Bitcoin lot is valid: {:?}", lot);
     Ok(())
 }
-
-
-/*
-
-2025-09-26T01:21:19.673201Z ERROR rfq_server::server: Quote aggregation failed: No quotes received from market makers
-2025-09-26T01:21:19.673220Z ERROR rfq_server::server: Quote aggregation failed: No quotes received from market makers
-2025-09-26T01:21:19.673228Z ERROR rfq_server::server: Quote aggregation failed: No quotes received from market makers
-2025-09-26T01:21:19.770195Z  WARN rfq_server::mm_registry: Failed to send quote response to aggregator request_id=f5635286-835d-42bb-8868-f3a3f7aa606e error=SendError { .. }
-2025-09-26T01:21:19.871681Z  WARN rfq_server::mm_registry: Failed to send quote response to aggregator request_id=f65457f0-792c-49fc-a0bc-fb472500df54 error=SendError { .. }
-2025-09-26T01:21:20.021496Z  WARN rfq_server::mm_registry: Failed to send quote response to aggregator request_id=217ef535-9f5e-4382-8b00-36abca7296ff error=SendError { .. }
-*/

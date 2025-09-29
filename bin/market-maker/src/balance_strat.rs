@@ -10,6 +10,7 @@ fn mul_div(a: U256, b: U256, denom: U256) -> U256 {
     U256::from(q)
 }
 
+#[derive(Clone)]
 pub struct QuoteBalanceStrategy {
     /// Maximum balance utilization threshold (in basis points, 1..=10_000)
     utilization_threshold_bps: U256,

@@ -1,12 +1,12 @@
 use crate::mm_registry::RfqMMRegistry;
 use futures_util::future;
-use otc_models::{Quote, QuoteMode, QuoteRequest};
+use otc_models::{QuoteMode, QuoteRequest};
 use otc_protocols::rfq::{QuoteWithFees, RFQResponse, RFQResult};
 use snafu::Snafu;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::time::{timeout, Duration};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Snafu)]
@@ -69,7 +69,6 @@ impl QuoteAggregator {
         }
 
         let market_makers_contacted = receivers.len();
-        let mut quotes = Vec::new();
 
         // Collect quotes with timeout
         let collection_result = timeout(
@@ -78,15 +77,10 @@ impl QuoteAggregator {
         )
         .await;
 
-        match collection_result {
-            Ok(collected_quotes) => quotes = collected_quotes,
-            Err(_) => {
-                debug!(
-                    request_id = %request_id,
-                    "Quote collection timed out, proceeding with quotes received so far"
-                );
-            }
-        }
+        let quotes = match collection_result {
+            Ok(collected_quotes) => collected_quotes,
+            Err(_) => return Err(QuoteAggregatorError::AggregationTimeout),
+        };
 
         if quotes.is_empty() {
             return Err(QuoteAggregatorError::NoQuotesReceived);

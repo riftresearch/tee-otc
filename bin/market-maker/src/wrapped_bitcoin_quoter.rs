@@ -1,8 +1,11 @@
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::{
     bitcoin_wallet::BitcoinWallet, evm_wallet::EVMWallet, price_oracle::BitcoinEtherPriceOracle,
 };
+use crate::{WalletError, WalletResult};
 use alloy::eips::BlockNumberOrTag;
 use alloy::providers::DynProvider;
 use alloy::{primitives::U256, providers::Provider};
@@ -12,15 +15,22 @@ use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest};
 use otc_protocols::rfq::{FeeSchedule, QuoteWithFees, RFQResult};
 use serde::{Deserialize, Serialize};
 use snafu::Snafu;
+use tokio::sync::RwLock;
+use tokio::task::JoinSet;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 const QUOTE_EXPIRATION_TIME: Duration = Duration::from_secs(60 * 5);
 
+const FEE_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
+
 #[derive(Debug, Snafu)]
 pub enum WrappedBitcoinQuoterError {
     #[snafu(display("Failed to get fee rate from esplora: {}", source))]
     Esplora { source: esplora_client::Error },
+
+    #[snafu(display("Fee update timeout"))]
+    FeeUpdateTimeout,
 }
 
 impl From<esplora_client::Error> for WrappedBitcoinQuoterError {
@@ -35,11 +45,8 @@ type Result<T, E = WrappedBitcoinQuoterError> = std::result::Result<T, E>;
 pub const MIN_PROTOCOL_FEE_SATS: u64 = 300;
 
 pub struct WrappedBitcoinQuoter {
-    btc_eth_price_oracle: BitcoinEtherPriceOracle,
-    esplora_client: esplora_client::AsyncClient,
-    eth_provider: DynProvider,
     trade_spread_bps: u64,
-    fee_safety_multiplier: f64,
+    fee_map: Arc<RwLock<HashMap<ChainType, u64>>>,
 }
 
 impl WrappedBitcoinQuoter {
@@ -49,13 +56,115 @@ impl WrappedBitcoinQuoter {
         eth_provider: DynProvider,
         trade_spread_bps: u64,
         fee_safety_multiplier: f64,
+        join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Self {
+        let fee_map = Arc::new(RwLock::new(HashMap::new()));
+        let fee_map_clone = fee_map.clone();
+        join_set.spawn(async move {
+            Self::fee_update_loop(
+                esplora_client,
+                eth_provider,
+                fee_safety_multiplier,
+                btc_eth_price_oracle,
+                fee_map_clone,
+            )
+            .await
+            .map_err(|e| crate::Error::BackgroundThread {
+                source: Box::new(e),
+            })
+        });
+
         Self {
-            btc_eth_price_oracle,
-            esplora_client,
-            eth_provider,
             trade_spread_bps,
-            fee_safety_multiplier,
+            fee_map,
+        }
+    }
+
+    pub async fn ensure_fees_available(&self) -> Result<()> {
+        let start_time = Instant::now();
+        let timeout = Duration::from_secs(30);
+        loop {
+            if start_time.elapsed() > timeout {
+                return FeeUpdateTimeoutSnafu.fail();
+            }
+            if self.fee_map.read().await.get(&ChainType::Bitcoin).is_some()
+                && self
+                    .fee_map
+                    .read()
+                    .await
+                    .get(&ChainType::Ethereum)
+                    .is_some()
+            {
+                return Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    }
+
+    async fn fee_update_loop(
+        esplora_client: esplora_client::AsyncClient,
+        eth_provider: DynProvider,
+        fee_safety_multiplier: f64,
+        btc_eth_price_oracle: BitcoinEtherPriceOracle,
+        fee_map: Arc<RwLock<HashMap<ChainType, u64>>>,
+    ) -> Result<()> {
+        loop {
+            let send_fee_sats_on_btc = {
+                let sats_per_vbyte_by_confirmations = esplora_client.get_fee_estimates().await?;
+                let sats_per_vbyte = sats_per_vbyte_by_confirmations.get(&1).unwrap_or(&1.5);
+                let sats_per_vbyte = sats_per_vbyte * fee_safety_multiplier;
+
+                calculate_fees_in_sats_to_send_btc(sats_per_vbyte)
+            };
+            let send_fee_sats_on_eth = {
+                let fee_history = match eth_provider
+                    .get_fee_history(10u64, BlockNumberOrTag::Latest, &[25.0, 50.0, 75.0])
+                    .await
+                {
+                    Ok(history) => history,
+                    Err(e) => {
+                        warn!("Failed to get fee history during fee update: {:?}", e);
+                        tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
+                        continue;
+                    }
+                };
+
+                let base_fee_wei: u128 = fee_history.next_block_base_fee().unwrap_or(0u128);
+                let base_fee_gwei: f64 = (base_fee_wei as f64) / 1e9f64;
+
+                let mid_priority_wei: u128 = fee_history
+                    .reward
+                    .as_ref()
+                    .and_then(|rewards| rewards.last())
+                    .and_then(|percentiles| percentiles.get(1)) // 50th percentile
+                    .copied()
+                    .unwrap_or(1_500_000_000u128); // default 1.5 gwei
+                let mut max_priority_fee_gwei: f64 = (mid_priority_wei as f64) / 1e9f64;
+
+                max_priority_fee_gwei *= fee_safety_multiplier;
+
+                let eth_per_btc_price = match btc_eth_price_oracle.get_eth_per_btc().await {
+                    Ok(p) => p,
+                    Err(e) => {
+                        warn!("Failed to get BTC/ETH price during fee update: {:?}", e);
+                        tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
+                        continue;
+                    }
+                };
+
+                calculate_fees_in_sats_to_send_cbbtc_on_eth(
+                    base_fee_gwei,
+                    max_priority_fee_gwei,
+                    eth_per_btc_price,
+                )
+            };
+
+            let mut global_fee_map = fee_map.write().await;
+            global_fee_map.insert(ChainType::Bitcoin, send_fee_sats_on_btc);
+            global_fee_map.insert(ChainType::Ethereum, send_fee_sats_on_eth);
+            drop(global_fee_map);
+
+            tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
         }
     }
 
@@ -75,68 +184,13 @@ impl WrappedBitcoinQuoter {
             return Ok(RFQResult::InvalidRequest("Amount too large".to_string()));
         }
         let amount = quote_request.amount.to::<u64>();
-        let send_fees_in_sats = {
-            match quote_request.to.chain {
-                ChainType::Bitcoin => {
-                    //TODO: put updating this fee rate behind a RwLock that we cache so it's not fetched on every quote
-                    let sats_per_vbyte_by_confirmations =
-                        self.esplora_client.get_fee_estimates().await?;
-                    let sats_per_vbyte = sats_per_vbyte_by_confirmations.get(&1).unwrap_or(&1.5);
-                    let sats_per_vbyte = sats_per_vbyte * self.fee_safety_multiplier;
-
-                    calculate_fees_in_sats_to_send_btc(sats_per_vbyte)
-                }
-                ChainType::Ethereum => {
-                    //TODO: put updating this fee rate behind a RwLock that we cache so it's not fetched on every quote
-                    let fee_history = match self
-                        .eth_provider
-                        .get_fee_history(10u64, BlockNumberOrTag::Latest, &[25.0, 50.0, 75.0])
-                        .await
-                    {
-                        Ok(history) => history,
-                        Err(_) => {
-                            warn!("Failed to get fee history: {:?}", quote_request);
-                            return Ok(RFQResult::MakerUnavailable(
-                                "Failed to get fee history".to_string(),
-                            ));
-                        }
-                    };
-
-                    let base_fee_wei: u128 = fee_history.next_block_base_fee().unwrap_or(0u128);
-                    let base_fee_gwei: f64 = (base_fee_wei as f64) / 1e9f64;
-
-                    let mid_priority_wei: u128 = fee_history
-                        .reward
-                        .as_ref()
-                        .and_then(|rewards| rewards.last())
-                        .and_then(|percentiles| percentiles.get(1)) // 50th percentile
-                        .copied()
-                        .unwrap_or(1_500_000_000u128); // default 1.5 gwei
-                    let mut max_priority_fee_gwei: f64 = (mid_priority_wei as f64) / 1e9f64;
-
-                    max_priority_fee_gwei *= self.fee_safety_multiplier;
-
-                    let eth_per_btc_price = match self.btc_eth_price_oracle.get_eth_per_btc().await
-                    {
-                        Ok(p) => p,
-                        Err(e) => {
-                            warn!("Failed to get BTC/ETH price: {:?}", e);
-                            return Ok(RFQResult::MakerUnavailable(
-                                "Failed to get BTC/ETH price".to_string(),
-                            ));
-                        }
-                    };
-
-                    calculate_fees_in_sats_to_send_cbbtc_on_eth(
-                        base_fee_gwei,
-                        max_priority_fee_gwei,
-                        eth_per_btc_price,
-                    )
-                }
-            }
-        };
-
         let quote_id = Uuid::new_v4();
+        let send_fees_in_sats = *self
+            .fee_map
+            .read()
+            .await
+            .get(&quote_request.from.chain)
+            .unwrap_or(&0);
         match quote_request.mode {
             QuoteMode::ExactInput => {
                 let quote_result =

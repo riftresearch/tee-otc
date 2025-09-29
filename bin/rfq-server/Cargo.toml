@@ -35,7 +35,8 @@ futures-util = { workspace = true }
 alloy = { workspace = true }
 chainalysis-address-screener = { workspace = true }
 blockchain-utils = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
 
 [features]
 integration-test = ["otc-auth/integration-test"]
-

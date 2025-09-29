@@ -1,9 +1,9 @@
-use std::{str::FromStr, sync::Arc};
 use std::time::Duration;
+use std::{str::FromStr, sync::Arc};
 
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
-use bdk_wallet::KeychainKind;
 use bdk_wallet::chain::spk_client::{FullScanRequestBuilder, FullScanResponse};
+use bdk_wallet::KeychainKind;
 use bdk_wallet::{
     bitcoin::{self, Address, Amount, ScriptBuf},
     signer::SignOptions,
@@ -48,7 +48,9 @@ impl BitcoinTransactionBroadcaster {
         let (request_tx, mut request_rx) = mpsc::unbounded_channel::<TransactionRequest>();
         join_set.spawn(async move {
             info!("Bitcoin transaction broadcaster started");
-            full_scan_wallet(&wallet, &connection, &esplora_client).await.expect("Initial full scan should succeed");
+            full_scan_wallet(&wallet, &connection, &esplora_client)
+                .await
+                .expect("Initial full scan should succeed");
 
             while let Some(request) = request_rx.recv().await {
                 let result = process_transaction(
@@ -226,7 +228,6 @@ async fn process_transaction(
         }
         PsbtNotFinalizedSnafu.fail()?
     } else {
-
         // Extract transaction
         let tx = psbt.extract_tx().context(ExtractTransactionSnafu)?;
         let txid = tx.compute_txid().to_string();
@@ -254,9 +255,8 @@ async fn process_transaction(
             txid, total_duration
         );
 
-    Ok(txid)
-}
-
+        Ok(txid)
+    }
 }
 
 async fn full_scan_wallet(
@@ -271,11 +271,15 @@ async fn full_scan_wallet(
         .full_scan(full_scan_request, 5, PARALLEL_REQUESTS)
         .await
         .context(SyncWalletSnafu)?;
-    
-    wallet_guard.apply_update(update).context(BdkWalletCannotConnectSnafu)?;
+
+    wallet_guard
+        .apply_update(update)
+        .context(BdkWalletCannotConnectSnafu)?;
     let mut conn = connection.lock().await;
 
-    wallet_guard.persist(&mut conn).context(PersistWalletSnafu)?;
+    wallet_guard
+        .persist(&mut conn)
+        .context(PersistWalletSnafu)?;
 
     Ok(())
 }
@@ -287,7 +291,7 @@ async fn light_sync_wallet(
 ) -> Result<(), BitcoinWalletError> {
     let sync_start = Instant::now();
     let mut wallet_guard = wallet.lock().await;
-    
+
     let request = wallet_guard.start_sync_with_revealed_spks().build();
     let update = esplora_client
         .sync(request, PARALLEL_REQUESTS)

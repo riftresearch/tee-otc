@@ -459,7 +459,9 @@ async fn test_bitcoin_wallet_spend_from_deposit_storage(
         "Sent tx should spend the UTXO unrelated to the main wallet"
     );
 
-    // Cleanup background task and temp DB
+    drop(bitcoin_wallet);
     join_set.abort_all();
-    let _ = std::fs::remove_file(&db_path);
+    while let Some(_res) = join_set.join_next().await {}
+
+    println!("test_bitcoin_wallet_spend_from_deposit_storage completed successfully");
 }

@@ -41,10 +41,10 @@ cache-devnet: build-test
 
 # Run all tests, assumes devnet has been cached
 test: build-test
-    just stop-db
+    just clean-db
     just start-db
     cargo nextest run
-    just stop-db
+    just clean-db
 
 # Same as test but will clean up resources on success/failure
 test-clean: build-test cache-devnet
