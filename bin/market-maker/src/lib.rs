@@ -299,7 +299,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     );
 
     let deposit_key_storage = Arc::new(
-        DepositKeyStorage::new(&args.database_url)
+        DepositKeyStorage::new(&args.database_url, args.db_max_connections, args.db_min_connections)
             .await
             .context(DepositKeyStorageSnafu)?,
     );
@@ -362,7 +362,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     ));
 
     let payment_storage = Arc::new(
-        PaymentStorage::new(&args.database_url)
+        PaymentStorage::new(&args.database_url, args.db_max_connections, args.db_min_connections)
             .await
             .context(PaymentStorageSnafu)?,
     );

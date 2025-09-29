@@ -12,7 +12,7 @@ async fn test_deposit_vault_consumes_on_fill(
     connect_options: PgConnectOptions,
 ) -> sqlx::Result<()> {
     // Initialize storage (runs migrations under the hood)
-    let vault = DepositKeyStorage::new(&connect_options.to_database_url())
+    let vault = DepositKeyStorage::new(&connect_options.to_database_url(), 10, 2)
         .await
         .expect("Failed to create deposit key storage");
 
@@ -74,7 +74,7 @@ async fn test_deposit_key_vault_take_deposits(
     connect_options: PgConnectOptions,
 ) -> sqlx::Result<()> {
     // Initialize vault (runs migrations)
-    let vault = DepositKeyStorage::new(&connect_options.to_database_url())
+    let vault = DepositKeyStorage::new(&connect_options.to_database_url(), 10, 2)
         .await
         .expect("Failed to create deposit key vault");
 

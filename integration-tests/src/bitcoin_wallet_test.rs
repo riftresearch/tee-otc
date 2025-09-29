@@ -383,7 +383,7 @@ async fn test_bitcoin_wallet_spend_from_deposit_storage(
     // Create and seed a deposit key storage with the recipient's descriptor
     // so the wallet can sign the foreign UTXO.
     let deposit_key_storage = Arc::new(
-        DepositKeyStorage::new(&connect_options.to_database_url())
+        DepositKeyStorage::new(&connect_options.to_database_url(), 10, 2)
             .await
             .expect("create deposit key storage"),
     );

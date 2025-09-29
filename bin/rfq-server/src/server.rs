@@ -373,33 +373,35 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     while let Some(msg) = receiver.next().await {
         match msg {
             Ok(Message::Text(text)) => {
-                match serde_json::from_str::<ProtocolMessage<RFQResponse>>(&text) {
-                    Ok(msg) => match &msg.payload {
-                        RFQResponse::QuoteResponse { request_id, .. } => {
-                            // Route the response to the appropriate aggregator
-                            state
-                                .mm_registry
-                                .handle_quote_response(*request_id, msg.payload.clone())
-                                .await;
+                let mm_registry= state.mm_registry.clone();
+                tokio::spawn(async move {
+                    match serde_json::from_str::<ProtocolMessage<RFQResponse>>(&text) {
+                        Ok(msg) => match &msg.payload {
+                            RFQResponse::QuoteResponse { request_id, .. } => {
+                                // Route the response to the appropriate aggregator
+                               mm_registry 
+                                    .handle_quote_response(*request_id, msg.payload.clone())
+                                    .await;
+                            }
+                            RFQResponse::Pong { .. } => {
+                                // Handle pong for keepalive
+                            }
+                            RFQResponse::Error {
+                                error_code,
+                                message,
+                                ..
+                            } => {
+                                warn!(
+                                    "Received error from market maker {}: {:?} - {}",
+                                    mm_uuid, error_code, message
+                                );
+                            }
+                        },
+                        Err(e) => {
+                            error!("Failed to parse RFQ message: {}", e);
                         }
-                        RFQResponse::Pong { .. } => {
-                            // Handle pong for keepalive
-                        }
-                        RFQResponse::Error {
-                            error_code,
-                            message,
-                            ..
-                        } => {
-                            warn!(
-                                "Received error from market maker {}: {:?} - {}",
-                                mm_uuid, error_code, message
-                            );
-                        }
-                    },
-                    Err(e) => {
-                        error!("Failed to parse RFQ message: {}", e);
                     }
-                }
+                });
             }
             Ok(Message::Close(_)) => {
                 info!("Market maker {} disconnected", mm_uuid);
@@ -410,7 +412,10 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
                 break;
             }
             _ => {}
+
         }
+        
+        
     }
 
     // Unregister on disconnect

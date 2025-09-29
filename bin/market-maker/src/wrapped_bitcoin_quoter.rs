@@ -185,12 +185,19 @@ impl WrappedBitcoinQuoter {
         }
         let amount = quote_request.amount.to::<u64>();
         let quote_id = Uuid::new_v4();
-        let send_fees_in_sats = *self
+        let send_fees_in_sats = self
             .fee_map
             .read()
             .await
             .get(&quote_request.from.chain)
-            .unwrap_or(&0);
+            .cloned();
+
+        if send_fees_in_sats.is_none() {
+            return Ok(RFQResult::InvalidRequest("Network fee for chain not found".to_string()));
+        }
+
+        let send_fees_in_sats = send_fees_in_sats.unwrap();
+
         match quote_request.mode {
             QuoteMode::ExactInput => {
                 let quote_result =

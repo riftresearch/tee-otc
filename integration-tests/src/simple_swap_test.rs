@@ -727,7 +727,7 @@ async fn test_swap_from_ethereum_to_bitcoin(
     info!("Tx status: {:#?}", get_tx_status);
     wait_for_swap_to_be_settled(otc_port, response_json.swap_id).await;
 
-    let payment_storage = PaymentStorage::new(&mm_db_url).await.unwrap();
+    let payment_storage = PaymentStorage::new(&mm_db_url, 10, 2).await.unwrap();
     payment_storage
         .has_payment_been_made(response_json.swap_id)
         .await

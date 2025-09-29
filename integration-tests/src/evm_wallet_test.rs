@@ -626,6 +626,7 @@ async fn test_evm_wallet_spend_from_deposit_storage(
     let deposit_key_storage = Arc::new(
         market_maker::deposit_key_storage::DepositKeyStorage::new(
             &connect_options.to_database_url(),
+            10,2
         )
         .await
         .expect("create deposit key storage"),

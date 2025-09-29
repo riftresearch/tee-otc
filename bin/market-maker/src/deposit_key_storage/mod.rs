@@ -59,10 +59,10 @@ pub struct DepositKeyStorage {
 }
 
 impl DepositKeyStorage {
-    pub async fn new(database_url: &str) -> Result<Self> {
+    pub async fn new(database_url: &str, db_max_connections: u32, db_min_connections: u32) -> Result<Self> {
         let pool = PgPoolOptions::new()
-            .max_connections(10)
-            .min_connections(2)
+            .max_connections(db_max_connections)
+            .min_connections(db_min_connections)
             .acquire_timeout(std::time::Duration::from_secs(5))
             .idle_timeout(std::time::Duration::from_secs(600))
             .after_connect(|conn, _meta| {
