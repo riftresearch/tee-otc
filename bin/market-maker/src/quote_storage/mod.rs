@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use otc_models::{ChainType, Currency, Lot, Quote, TokenIdentifier};
 use snafu::prelude::*;
@@ -40,15 +42,19 @@ pub struct QuoteStorage {
 impl QuoteStorage {
     pub async fn new(
         database_url: &str,
+        db_max_connections: u32,
+        db_min_connections: u32,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Result<Self> {
         info!("Connecting to market maker database...");
 
         let pool = PgPoolOptions::new()
-            .max_connections(10)
-            .min_connections(2)
-            .acquire_timeout(std::time::Duration::from_secs(5))
-            .idle_timeout(std::time::Duration::from_secs(600))
+            .max_connections(db_max_connections)
+            .min_connections(db_min_connections)
+            .max_lifetime(Duration::from_secs(300))
+            .idle_timeout(Duration::from_secs(60))
+            .acquire_timeout(Duration::from_millis(200))
+            .test_before_acquire(true)
             .after_connect(|conn, _meta| {
                 Box::pin(async move {
                     // Scope this pool to the quote_storage schema so unqualified SQL stays isolated

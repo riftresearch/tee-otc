@@ -14,7 +14,7 @@ async fn test_quote_storage_round_trip(
     connect_options: PgConnectOptions,
 ) -> sqlx::Result<()> {
     let mut join_set = JoinSet::new();
-    let storage = QuoteStorage::new(&connect_options.to_database_url(), &mut join_set)
+    let storage = QuoteStorage::new(&connect_options.to_database_url(), 10, 2, &mut join_set)
         .await
         .expect("Failed to create storage");
 

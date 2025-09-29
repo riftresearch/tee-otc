@@ -221,6 +221,8 @@ pub async fn build_mm_test_args(
         trade_spread_bps: 0,
         fee_safety_multiplier: 1.5,
         database_url: db_url,
+        db_max_connections: 10,
+        db_min_connections: 2,
         inventory_target_ratio_bps: 5000,
         rebalance_tolerance_bps: 2500,
         balance_utilization_threshold_bps: 9500, // 95%, require headroom so 100% utilization is rejected in tests

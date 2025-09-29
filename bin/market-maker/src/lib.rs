@@ -219,6 +219,14 @@ pub struct MarketMakerArgs {
     #[arg(long, env = "MM_DATABASE_URL")]
     pub database_url: String,
 
+    /// Database max connections
+    #[arg(long, env = "DB_MAX_CONNECTIONS", default_value = "128")]
+    pub db_max_connections: u32,
+
+    /// Database min connections
+    #[arg(long, env = "DB_MIN_CONNECTIONS", default_value = "16")]
+    pub db_min_connections: u32,
+
     /// Coinbase API key
     #[arg(long, env = "COINBASE_EXCHANGE_API_KEY")]
     pub coinbase_exchange_api_key: String,
@@ -285,7 +293,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
 
     // Initialize quote storage
     let quote_storage = Arc::new(
-        QuoteStorage::new(&args.database_url, &mut join_set)
+        QuoteStorage::new(&args.database_url, args.db_max_connections, args.db_min_connections, &mut join_set)
             .await
             .context(QuoteStorageSnafu)?,
     );
@@ -424,6 +432,8 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     )
     .context(CoinbaseClientSnafu)?;
 
+    // Run rebalancer, even if auto manage inventory is disabled
+    // b/c it's still useful to track the balance of the wallets in metrics
     let conversion_actor = run_rebalancer(
         coinbase_client,
         bitcoin_wallet.clone(),
