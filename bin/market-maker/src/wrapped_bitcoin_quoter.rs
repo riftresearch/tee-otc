@@ -241,7 +241,7 @@ impl WrappedBitcoinQuoter {
             .fee_map
             .read()
             .await
-            .get(&quote_request.from.chain)
+            .get(&quote_request.to.chain)
             .cloned();
 
         if send_fees_in_sats.is_none() {
