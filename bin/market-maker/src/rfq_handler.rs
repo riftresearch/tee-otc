@@ -1,11 +1,9 @@
 use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse, RFQResult};
 use std::{sync::Arc, time::Instant};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use uuid::Uuid;
 
-use crate::balance_strat::QuoteBalanceStrategy;
 use crate::quote_storage::QuoteStorage;
-use crate::wallet::WalletManager;
 use crate::wrapped_bitcoin_quoter::WrappedBitcoinQuoter;
 use crate::QUOTE_LATENCY_METRIC;
 
@@ -14,8 +12,6 @@ pub struct RFQMessageHandler {
     market_maker_id: Uuid,
     wrapped_bitcoin_quoter: Arc<WrappedBitcoinQuoter>,
     quote_storage: Arc<QuoteStorage>,
-    wallet_manager: Arc<WalletManager>,
-    balance_strategy: QuoteBalanceStrategy,
 }
 
 impl RFQMessageHandler {
@@ -23,15 +19,11 @@ impl RFQMessageHandler {
         market_maker_id: Uuid,
         wrapped_bitcoin_quoter: Arc<WrappedBitcoinQuoter>,
         quote_storage: Arc<QuoteStorage>,
-        wallet_manager: Arc<WalletManager>,
-        balance_strategy: QuoteBalanceStrategy,
     ) -> Self {
         Self {
             market_maker_id,
             wrapped_bitcoin_quoter,
             quote_storage,
-            wallet_manager,
-            balance_strategy,
         }
     }
 
@@ -55,7 +47,7 @@ impl RFQMessageHandler {
                     .wrapped_bitcoin_quoter
                     .compute_quote(self.market_maker_id, request)
                     .await;
-                let mut rfq_result = match quote {
+                let rfq_result = match quote {
                     Ok(quote) => quote,
                     Err(error) => {
                         error!("Failed to compute quote: {error:?}");
@@ -63,47 +55,6 @@ impl RFQMessageHandler {
                         return None;
                     }
                 };
-
-                // Check if we have sufficient balance to fulfill the quote
-                if let RFQResult::Success(ref quote_with_fees) = rfq_result {
-                    let wallet = self
-                        .wallet_manager
-                        .get(quote_with_fees.quote.to.currency.chain);
-
-                    // TODO: consider getting balance more efficiently?
-                    let validated_rfq_result = if let Some(wallet) = wallet {
-                        let balance = wallet
-                            .balance(&quote_with_fees.quote.to.currency.token)
-                            .await;
-
-                        if balance.is_err() {
-                            warn!("Failed to check wallet balance: {:?}", balance.err());
-                            RFQResult::MakerUnavailable(
-                                "Failed to check wallet balance".to_string(),
-                            )
-                        } else {
-                            let balance = balance.unwrap().total_balance;
-                            info!("Wallet balance: {:?}", balance);
-                            if !self
-                                .balance_strategy
-                                .can_fill_quote(&quote_with_fees.quote, balance)
-                            {
-                                RFQResult::MakerUnavailable(
-                                    "Insufficient balance to fulfill quote".to_string(),
-                                )
-                            } else {
-                                RFQResult::Success(quote_with_fees.clone())
-                            }
-                        }
-                    } else {
-                        warn!(
-                            "No wallet configured for chain {:?}",
-                            quote_with_fees.quote.to.currency.chain
-                        );
-                        RFQResult::MakerUnavailable("No wallet configured for chain".to_string())
-                    };
-                    rfq_result = validated_rfq_result;
-                }
 
                 let quote = match &rfq_result {
                     RFQResult::Success(quote) => Some(quote.quote.clone()),

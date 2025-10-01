@@ -125,7 +125,6 @@ impl TokenIndexerClient {
             .join(&format!("transfers/to/{address:?}"))
             .context(InvalidUrlSnafu)?;
 
-        tracing::info!("Getting transfers for address: {}", address);
         {
             let mut query_pairs = url.query_pairs_mut();
 
@@ -139,7 +138,6 @@ impl TokenIndexerClient {
         }
 
         let response = self.client.get(url).send().await.context(RequestSnafu)?;
-        tracing::info!("get_transfers_to response from indexer: {:?}", response);
 
         let response = response
             .json::<TransfersResponse>()

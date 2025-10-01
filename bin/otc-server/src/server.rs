@@ -56,6 +56,7 @@ struct Status {
 
 const MM_PING_INTERVAL: Duration = Duration::from_secs(30);
 const QUOTE_LATENCY_METRIC: &str = "otc_quote_response_seconds";
+const SWAP_MONITORING_DURATION_METRIC: &str = "otc_swap_monitoring_duration_seconds";
 
 static PROMETHEUS_HANDLE: OnceLock<Arc<PrometheusHandle>> = OnceLock::new();
 
@@ -72,9 +73,13 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
                 },
             })?,
         );
-    let db = Database::connect(&args.database_url)
-        .await
-        .context(crate::DatabaseInitSnafu)?;
+    let db = Database::connect(
+        &args.database_url,
+        args.db_max_connections,
+        args.db_min_connections,
+    )
+    .await
+    .context(crate::DatabaseInitSnafu)?;
 
     info!("Initializing chain registry...");
     let mut chain_registry = ChainRegistry::new();
@@ -86,7 +91,6 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         &args.untrusted_esplora_http_server_url,
         args.bitcoin_network,
     )
-    .await
     .map_err(|e| crate::Error::DatabaseInit {
         source: crate::error::OtcServerError::InvalidData {
             message: format!("Failed to initialize Bitcoin chain: {e}"),
@@ -130,6 +134,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         chain_registry.clone(),
         mm_registry.clone(),
         args.chain_monitor_interval_seconds,
+        args.max_concurrent_swaps,
     ));
 
     info!("Starting swap monitoring service...");
@@ -279,6 +284,11 @@ fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
     describe_histogram!(
         QUOTE_LATENCY_METRIC,
         "Latency in seconds for responding to quote requests."
+    );
+
+    describe_histogram!(
+        SWAP_MONITORING_DURATION_METRIC,
+        "Duration in seconds for monitoring all active swaps in a single iteration."
     );
 
     if PROMETHEUS_HANDLE.set(shared_handle.clone()).is_err() {

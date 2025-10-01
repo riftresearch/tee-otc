@@ -59,7 +59,11 @@ pub struct DepositKeyStorage {
 }
 
 impl DepositKeyStorage {
-    pub async fn new(database_url: &str, db_max_connections: u32, db_min_connections: u32) -> Result<Self> {
+    pub async fn new(
+        database_url: &str,
+        db_max_connections: u32,
+        db_min_connections: u32,
+    ) -> Result<Self> {
         let pool = PgPoolOptions::new()
             .max_connections(db_max_connections)
             .min_connections(db_min_connections)

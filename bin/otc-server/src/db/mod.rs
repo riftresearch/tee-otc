@@ -23,12 +23,16 @@ pub struct Database {
 
 impl Database {
     /// Create a new Database instance with connection pooling and automatic migrations
-    pub async fn connect(database_url: &str) -> OtcServerResult<Self> {
+    pub async fn connect(
+        database_url: &str,
+        max_db_connections: u32,
+        min_db_connections: u32,
+    ) -> OtcServerResult<Self> {
         info!("Connecting to database...");
 
         let pool = PgPoolOptions::new()
-            .max_connections(10)
-            .min_connections(2)
+            .max_connections(max_db_connections)
+            .min_connections(min_db_connections)
             .acquire_timeout(Duration::from_secs(5))
             .idle_timeout(Duration::from_secs(600))
             .connect(database_url)

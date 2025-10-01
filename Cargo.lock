@@ -1795,7 +1795,7 @@ dependencies = [
 [[package]]
 name = "bitcoincore-rpc-async"
 version = "4.0.2"
-source = "git+https://github.com/riftresearch/rust-bitcoincore-rpc-async?rev=5113a3bff59a8d1afdd0f37b7df707a25567f54f#5113a3bff59a8d1afdd0f37b7df707a25567f54f"
+source = "git+https://github.com/riftresearch/rust-bitcoincore-rpc-async?rev=c50734a50f2af2f8a9be3f03b98832dd04e788b1#c50734a50f2af2f8a9be3f03b98832dd04e788b1"
 dependencies = [
  "async-trait",
  "corepc-types",
@@ -4678,6 +4678,7 @@ dependencies = [
  "hkdf",
  "otc-models",
  "rand 0.8.5",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2",

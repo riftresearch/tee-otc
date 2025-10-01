@@ -2,27 +2,24 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::{
-    bitcoin_wallet::BitcoinWallet, evm_wallet::EVMWallet, price_oracle::BitcoinEtherPriceOracle,
-};
-use crate::{WalletError, WalletResult};
+use crate::balance_strat::QuoteBalanceStrategy;
+use crate::price_oracle::BitcoinEtherPriceOracle;
+use crate::wallet::{WalletBalance, WalletManager};
 use alloy::eips::BlockNumberOrTag;
 use alloy::providers::DynProvider;
 use alloy::{primitives::U256, providers::Provider};
-use bdk_wallet::bitcoin::policy::DUST_RELAY_TX_FEE;
 use blockchain_utils::{compute_protocol_fee_sats, inverse_compute_protocol_fee};
-use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest};
+use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::{FeeSchedule, QuoteWithFees, RFQResult};
-use serde::{Deserialize, Serialize};
 use snafu::Snafu;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 const QUOTE_EXPIRATION_TIME: Duration = Duration::from_secs(60 * 5);
-
 const FEE_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
+const BALANCE_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Snafu)]
 pub enum WrappedBitcoinQuoterError {
@@ -41,16 +38,18 @@ impl From<esplora_client::Error> for WrappedBitcoinQuoterError {
 
 type Result<T, E = WrappedBitcoinQuoterError> = std::result::Result<T, E>;
 
-/// Note this is greater than the
-pub const MIN_PROTOCOL_FEE_SATS: u64 = 300;
-
 pub struct WrappedBitcoinQuoter {
     trade_spread_bps: u64,
+    wallet_registry: Arc<WalletManager>,
     fee_map: Arc<RwLock<HashMap<ChainType, u64>>>,
+    balance_map: Arc<RwLock<HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>>>>,
+    balance_strategy: QuoteBalanceStrategy,
 }
 
 impl WrappedBitcoinQuoter {
     pub fn new(
+        wallet_registry: Arc<WalletManager>,
+        balance_strategy: QuoteBalanceStrategy,
         btc_eth_price_oracle: BitcoinEtherPriceOracle,
         esplora_client: esplora_client::AsyncClient,
         eth_provider: DynProvider,
@@ -74,27 +73,34 @@ impl WrappedBitcoinQuoter {
             })
         });
 
+        let balance_map = Arc::new(RwLock::new(HashMap::new()));
+        let balance_map_clone = balance_map.clone();
+        let wallet_registry_clone = wallet_registry.clone();
+        join_set.spawn(async move {
+            Self::balance_update_loop(wallet_registry_clone, balance_map_clone)
+                .await
+                .map_err(|e| crate::Error::BackgroundThread {
+                    source: Box::new(e),
+                })
+        });
+
         Self {
+            wallet_registry,
             trade_spread_bps,
             fee_map,
+            balance_map,
+            balance_strategy,
         }
     }
 
-    pub async fn ensure_fees_available(&self) -> Result<()> {
+    pub async fn ensure_cache_ready(&self) -> Result<()> {
         let start_time = Instant::now();
         let timeout = Duration::from_secs(30);
         loop {
             if start_time.elapsed() > timeout {
                 return FeeUpdateTimeoutSnafu.fail();
             }
-            if self.fee_map.read().await.get(&ChainType::Bitcoin).is_some()
-                && self
-                    .fee_map
-                    .read()
-                    .await
-                    .get(&ChainType::Ethereum)
-                    .is_some()
-            {
+            if !self.fee_map.read().await.is_empty() && !self.balance_map.read().await.is_empty() {
                 return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -168,6 +174,52 @@ impl WrappedBitcoinQuoter {
         }
     }
 
+    async fn balance_update_loop(
+        wallet_registry: Arc<WalletManager>,
+        balance_map: Arc<RwLock<HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>>>>,
+    ) -> Result<()> {
+        loop {
+            let mut updated_balances: HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>> =
+                HashMap::new();
+
+            for chain in wallet_registry.registered_chains() {
+                let Some(wallet) = wallet_registry.get(chain) else {
+                    continue;
+                };
+
+                let Some(tokens) = constants::SUPPORTED_TOKENS_BY_CHAIN.get(&chain) else {
+                    continue;
+                };
+
+                let mut token_balances = HashMap::new();
+                for token in tokens {
+                    match wallet.balance(token).await {
+                        Ok(balance) => {
+                            token_balances.insert(token.clone(), balance);
+                        }
+                        Err(error) => {
+                            warn!(
+                                "Failed to refresh cached balance for chain {:?}, token {:?}: {:?}",
+                                chain, token, error
+                            );
+                        }
+                    }
+                }
+
+                if !token_balances.is_empty() {
+                    updated_balances.insert(chain, token_balances);
+                }
+            }
+
+            {
+                let mut guard = balance_map.write().await;
+                *guard = updated_balances;
+            }
+
+            tokio::time::sleep(BALANCE_UPDATE_INTERVAL).await;
+        }
+    }
+
     /// Compute a quote for the given amount and quote mode.
     /// Note that fill_chain is the chain that the market maker will fill the quote on.
     /// which is relevant for computing fees
@@ -193,18 +245,20 @@ impl WrappedBitcoinQuoter {
             .cloned();
 
         if send_fees_in_sats.is_none() {
-            return Ok(RFQResult::InvalidRequest("Network fee for chain not found".to_string()));
+            return Ok(RFQResult::InvalidRequest(
+                "Network fee for chain not found".to_string(),
+            ));
         }
 
         let send_fees_in_sats = send_fees_in_sats.unwrap();
 
-        match quote_request.mode {
+        let rfq_result = match quote_request.mode {
             QuoteMode::ExactInput => {
                 let quote_result =
                     quote_exact_input(amount, send_fees_in_sats, self.trade_spread_bps);
 
                 match quote_result {
-                    RFQResult::Success((rx_btc, fees)) => Ok(RFQResult::Success(QuoteWithFees {
+                    RFQResult::Success((rx_btc, fees)) => RFQResult::Success(QuoteWithFees {
                         quote: Quote {
                             id: quote_id,
                             market_maker_id,
@@ -220,16 +274,16 @@ impl WrappedBitcoinQuoter {
                             created_at: utc::now(),
                         },
                         fees,
-                    })),
-                    RFQResult::MakerUnavailable(error) => Ok(RFQResult::MakerUnavailable(error)),
-                    RFQResult::InvalidRequest(error) => Ok(RFQResult::InvalidRequest(error)),
+                    }),
+                    RFQResult::MakerUnavailable(error) => RFQResult::MakerUnavailable(error),
+                    RFQResult::InvalidRequest(error) => RFQResult::InvalidRequest(error),
                 }
             }
             QuoteMode::ExactOutput => {
                 let quote_result =
                     quote_exact_output(amount, send_fees_in_sats, self.trade_spread_bps);
                 match quote_result {
-                    RFQResult::Success((tx_btc, fees)) => Ok(RFQResult::Success(QuoteWithFees {
+                    RFQResult::Success((tx_btc, fees)) => RFQResult::Success(QuoteWithFees {
                         quote: Quote {
                             id: quote_id,
                             market_maker_id,
@@ -245,12 +299,80 @@ impl WrappedBitcoinQuoter {
                             created_at: utc::now(),
                         },
                         fees,
-                    })),
-                    RFQResult::MakerUnavailable(error) => Ok(RFQResult::MakerUnavailable(error)),
-                    RFQResult::InvalidRequest(error) => Ok(RFQResult::InvalidRequest(error)),
+                    }),
+                    RFQResult::MakerUnavailable(error) => RFQResult::MakerUnavailable(error),
+                    RFQResult::InvalidRequest(error) => RFQResult::InvalidRequest(error),
                 }
             }
+        };
+
+        Ok(self.validate_quote_balance(rfq_result).await)
+    }
+
+    async fn validate_quote_balance(
+        &self,
+        rfq_result: RFQResult<QuoteWithFees>,
+    ) -> RFQResult<QuoteWithFees> {
+        match rfq_result {
+            RFQResult::Success(quote_with_fees) => {
+                match self
+                    .ensure_cached_balance_can_fill(&quote_with_fees.quote)
+                    .await
+                {
+                    Ok(()) => RFQResult::Success(quote_with_fees),
+                    Err(message) => RFQResult::MakerUnavailable(message),
+                }
+            }
+            other => other,
         }
+    }
+
+    async fn ensure_cached_balance_can_fill(&self, quote: &Quote) -> Result<(), String> {
+        let chain = quote.to.currency.chain;
+        let token = &quote.to.currency.token;
+
+        if !self.wallet_registry.is_registered(chain) {
+            warn!(
+                "Cannot fill quote {}: no wallet configured for chain {:?} and token {:?}",
+                quote.id, chain, token
+            );
+            return Err("No wallet configured for chain".to_string());
+        }
+
+        let cached_balance = self.cached_balance_for(chain, token).await;
+
+        let Some(balance) = cached_balance else {
+            warn!(
+                "Cannot fill quote {}: no cached balance for chain {:?} and token {:?}",
+                quote.id, chain, token
+            );
+            return Err("Failed to refresh wallet balance".to_string());
+        };
+
+        if !self
+            .balance_strategy
+            .can_fill_quote(quote, balance.total_balance)
+        {
+            warn!(
+                "Cannot fill quote {}: insufficient balance for chain {:?} token {:?}; available {:?}",
+                quote.id, chain, token, balance.total_balance
+            );
+            return Err("Insufficient balance to fulfill quote".to_string());
+        }
+
+        Ok(())
+    }
+
+    async fn cached_balance_for(
+        &self,
+        chain: ChainType,
+        token: &TokenIdentifier,
+    ) -> Option<WalletBalance> {
+        let guard = self.balance_map.read().await;
+        guard
+            .get(&chain)
+            .and_then(|balances| balances.get(token))
+            .cloned()
     }
 }
 
@@ -347,7 +469,7 @@ fn quote_exact_output(
     let rx_after_fees = rx_after_protocol_fee.saturating_add(network_fee_sats);
 
     let numerator = BPS_DENOM.saturating_mul(rx_after_fees);
-    let denominator = (BPS_DENOM - s);
+    let denominator = BPS_DENOM - s;
     let tx = numerator.div_ceil(denominator);
 
     let liquidity_fee = tx - rx_after_fees;

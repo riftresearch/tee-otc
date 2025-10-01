@@ -293,15 +293,24 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
 
     // Initialize quote storage
     let quote_storage = Arc::new(
-        QuoteStorage::new(&args.database_url, args.db_max_connections, args.db_min_connections, &mut join_set)
-            .await
-            .context(QuoteStorageSnafu)?,
+        QuoteStorage::new(
+            &args.database_url,
+            args.db_max_connections,
+            args.db_min_connections,
+            &mut join_set,
+        )
+        .await
+        .context(QuoteStorageSnafu)?,
     );
 
     let deposit_key_storage = Arc::new(
-        DepositKeyStorage::new(&args.database_url, args.db_max_connections, args.db_min_connections)
-            .await
-            .context(DepositKeyStorageSnafu)?,
+        DepositKeyStorage::new(
+            &args.database_url,
+            args.db_max_connections,
+            args.db_min_connections,
+        )
+        .await
+        .context(DepositKeyStorageSnafu)?,
     );
 
     let esplora_client = esplora_client::Builder::new(&args.bitcoin_wallet_esplora_url)
@@ -349,10 +358,14 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     wallet_manager.register(ChainType::Ethereum, evm_wallet.clone());
 
     let wallet_manager = Arc::new(wallet_manager);
+    let balance_strategy =
+        balance_strat::QuoteBalanceStrategy::new(args.balance_utilization_threshold_bps);
 
     let btc_eth_price_oracle = price_oracle::BitcoinEtherPriceOracle::new(&mut join_set);
 
     let wrapped_bitcoin_quoter = Arc::new(WrappedBitcoinQuoter::new(
+        wallet_manager.clone(),
+        balance_strategy,
         btc_eth_price_oracle,
         esplora_client,
         provider.clone().erased(),
@@ -362,9 +375,13 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     ));
 
     let payment_storage = Arc::new(
-        PaymentStorage::new(&args.database_url, args.db_max_connections, args.db_min_connections)
-            .await
-            .context(PaymentStorageSnafu)?,
+        PaymentStorage::new(
+            &args.database_url,
+            args.db_max_connections,
+            args.db_min_connections,
+        )
+        .await
+        .context(PaymentStorageSnafu)?,
     );
 
     let payment_manager = Arc::new(PaymentManager::new(
@@ -387,15 +404,10 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     );
     join_set.spawn(async move { otc_fill_client.run().await.map_err(Error::from) });
 
-    let balance_strategy =
-        balance_strat::QuoteBalanceStrategy::new(args.balance_utilization_threshold_bps);
-
     let rfq_handler = rfq_handler::RFQMessageHandler::new(
         market_maker_id,
         wrapped_bitcoin_quoter.clone(),
         quote_storage,
-        wallet_manager.clone(),
-        balance_strategy,
     );
 
     // Add RFQ client for handling quote requests
@@ -411,9 +423,9 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         rfq_handler,
         args.rfq_ws_url,
     );
-    // make sure fees are initiailized before quotes can be computed
+    // make sure fees + balances are initiailized before quotes can be computed
     wrapped_bitcoin_quoter
-        .ensure_fees_available()
+        .ensure_cache_ready()
         .await
         .context(WrappedBitcoinQuoterSnafu)?;
     join_set.spawn(async move {

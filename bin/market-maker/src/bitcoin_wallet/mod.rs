@@ -12,8 +12,11 @@ use bdk_wallet::descriptor;
 use bdk_wallet::keys::DescriptorPublicKey;
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
-    bitcoin::Network, error::CreateTxError, signer::SignerError, AddForeignUtxoError, CreateParams,
-    KeychainKind, LoadParams, LoadWithPersistError, PersistedWallet,
+    bitcoin::{Address, Network},
+    error::CreateTxError,
+    signer::SignerError,
+    AddForeignUtxoError, CreateParams, KeychainKind, LoadParams, LoadWithPersistError,
+    PersistedWallet,
 };
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
@@ -28,7 +31,6 @@ use crate::wallet::{self, Wallet as WalletTrait, WalletBalance, WalletError};
 use crate::WalletResult;
 
 const PARALLEL_REQUESTS: usize = 5;
-const BALANCE_BUFFER_PERCENT: u64 = 25; // 25% buffer
 
 #[derive(Debug, Snafu)]
 pub enum BitcoinWalletError {
@@ -371,6 +373,10 @@ impl WalletTrait for BitcoinWallet {
             }
         }
 
+        info!(
+            "Broadcasting bitcoin tx w/ foreign_utxos: {:?}",
+            foreign_utxos
+        );
         // Send transaction request to the broadcaster
         self.tx_broadcaster
             .broadcast_transaction(

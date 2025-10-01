@@ -1,9 +1,8 @@
-use blockchain_utils::{handle_background_thread_result, init_logger};
+use blockchain_utils::{handle_background_thread_result, init_logger, shutdown_signal};
 use clap::{Parser, Subcommand};
 use devnet::evm_devnet::ForkConfig;
 use devnet::{RiftDevnet, RiftDevnetCache};
 use snafu::{ResultExt, Whatever};
-use tokio::signal;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
@@ -106,8 +105,8 @@ async fn run_server(
     );
 
     tokio::select! {
-        _ = signal::ctrl_c() => {
-            info!("[Devnet Server] Ctrl+C received, shutting down...");
+        _ = shutdown_signal() => {
+            info!("[Devnet Server] Shutdown signal received; shutting down...");
         }
         res = devnet.join_set.join_next() => {
             handle_background_thread_result(res).unwrap();

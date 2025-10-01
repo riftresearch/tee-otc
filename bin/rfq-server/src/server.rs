@@ -373,13 +373,13 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     while let Some(msg) = receiver.next().await {
         match msg {
             Ok(Message::Text(text)) => {
-                let mm_registry= state.mm_registry.clone();
+                let mm_registry = state.mm_registry.clone();
                 tokio::spawn(async move {
                     match serde_json::from_str::<ProtocolMessage<RFQResponse>>(&text) {
                         Ok(msg) => match &msg.payload {
                             RFQResponse::QuoteResponse { request_id, .. } => {
                                 // Route the response to the appropriate aggregator
-                               mm_registry 
+                                mm_registry
                                     .handle_quote_response(*request_id, msg.payload.clone())
                                     .await;
                             }
@@ -412,10 +412,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
                 break;
             }
             _ => {}
-
         }
-        
-        
     }
 
     // Unregister on disconnect

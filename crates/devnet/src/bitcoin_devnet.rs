@@ -347,6 +347,8 @@ impl BitcoinDevnet {
         conf.view_stderr = false;
         conf.args.push("--cors");
         conf.args.push("*");
+        conf.args.push("--utxos-limit");
+        conf.args.push("131072");
 
         let electrsd_datadir = if let Some(devnet_cache) = devnet_cache {
             devnet_cache.create_electrsd_datadir().await?

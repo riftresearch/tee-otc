@@ -33,7 +33,7 @@ chainalysis-address-screener = { path = "crates/chainalysis-address-screener" }
 
 # All of the following dependences (before the empty line) are implicitly linked to the same version, if one of them is updated they must all be updated simultaneously 
 bitcoin = { version = "0.32.0", default-features = false, features = ["serde", "base64", "secp-recovery"] }
-bitcoincore-rpc-async = { git = "https://github.com/riftresearch/rust-bitcoincore-rpc-async", rev = "5113a3bff59a8d1afdd0f37b7df707a25567f54f" }
+bitcoincore-rpc-async = { git = "https://github.com/riftresearch/rust-bitcoincore-rpc-async", rev = "c50734a50f2af2f8a9be3f03b98832dd04e788b1" }
 corepc-node = { version = "0.8.0", features = ["29_0", "download"] }
 electrsd = { git = "https://github.com/RCasatta/electrsd", rev = "bdc97e879bad82e13e69c74d898271db12224f44", features = ["corepc-node_29_0", "esplora_a33e97e1", "legacy"] }
 esplora-client = {git = "https://github.com/riftresearch/rust-esplora-client" , rev = "a571328ff799993f877d87db8dad6e4c6b313225", features = ["async", "tokio"]}

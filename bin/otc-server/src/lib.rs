@@ -86,6 +86,14 @@ pub struct OtcServerArgs {
     )]
     pub database_url: String,
 
+    /// Database max connections
+    #[arg(long, env = "DB_MAX_CONNECTIONS", default_value = "128")]
+    pub db_max_connections: u32,
+
+    /// Database min connections
+    #[arg(long, env = "DB_MIN_CONNECTIONS", default_value = "16")]
+    pub db_min_connections: u32,
+
     /// Log level
     #[arg(long, env = "RUST_LOG", default_value = "info")]
     pub log_level: String,
@@ -126,6 +134,10 @@ pub struct OtcServerArgs {
     #[arg(long, env = "CHAIN_MONITOR_INTERVAL", default_value = "10")]
     pub chain_monitor_interval_seconds: u64,
 
+    /// Maximum number of swaps to monitor concurrently
+    #[arg(long, env = "MAX_CONCURRENT_SWAPS", default_value = "250")]
+    pub max_concurrent_swaps: usize,
+
     /// CORS domain to allow (supports wildcards like "*.example.com")
     #[arg(long = "corsdomain", env = "CORS_DOMAIN")]
     pub cors_domain: Option<String>,
@@ -155,9 +167,3 @@ fn parse_auth(s: &str) -> Result<Auth, String> {
         Ok(Auth::UserPass(u.to_string(), p.to_string()))
     }
 }
-
-const DEFAULT_HOST: &str = "127.0.0.1";
-const DEFAULT_PORT: u16 = 3000;
-const DEFAULT_DATABASE_URL: &str = "postgres://otc_user:otc_password@localhost:5432/otc_db";
-const DEFAULT_LOG_LEVEL: &str = "info";
-const DEFAULT_WHITELISTED_MM_FILE: &str = "prod_whitelisted_market_makers.json";

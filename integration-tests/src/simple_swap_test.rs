@@ -601,6 +601,14 @@ async fn test_swap_from_ethereum_to_bitcoin(
         &connect_options,
     )
     .await;
+
+    // Wait for esplora to sync before starting market maker
+    devnet
+        .bitcoin
+        .wait_for_esplora_sync(Duration::from_secs(30))
+        .await
+        .unwrap();
+
     let mm_db_url = mm_args.database_url.clone();
     service_join_set.spawn(async move {
         run_market_maker(mm_args)
@@ -610,11 +618,6 @@ async fn test_swap_from_ethereum_to_bitcoin(
 
     wait_for_market_maker_to_connect_to_rfq_server(rfq_port).await;
 
-    devnet
-        .bitcoin
-        .wait_for_esplora_sync(Duration::from_secs(30))
-        .await
-        .unwrap();
     // at this point, the user should have a confirmed BTC balance
     // and our market maker should have plenty of cbbtc to fill their order
 

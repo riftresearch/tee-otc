@@ -22,13 +22,14 @@ start-db:
     @until docker exec otc_dev pg_isready -U postgres -d otc_dev >/dev/null 2>&1; do sleep 0.1; done
     @echo "Database ready at: {{database_url}}"
 
-# Stop development database
-stop-db:
-    {{test_db}} down
-
 # Stop and remove database volumes
 clean-db:
     {{test_db}} down -v
+
+# Restart database
+redb:
+    just clean-db
+    just start-db
 
 # Build the project for testing
 build-test:
@@ -41,8 +42,7 @@ cache-devnet: build-test
 
 # Run all tests, assumes devnet has been cached
 test: build-test
-    just clean-db
-    just start-db
+    just redb
     cargo nextest run
     just clean-db
 

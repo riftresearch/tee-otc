@@ -51,10 +51,8 @@ impl QuoteStorage {
         let pool = PgPoolOptions::new()
             .max_connections(db_max_connections)
             .min_connections(db_min_connections)
-            .max_lifetime(Duration::from_secs(300))
-            .idle_timeout(Duration::from_secs(60))
-            .acquire_timeout(Duration::from_millis(200))
-            .test_before_acquire(true)
+            .acquire_timeout(Duration::from_secs(5))
+            .idle_timeout(Duration::from_secs(600))
             .after_connect(|conn, _meta| {
                 Box::pin(async move {
                     // Scope this pool to the quote_storage schema so unqualified SQL stays isolated

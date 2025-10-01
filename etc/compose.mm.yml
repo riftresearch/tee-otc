@@ -81,6 +81,7 @@ configs:
                   "axisColorMode": "text",
                   "axisLabel": "",
                   "axisPlacement": "auto",
+                  "axisSoftMin": 0,
                   "barAlignment": 0,
                   "drawStyle": "line",
                   "fillOpacity": 40,
@@ -101,7 +102,7 @@ configs:
                   "spanNulls": false,
                   "stacking": {
                     "group": "A",
-                    "mode": "normal"
+                    "mode": "percent"
                   },
                   "thresholdsStyle": {
                     "mode": "off"
@@ -187,8 +188,8 @@ configs:
               ]
             },
             "gridPos": {
-              "h": 13,
-              "w": 24,
+              "h": 10,
+              "w": 12,
               "x": 0,
               "y": 0
             },
@@ -198,7 +199,9 @@ configs:
                 "calcs": [],
                 "displayMode": "list",
                 "placement": "right",
-                "showLegend": true
+                "showLegend": true,
+                "sortBy": "Name",
+                "sortDesc": false
               },
               "tooltip": {
                 "mode": "multi",
@@ -235,7 +238,213 @@ configs:
                 "useBackend": false
               }
             ],
-            "title": "Inventory Balance (Sats)",
+            "title": "Inventory Distribution",
+            "transformations": [
+              {
+                "id": "joinByField",
+                "options": {
+                  "byField": "Time",
+                  "mode": "outer"
+                }
+              },
+              {
+                "id": "organize",
+                "options": {
+                  "excludeByName": {},
+                  "includeByName": {},
+                  "indexByName": {
+                    "Time": 0,
+                    "btc-cum-vaults": 4,
+                    "btc-native": 3,
+                    "cbbtc-cum-vaults": 2,
+                    "cbbtc-native": 1
+                  },
+                  "renameByName": {}
+                }
+              }
+            ],
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 40,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "none"
+              },
+              "overrides": [
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "cbbtc-native"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#0052ff",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "cbbtc-cum-vaults"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#4986ff",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "btc-native"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#f09200",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "btc-cum-vaults"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "#f6b064",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            "gridPos": {
+              "h": 10,
+              "w": 12,
+              "x": 12,
+              "y": 0
+            },
+            "id": 6,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true,
+                "sortBy": "Name",
+                "sortDesc": false
+              },
+              "tooltip": {
+                "mode": "multi",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "name": "Prometheus",
+                  "type": "prometheus"
+                },
+                "editorMode": "code",
+                "expr": "sum(mm_deposit_key_balance_sats{instance=\"market-maker:9000\"}) + sum(mm_native_balance_sats{instance=\"market-maker:9000\"})",
+                "legendFormat": "cum-sats",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Cumulative Inventory Balance",
+            "transformations": [
+              {
+                "id": "joinByField",
+                "options": {
+                  "byField": "Time",
+                  "mode": "outer"
+                }
+              },
+              {
+                "id": "organize",
+                "options": {
+                  "excludeByName": {},
+                  "includeByName": {},
+                  "indexByName": {
+                    "Time": 0,
+                    "btc-cum-vaults": 4,
+                    "btc-native": 3,
+                    "cbbtc-cum-vaults": 2,
+                    "cbbtc-native": 1
+                  },
+                  "renameByName": {}
+                }
+              }
+            ],
             "type": "timeseries"
           },
           {
@@ -302,7 +511,7 @@ configs:
               "h": 7,
               "w": 24,
               "x": 0,
-              "y": 13
+              "y": 10
             },
             "id": 5,
             "options": {
@@ -330,13 +539,13 @@ configs:
                 "hide": false,
                 "includeNullMetadata": true,
                 "instant": false,
-                "legendFormat": "{{quantile}}",
+                "legendFormat": "p95",
                 "range": true,
                 "refId": "A",
                 "useBackend": false
               }
             ],
-            "title": "Quote Latency",
+            "title": "Quote Generation Latency",
             "type": "timeseries"
           },
           {
@@ -403,7 +612,7 @@ configs:
               "h": 7,
               "w": 7,
               "x": 0,
-              "y": 20
+              "y": 17
             },
             "id": 1,
             "options": {
@@ -498,7 +707,7 @@ configs:
               "h": 7,
               "w": 9,
               "x": 7,
-              "y": 20
+              "y": 17
             },
             "id": 2,
             "options": {
@@ -531,8 +740,8 @@ configs:
           },
           {
             "datasource": {
-              "name": "Prometheus",
-              "type": "prometheus"
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
             },
             "fieldConfig": {
               "defaults": {
@@ -585,7 +794,7 @@ configs:
                     }
                   ]
                 },
-                "unit": "gbytes"
+                "unit": "decbytes"
               },
               "overrides": []
             },
@@ -593,7 +802,7 @@ configs:
               "h": 7,
               "w": 8,
               "x": 16,
-              "y": 20
+              "y": 17
             },
             "id": 3,
             "options": {
@@ -615,17 +824,17 @@ configs:
                   "type": "prometheus"
                 },
                 "editorMode": "code",
-                "expr": "(node_filesystem_size_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"} - node_filesystem_free_bytes{fstype!~\"tmpfs|overlay\", mountpoint!~\"/(sys|proc|dev|run)(/.*)?\"}) / 1024 / 1024 / 1024",
-                "legendFormat": "{{mountpoint}}",
+                "expr": "node_filesystem_size_bytes{fstype!~\"tmpfs|overlay\", mountpoint=\"/\"} \n - node_filesystem_free_bytes{fstype!~\"tmpfs|overlay\", mountpoint=\"/\"}",
+                "legendFormat": "Root",
                 "range": true,
                 "refId": "A"
               }
             ],
-            "title": "Disk Usage by Mount",
+            "title": "Host Disk Usage",
             "type": "timeseries"
           }
         ],
-        "refresh": "",
+        "refresh": "5s",
         "schemaVersion": 39,
         "tags": [
           "monitoring"
@@ -634,7 +843,7 @@ configs:
           "list": []
         },
         "time": {
-          "from": "now-30m",
+          "from": "now-12h",
           "to": "now"
         },
         "timepicker": {},
@@ -646,6 +855,7 @@ configs:
       }
 
 
+
 services:
   mm-postgres:
     image: postgres:16-alpine
@@ -654,6 +864,32 @@ services:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: pass
       POSTGRES_DB: mm_db
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=500"
+      - "-c"
+      - "shared_buffers=1GB"
+      - "-c"
+      - "effective_cache_size=3GB"
+      - "-c"
+      - "maintenance_work_mem=256MB"
+      - "-c"
+      - "work_mem=2MB"
+      - "-c"
+      - "wal_buffers=16MB"
+      - "-c"
+      - "min_wal_size=1GB"
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "default_statistics_target=100"
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
     volumes:
       - mm_postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -661,6 +897,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    shm_size: 1g
     networks:
       - mm-network
 

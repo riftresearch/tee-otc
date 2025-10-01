@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::{error::Error as StdError, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, Context, Result};
 use otc_models::{ChainType, Currency, Lot, Quote, QuoteRequest, TokenIdentifier};
@@ -27,6 +27,10 @@ pub async fn run_load_test(
     update_tx: UnboundedSender<UiEvent>,
 ) -> Result<RunSummary> {
     let client = Client::builder()
+        .pool_max_idle_per_host(config.total_swaps) // Allow more idle connections
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .context("failed to build HTTP client")?;
 
@@ -230,6 +234,18 @@ async fn request_quote(client: &Client, url: &Url, request: &QuoteRequest) -> Re
         .json(request)
         .send()
         .await
+        .map_err(|e| {
+            // Detailed error inspection to diagnose resource exhaustion
+            tracing::error!(
+                error = %e,
+                is_timeout = e.is_timeout(),
+                is_connect = e.is_connect(),
+                is_request = e.is_request(),
+                source = ?e.source(),
+                "quote request failed with detailed error info"
+            );
+            e
+        })
         .with_context(|| format!("failed to send quote request to {}", url))?;
 
     if !response.status().is_success() {
@@ -271,7 +287,23 @@ async fn create_swap(
         .json(request)
         .send()
         .await
-        .with_context(|| format!("failed to send swap creation request to {}", url))?;
+        .map_err(|e| {
+            // Detailed error inspection to diagnose resource exhaustion
+            tracing::error!(
+                error = %e,
+                is_timeout = e.is_timeout(),
+                is_connect = e.is_connect(),
+                is_request = e.is_request(),
+                is_body = e.is_body(),
+                is_decode = e.is_decode(),
+                source = ?e.source(),
+                "swap creation request failed with detailed error info"
+            );
+            anyhow!(format!(
+                "failed to send swap creation request to {}: {}",
+                url, e
+            ))
+        })?;
     if !response.status().is_success() {
         let response_text = response
             .text()

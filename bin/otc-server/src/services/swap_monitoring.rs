@@ -3,14 +3,18 @@ use crate::error::OtcServerError;
 use crate::{config::Settings, services::mm_registry};
 use alloy::primitives::U256;
 use blockchain_utils::FeeCalcFromLot;
+use metrics::histogram;
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_chains::ChainRegistry;
 use otc_models::{MMDepositStatus, Swap, SwapStatus, TxStatus, UserDepositStatus};
 use snafu::prelude::*;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+use tokio::sync::Semaphore;
 use tokio::time;
 use tracing::{error, info, warn};
+
+const SWAP_MONITORING_DURATION_METRIC: &str = "otc_swap_monitoring_duration_seconds";
 
 #[derive(Debug, Snafu)]
 pub enum MonitoringError {
@@ -36,6 +40,7 @@ pub struct SwapMonitoringService {
     chain_registry: Arc<ChainRegistry>,
     mm_registry: Arc<mm_registry::MMRegistry>,
     chain_monitor_interval_seconds: u64,
+    max_concurrent_swaps: usize,
 }
 
 impl SwapMonitoringService {
@@ -46,6 +51,7 @@ impl SwapMonitoringService {
         chain_registry: Arc<ChainRegistry>,
         mm_registry: Arc<mm_registry::MMRegistry>,
         chain_monitor_interval_seconds: u64,
+        max_concurrent_swaps: usize,
     ) -> Self {
         Self {
             db,
@@ -53,6 +59,7 @@ impl SwapMonitoringService {
             chain_registry,
             mm_registry,
             chain_monitor_interval_seconds,
+            max_concurrent_swaps,
         }
     }
 
@@ -60,9 +67,6 @@ impl SwapMonitoringService {
     pub async fn run(self: Arc<Self>) {
         info!("Starting swap monitoring service");
 
-        // Check every 12 seconds
-        // interval is based on the shortest confirmation time of all chains
-        let chains = self.chain_registry.supported_chains();
         let interval = Duration::from_secs(self.chain_monitor_interval_seconds);
         info!(
             "Starting swap monitoring service with interval: {:?}",
@@ -71,27 +75,38 @@ impl SwapMonitoringService {
         let mut interval = time::interval(interval);
 
         loop {
-            interval.tick().await;
-
             if let Err(e) = self.monitor_all_swaps().await {
                 error!("Error monitoring swaps: {}", e);
             }
+            interval.tick().await;
         }
     }
 
     /// Monitor all active swaps
-    async fn monitor_all_swaps(&self) -> MonitoringResult<()> {
-        // Get all active swaps
-        let active_swaps = self.db.swaps().get_active().await.context(DatabaseSnafu)?;
+    async fn monitor_all_swaps(self: &Arc<Self>) -> MonitoringResult<()> {
+        let start = Instant::now();
 
+        let active_swaps = self.db.swaps().get_active().await.context(DatabaseSnafu)?;
         info!("Monitoring {} active swaps", active_swaps.len());
 
-        // TODO: use a semaphore to limit the number of swaps we monitor in parallel (+ support for parallelization)
+        let semaphore = Arc::new(Semaphore::new(self.max_concurrent_swaps));
+        let mut join_set = tokio::task::JoinSet::new();
+
         for swap in active_swaps {
-            if let Err(e) = self.monitor_swap(&swap).await {
-                error!("Error monitoring swap {}: {}", swap.id, e);
-            }
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let service = Arc::clone(self);
+
+            join_set.spawn(async move {
+                let _permit = permit;
+                if let Err(e) = service.monitor_swap(&swap).await {
+                    error!("Error monitoring swap {}: {}", swap.id, e);
+                }
+            });
         }
+
+        while join_set.join_next().await.is_some() {}
+
+        histogram!(SWAP_MONITORING_DURATION_METRIC).record(start.elapsed().as_secs_f64());
 
         Ok(())
     }
@@ -163,8 +178,6 @@ impl SwapMonitoringService {
             .search_for_transfer(&user_wallet.address, &quote.from, None, None)
             .await
             .context(ChainOperationSnafu)?;
-
-        info!("Deposit info: {:?}", deposit_info);
 
         if let Some(deposit) = deposit_info {
             info!(
