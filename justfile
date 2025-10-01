@@ -69,7 +69,7 @@ docker-release:
 
 # Deploy to Phala
 phala-deploy:
-    phala deploy --uuid 44961b39-df94-41ce-a262-8246519a3f18 -c etc/compose.phala.yml -e .env.otc
+    phala deploy --uuid 1c11019a-3dc1-440d-8a52-2147dcf608da -c etc/compose.phala.yml -e .env.otc
 
 # Docker compose command with all config files - passes through any arguments
 dc +args:

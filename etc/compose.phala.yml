@@ -742,10 +742,10 @@ configs:
               }
             ],
             "title": "Host Storage",
-            "type": "timeseries"
-          },
-        ],
-        "schemaVersion": 39,
+          "type": "timeseries"
+        }
+      ],
+      "schemaVersion": 39,
         "tags": [
           "monitoring"
         ],
@@ -871,7 +871,7 @@ services:
     platform: linux/amd64
 
   otc-server:
-    image: riftresearch/otc-server:main-675ea06
+    image: riftresearch/otc-server:main-aec61ea
     container_name: tee-otc-server
     depends_on:
       postgres:
