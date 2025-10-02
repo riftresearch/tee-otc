@@ -20,10 +20,13 @@ services:
     depends_on:
       token-indexer-postgres:
         condition: service_healthy
+    platform: linux/amd64
     build:
       context: ..
+      platforms:
+        - linux/amd64
       dockerfile_inline: |
-        FROM rust:1.88 AS chef
+        FROM --platform=linux/amd64 rust:1.88 AS chef
         RUN cargo install cargo-chef
         WORKDIR /app
 
@@ -38,7 +41,7 @@ services:
         COPY . .
         RUN cargo build --release --bin devnet --exclude integration-tests --workspace
 
-        FROM debian:bookworm-slim
+        FROM --platform=linux/amd64 debian:bookworm-slim
         RUN apt-get update && apt-get install -y \
             ca-certificates \
             curl \
@@ -58,7 +61,6 @@ services:
       TOKEN_INDEXER_DATABASE_URL: postgres://token_indexer_user:token_indexer_password@token-indexer-postgres:5432/token_indexer_db
     networks:
       - tee-network
-    
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://devnet:50104/health || exit 1"]
       interval: 10s

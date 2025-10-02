@@ -966,7 +966,6 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - market_maker_bitcoin_wallet_db_data:/app/bitcoin-wallet-db
-    platform: linux/amd64
 
   mm-node-exporter:
     image: prom/node-exporter:v1.8.2
