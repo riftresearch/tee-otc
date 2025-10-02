@@ -173,6 +173,8 @@ services:
   eth-jwt-generator: !reset null
 
   postgres:
+    ports:
+      - "5432:5432"
     networks:
     volumes: [] 
 
