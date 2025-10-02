@@ -72,5 +72,6 @@ phala-deploy:
     phala deploy --uuid 1c11019a-3dc1-440d-8a52-2147dcf608da -c etc/compose.phala.yml -e .env.otc
 
 # Docker compose command with all config files - passes through any arguments
+# DOCKER_DEFAULT_PLATFORM=linux/amd64  
 dc +args:
-    DOCKER_DEFAULT_PLATFORM=linux/amd64 {{dc_files}} {{args}}
+    {{dc_files}} {{args}}
