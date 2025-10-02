@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
 use alloy::signers::local::PrivateKeySigner;
 use anyhow::{Context, Result};
@@ -7,7 +7,8 @@ use market_maker::{
     Result as MarketMakerResult, WalletError,
 };
 use otc_models::{ChainType, Lot};
-use tokio::task::JoinSet;
+use tokio::{task::JoinSet, time::sleep};
+use tracing::{debug, warn};
 
 use crate::args::{BitcoinWalletConfig, Config, EvmWalletConfig};
 use blockchain_utils::create_websocket_wallet_provider;
@@ -28,10 +29,9 @@ impl PaymentWallet {
 
     pub async fn create_payment(&self, lot: &Lot, recipient: &str) -> Result<String> {
         match self {
-            PaymentWallet::Bitcoin(wallet) => wallet
-                .create_payment(lot, recipient, None)
-                .await
-                .map_err(map_wallet_error),
+            PaymentWallet::Bitcoin(wallet) => {
+                create_bitcoin_payment_with_retry(wallet, lot, recipient).await
+            }
             PaymentWallet::Ethereum(wallet) => wallet
                 .create_payment(lot, recipient, None)
                 .await
@@ -42,6 +42,47 @@ impl PaymentWallet {
 
 fn map_wallet_error(error: WalletError) -> anyhow::Error {
     anyhow::Error::new(error)
+}
+
+const BTC_PAYMENT_RETRY_ATTEMPTS: usize = 10;
+const BTC_PAYMENT_RETRY_BACKOFF: Duration = Duration::from_millis(500);
+
+async fn create_bitcoin_payment_with_retry(
+    wallet: &Arc<BitcoinWallet>,
+    lot: &Lot,
+    recipient: &str,
+) -> Result<String> {
+    let mut attempt = 0usize;
+    loop {
+        attempt += 1;
+        match wallet.create_payment(lot, recipient, None).await {
+            Ok(txid) => {
+                if attempt > 1 {
+                    debug!(attempt = attempt, "bitcoin payment succeeded after retry");
+                }
+                return Ok(txid);
+            }
+            Err(err) => {
+                let err_str = err.to_string();
+                if should_retry_missing_or_spent(&err_str) && attempt < BTC_PAYMENT_RETRY_ATTEMPTS {
+                    warn!(
+                        attempt = attempt,
+                        error = %err,
+                        "bitcoin payment failed due to missing/spent inputs, retrying"
+                    );
+                    sleep(BTC_PAYMENT_RETRY_BACKOFF).await;
+                    continue;
+                }
+                return Err(map_wallet_error(err));
+            }
+        }
+    }
+}
+
+fn should_retry_missing_or_spent(error_message: &str) -> bool {
+    let lower = error_message.to_ascii_lowercase();
+    lower.contains("bad-txns-inputs-missingorspent")
+        || lower.contains("bax-txns-inputs-missingorspent")
 }
 
 pub struct WalletResources {

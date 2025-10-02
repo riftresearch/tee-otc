@@ -160,7 +160,7 @@ configs:
         "editable": true,
         "fiscalYearStartMonth": 0,
         "graphTooltip": 1,
-        "id": 2,
+        "id": 1,
         "links": [],
         "panels": [
           {
@@ -344,7 +344,7 @@ configs:
                   "uid": "PBFA97CFB590B2093"
                 },
                 "editorMode": "code",
-                "expr": "max by (name) (container_memory_usage_bytes{name=~\"tee-.*\"})",
+                "expr": "max by (name) (container_memory_working_set_bytes{name=~\"tee-.*\"})",
                 "legendFormat": "{{name}}",
                 "range": true,
                 "refId": "A"
@@ -742,10 +742,10 @@ configs:
               }
             ],
             "title": "Host Storage",
-          "type": "timeseries"
-        }
-      ],
-      "schemaVersion": 39,
+            "type": "timeseries"
+          }
+        ],
+        "schemaVersion": 39,
         "tags": [
           "monitoring"
         ],
@@ -760,10 +760,10 @@ configs:
         "timezone": "",
         "title": "TEE Monitoring dev",
         "uid": "tee-monitoring-dev",
-        "version": 5,
+        "version": 2,
         "weekStart": ""
-      } 
-          
+      }
+      
 services:
   eth-jwt-generator:
     container_name: tee-eth-jwt-generator

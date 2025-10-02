@@ -1,8 +1,11 @@
+use metrics::counter;
 use otc_models::{
-    ChainType, Lot, MMDepositStatus, SettlementStatus, Swap, SwapStatus, UserDepositStatus,
+    ChainType, Lot, MMDepositStatus, SettlementStatus, Swap, SwapStatus, TokenIdentifier,
+    UserDepositStatus,
 };
 use sqlx::postgres::PgPool;
 use sqlx::Row;
+use tracing::warn;
 use uuid::Uuid;
 
 use super::conversions::{
@@ -12,6 +15,10 @@ use super::conversions::{
 use super::row_mappers::FromRow;
 use crate::db::quote_repo::QuoteRepository;
 use crate::error::{OtcServerError, OtcServerResult};
+
+pub const SWAP_VOLUME_TOTAL_METRIC: &str = "otc_swap_volume_total";
+const SWAP_VOLUME_SIDE_LABEL: &str = "sell";
+const SWAP_VOLUME_SOURCE_LABEL: &str = "otc";
 
 #[derive(Debug, Clone)]
 pub struct PendingMMDepositSwap {
@@ -558,6 +565,8 @@ impl SwapRepository {
                 message: format!("State transition failed: {e}"),
             })?;
         self.update(&swap).await?;
+
+        record_settlement_volume(&swap);
         Ok(())
     }
 
@@ -593,6 +602,57 @@ impl SwapRepository {
         })?;
         self.update(&swap).await?;
         Ok(())
+    }
+}
+
+fn record_settlement_volume(swap: &Swap) {
+    let Some(increment) = settlement_volume_increment(&swap.quote.from) else {
+        return;
+    };
+
+    let market = market_label(&swap.quote.from, &swap.quote.to);
+
+    counter!(
+        SWAP_VOLUME_TOTAL_METRIC,
+        "market" => market,
+        "side" => SWAP_VOLUME_SIDE_LABEL,
+        "source" => SWAP_VOLUME_SOURCE_LABEL,
+    )
+    .increment(increment);
+}
+
+fn settlement_volume_increment(lot: &Lot) -> Option<u64> {
+    let amount_u128 = match u128::try_from(&lot.amount) {
+        Ok(value) => value,
+        Err(_) => {
+            warn!(amount = %lot.amount, "Skipping volume metric; amount exceeds u128 range");
+            return None;
+        }
+    };
+
+    match u64::try_from(amount_u128) {
+        Ok(value) => Some(value),
+        Err(_) => {
+            warn!(
+                amount = %lot.amount,
+                "Truncating volume metric increment to u64::MAX; amount exceeds u64 range"
+            );
+            Some(u64::MAX)
+        }
+    }
+}
+
+fn market_label(from: &Lot, to: &Lot) -> String {
+    format!("{}-{}", currency_label(from), currency_label(to))
+}
+
+fn currency_label(lot: &Lot) -> String {
+    let chain = format!("{:?}", lot.currency.chain).to_ascii_uppercase();
+    match &lot.currency.token {
+        TokenIdentifier::Native => chain,
+        TokenIdentifier::Address(address) => {
+            format!("{chain}:{}", address.to_ascii_lowercase())
+        }
     }
 }
 

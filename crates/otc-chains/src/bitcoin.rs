@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use bdk_wallet::{signer::SignOptions, CreateParams, Wallet as BdkWallet};
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
 use bitcoin::{Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, Transaction};
-use bitcoincore_rpc_async::{Auth, Client, RpcApi, jsonrpc};
+use bitcoincore_rpc_async::{jsonrpc, Auth, Client, RpcApi};
 use otc_models::{ChainType, Lot, TokenIdentifier, TransferInfo, TxStatus, Wallet};
 use reqwest::Url;
 use snafu::location;
@@ -14,10 +14,8 @@ use std::str::FromStr;
 use std::time::Duration;
 use tracing::{debug, info};
 
-
-
 struct ReqwestRpcTransport {
-    url: Url, 
+    url: Url,
     client: reqwest::Client,
     auth_header: Option<String>,
 }
@@ -26,40 +24,64 @@ impl ReqwestRpcTransport {
     pub fn new(url: Url, auth: Auth) -> Self {
         let auth = auth.get_user_pass().unwrap();
         let auth_header = if let Some((user, password)) = auth {
-            let auth_header = format!("Basic {}", bitcoin::base64::encode(format!("{}:{}", user, password)));
+            let auth_header = format!(
+                "Basic {}",
+                bitcoin::base64::encode(format!("{}:{}", user, password))
+            );
             Some(auth_header)
         } else {
             None
         };
-        Self { url, client: reqwest::Client::new(), auth_header }
+        Self {
+            url,
+            client: reqwest::Client::new(),
+            auth_header,
+        }
     }
 }
 
 #[async_trait]
 impl jsonrpc::Transport for ReqwestRpcTransport {
-    async fn send_request(&self, r: jsonrpc::Request<'_>) -> std::result::Result<jsonrpc::Response, jsonrpc::Error> {
+    async fn send_request(
+        &self,
+        r: jsonrpc::Request<'_>,
+    ) -> std::result::Result<jsonrpc::Response, jsonrpc::Error> {
         let mut request = self.client.post(self.url.clone()).json(&r);
         if let Some(auth_header) = &self.auth_header {
             request = request.header("Authorization", auth_header);
         }
-        let response = request.send().await.map_err(|e| jsonrpc::Error::Transport(e.into()))?;
-        Ok(response.json().await.map_err(|e| jsonrpc::Error::Transport(e.into()))?)
+        let response = request
+            .send()
+            .await
+            .map_err(|e| jsonrpc::Error::Transport(e.into()))?;
+        Ok(response
+            .json()
+            .await
+            .map_err(|e| jsonrpc::Error::Transport(e.into()))?)
     }
 
-    async fn send_batch(&self, rs: &[jsonrpc::Request<'_>]) -> std::result::Result<Vec<jsonrpc::Response>, jsonrpc::Error> {
+    async fn send_batch(
+        &self,
+        rs: &[jsonrpc::Request<'_>],
+    ) -> std::result::Result<Vec<jsonrpc::Response>, jsonrpc::Error> {
         let mut request = self.client.post(self.url.clone()).json(rs);
         if let Some(auth_header) = &self.auth_header {
             request = request.header("Authorization", auth_header);
         }
-        let responses = request.send().await.map_err(|e| jsonrpc::Error::Transport(e.into()))?;
-        Ok(responses.json().await.map_err(|e| jsonrpc::Error::Transport(e.into()))?)
+        let responses = request
+            .send()
+            .await
+            .map_err(|e| jsonrpc::Error::Transport(e.into()))?;
+        Ok(responses
+            .json()
+            .await
+            .map_err(|e| jsonrpc::Error::Transport(e.into()))?)
     }
 
     fn fmt_target(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.url)
     }
 }
-
 
 pub struct BitcoinChain {
     rpc_client: Client,
@@ -75,7 +97,10 @@ impl BitcoinChain {
         network: Network,
     ) -> Result<Self> {
         // create a reqwest client
-        let rpc_transport = ReqwestRpcTransport::new(Url::parse(bitcoin_core_rpc_url).unwrap(), bitcoin_core_rpc_auth);
+        let rpc_transport = ReqwestRpcTransport::new(
+            Url::parse(bitcoin_core_rpc_url).unwrap(),
+            bitcoin_core_rpc_auth,
+        );
         let jsonrpc_client = jsonrpc::Client::with_transport(rpc_transport);
         let rpc_client = Client::from_jsonrpc(jsonrpc_client);
 

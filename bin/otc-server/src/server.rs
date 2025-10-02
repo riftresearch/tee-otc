@@ -3,7 +3,7 @@ use crate::{
         CreateSwapRequest, CreateSwapResponse, RefundSwapRequest, RefundSwapResponse, SwapResponse,
     },
     config::Settings,
-    db::Database,
+    db::{swap_repo::SWAP_VOLUME_TOTAL_METRIC, Database},
     services::{MMRegistry, SwapManager, SwapMonitoringService},
     OtcServerArgs, Result,
 };
@@ -20,7 +20,7 @@ use axum::{
 use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use dstack_sdk::dstack_client::{DstackClient, GetQuoteResponse, InfoResponse};
 use futures_util::{SinkExt, StreamExt};
-use metrics::{describe_gauge, describe_histogram, gauge, histogram};
+use metrics::{describe_counter, describe_gauge, describe_histogram, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
 use otc_chains::{bitcoin::BitcoinChain, ethereum::EthereumChain, ChainRegistry};
@@ -289,6 +289,11 @@ fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
     describe_histogram!(
         SWAP_MONITORING_DURATION_METRIC,
         "Duration in seconds for monitoring all active swaps in a single iteration."
+    );
+
+    describe_counter!(
+        SWAP_VOLUME_TOTAL_METRIC,
+        "Cumulative user deposit volume recorded when swaps settle (base units)."
     );
 
     if PROMETHEUS_HANDLE.set(shared_handle.clone()).is_err() {
