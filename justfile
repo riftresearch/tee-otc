@@ -73,4 +73,4 @@ phala-deploy:
 
 # Docker compose command with all config files - passes through any arguments
 dc +args:
-    {{dc_files}} {{args}}
+    DOCKER_DEFAULT_PLATFORM=linux/amd64 {{dc_files}} {{args}}
