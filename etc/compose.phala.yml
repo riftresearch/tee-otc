@@ -812,6 +812,8 @@ services:
     container_name: tee-bitcoin-core
     build:
       context: .
+      platforms:
+        - linux/amd64
       dockerfile_inline: |
         FROM debian:bookworm-slim
         RUN apt-get update \
