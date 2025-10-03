@@ -697,41 +697,6 @@ impl RiftDevnetBuilder {
             funding_start.elapsed()
         );
 
-        // Start auto-mining task
-        info!("[Interactive Setup] Starting Bitcoin auto-mining task...");
-        let bitcoin_rpc_url = bitcoin_devnet.rpc_url_with_cookie.clone();
-        let miner_address = bitcoin_devnet.miner_address.clone();
-        let cookie = bitcoin_devnet.cookie.clone();
-
-        join_set.spawn(async move {
-            use bitcoincore_rpc_async::{Auth, Client as AsyncBitcoinRpcClient, RpcApi};
-
-            // Create dedicated RPC client for mining
-            // Use Auth::None since credentials are already embedded in the URL
-            let mining_client =
-                match AsyncBitcoinRpcClient::new(bitcoin_rpc_url, Auth::CookieFile(cookie)).await {
-                    Ok(client) => client,
-                    Err(e) => {
-                        log::error!("Failed to create mining RPC client: {e}");
-                        return Ok(());
-                    }
-                };
-
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
-            loop {
-                interval.tick().await;
-                match mining_client.generate_to_address(1, &miner_address).await {
-                    Ok(_) => {
-                        log::debug!("Auto-mined Bitcoin block");
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to auto-mine Bitcoin block: {e}");
-                    }
-                }
-            }
-        });
-        info!("[Interactive Setup] Bitcoin auto-mining task started");
-
         // Log interactive info
         info!(
             "[Interactive Setup] Interactive mode setup complete in {:?}",
@@ -778,7 +743,15 @@ impl RiftDevnetBuilder {
             );
         }
 
-        println!("Bitcoin Auto-mining:        Every 5 seconds");
+        match self.bitcoin_mining_mode {
+            crate::bitcoin_devnet::MiningMode::Interval(interval) => {
+                println!("Bitcoin Auto-mining:        Every {} seconds", interval);
+            }
+            crate::bitcoin_devnet::MiningMode::Manual => {
+                println!("Bitcoin Auto-mining:        Disabled");
+            }
+        }
+
         println!("Anvil Auto-mining:          Every 1 second");
         println!("---RIFT DEVNET---");
 

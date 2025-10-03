@@ -59,11 +59,11 @@ pub struct Args {
     pub quote_mode: QuoteModeArg,
 
     /// Chain the user will deposit from (quote.from.chain)
-    #[arg(long, value_enum, default_value_t = ChainArg::Bitcoin)]
+    #[arg(long, value_enum, default_value_t = ChainArg::Ethereum)]
     pub from_chain: ChainArg,
 
     /// Token identifier for the deposit side ("native" or an address)
-    #[arg(long, default_value = "native")]
+    #[arg(long, default_value = DEFAULT_CBBTC_ADDRESS)]
     pub from_token: String,
 
     /// Decimals for the deposit currency
@@ -71,11 +71,11 @@ pub struct Args {
     pub from_decimals: u8,
 
     /// Chain the user will receive funds on (quote.to.chain)
-    #[arg(long, value_enum, default_value_t = ChainArg::Ethereum)]
+    #[arg(long, value_enum, default_value_t = ChainArg::Bitcoin)]
     pub to_chain: ChainArg,
 
     /// Token identifier for the receive side ("native" or an address)
-    #[arg(long, default_value = DEFAULT_CBBTC_ADDRESS)]
+    #[arg(long, default_value = "native")]
     pub to_token: String,
 
     /// Decimals for the receive currency
@@ -87,7 +87,7 @@ pub struct Args {
     pub amount: U256,
 
     /// Destination address the user will receive funds at
-    #[arg(long, default_value = DEFAULT_EVM_ADDRESS)]
+    #[arg(long, default_value = DEFAULT_BITCOIN_ADDRESS)]
     pub user_destination_address: String,
 
     /// EVM account address that controls the swap (used for swap auth)

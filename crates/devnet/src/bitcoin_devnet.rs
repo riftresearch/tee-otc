@@ -44,7 +44,6 @@ pub struct BitcoinDevnet {
     pub bitcoin_datadir: tempfile::TempDir,
     pub electrsd_datadir: tempfile::TempDir,
     pub mining_mode: MiningMode,
-    pub mining_thread: Option<JoinHandle<()>>,
 }
 
 impl BitcoinDevnet {
@@ -57,7 +56,7 @@ impl BitcoinDevnet {
         using_esplora: bool,
         fixed_esplora_url: bool,
         mining_mode: MiningMode,
-        _join_set: &mut JoinSet<Result<()>>,
+        join_set: &mut JoinSet<Result<()>>,
         devnet_cache: Option<Arc<RiftDevnetCache>>,
     ) -> Result<(Self, u32)> {
         info!("Instantiating Bitcoin Regtest...");
@@ -73,6 +72,8 @@ impl BitcoinDevnet {
             conf.args.push("-rpcauth=bitcoind:cccd5d7fd36e55c1b8576b8077dc1b83$60b5676a09f8518dcb4574838fb86f37700cd690d99bd2fdc2ea2bf2ab80ead6");
             conf.args.push("-rpcbind=0.0.0.0");
             conf.args.push("-rpcallowip=0.0.0.0/0");
+            // bump so we can concurrently spend many utxos
+            conf.args.push("-limitdescendantcount=1000");
         }
 
         let bitcoin_datadir = if let Some(devnet_cache) = devnet_cache.clone() {
@@ -288,7 +289,7 @@ impl BitcoinDevnet {
         let alice_address_clone = alice_address.clone();
         let bitcoin_rpc_client_clone = bitcoin_rpc_client.clone();
         let mining_thread = if let MiningMode::Interval(interval) = mining_mode {
-            Some(tokio::spawn(async move {
+            Some(join_set.spawn(async move {
                 loop {
                     bitcoin_rpc_client_clone
                         .generate_to_address(1, &alice_address_clone)
@@ -316,7 +317,6 @@ impl BitcoinDevnet {
             bitcoin_datadir,
             electrsd_datadir,
             mining_mode,
-            mining_thread,
         };
 
         // Get the actual blockchain height

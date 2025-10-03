@@ -1,5 +1,6 @@
 use blockchain_utils::{handle_background_thread_result, init_logger, shutdown_signal};
 use clap::{Parser, Subcommand};
+use devnet::bitcoin_devnet::MiningMode;
 use devnet::evm_devnet::ForkConfig;
 use devnet::{RiftDevnet, RiftDevnetCache};
 use snafu::{ResultExt, Whatever};
@@ -77,7 +78,7 @@ async fn run_server(
     let server_start = tokio::time::Instant::now();
     info!("[Devnet Server] Starting devnet server...");
 
-    let mut devnet_builder = RiftDevnet::builder().interactive(true).using_esplora(true);
+    let mut devnet_builder = RiftDevnet::builder().interactive(true).using_esplora(true).bitcoin_mining_mode(MiningMode::Interval(5));
 
     for address in fund_address {
         devnet_builder = devnet_builder.funded_evm_address(address);
