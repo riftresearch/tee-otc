@@ -1,5 +1,5 @@
 # Default database URL for development
-database_url := "postgres://postgres:password@localhost:5432/otc_dev"
+database_url := "postgres://postgres:password@localhost:5433/otc_dev"
 
 # Docker compose files for main deployment
 dc_files := "docker compose -f etc/compose.devnet.yml -f etc/compose.override.yml"

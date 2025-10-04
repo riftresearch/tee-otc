@@ -3,7 +3,7 @@ services:
     image: postgres:15-alpine
     container_name: ${PG_DB:-otc_dev}
     ports:
-      - "${PG_PORT:-5432}:5432"
+      - "${PG_PORT:-5433}:5432"
     environment:
       POSTGRES_PASSWORD: password
       POSTGRES_USER: postgres

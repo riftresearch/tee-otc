@@ -19,19 +19,21 @@ CREATE TYPE swap_status AS ENUM (
 -- Create quotes table
 CREATE TABLE quotes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    
+
     -- From currency details (what user sends)
     from_chain VARCHAR(50) NOT NULL,
     from_token JSONB NOT NULL,
     from_amount TEXT NOT NULL, -- U256 stored as string
     from_decimals SMALLINT NOT NULL,
-    
+
     -- To currency details (what user receives)
     to_chain VARCHAR(50) NOT NULL,
     to_token JSONB NOT NULL,
     to_amount TEXT NOT NULL, -- U256 stored as string
     to_decimals SMALLINT NOT NULL,
-    
+
+    fee_schedule JSONB NOT NULL,
+
     market_maker_id UUID NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -42,6 +44,7 @@ CREATE TABLE swaps (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     quote_id UUID NOT NULL REFERENCES quotes(id),
     market_maker_id UUID NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
     
     -- Salt and nonce columns for deterministic wallet generation
     user_deposit_salt BYTEA NOT NULL,
@@ -51,14 +54,14 @@ CREATE TABLE swaps (
     -- User addresses
     user_destination_address VARCHAR(255) NOT NULL,
     user_evm_account_address VARCHAR(255) NOT NULL,
-    
+
     -- Core status using enum
     status swap_status NOT NULL DEFAULT 'waiting_user_deposit_initiated',
-    
+
     -- Deposit tracking (JSONB for rich data)
     user_deposit_status JSONB,
     mm_deposit_status JSONB,
-    
+
     -- Settlement tracking
     settlement_status JSONB,
     

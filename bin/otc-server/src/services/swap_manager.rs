@@ -9,7 +9,7 @@ use crate::services::MMRegistry;
 use alloy::hex::FromHexError;
 use alloy::primitives::Address;
 use otc_chains::ChainRegistry;
-use otc_models::{Swap, SwapStatus, TokenIdentifier};
+use otc_models::{Metadata, Swap, SwapStatus, TokenIdentifier};
 use snafu::prelude::*;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -51,6 +51,9 @@ pub enum SwapError {
 
     #[snafu(display("Invalid refund attempt: {}", reason))]
     InvalidRefundAttempt { reason: String },
+
+    #[snafu(display("Invalid metadata: {}", reason))]
+    InvalidMetadata { reason: String },
 
     #[snafu(display("Failed to dump to address: {}", err))]
     DumpToAddress { err: String },
@@ -151,7 +154,16 @@ impl SwapManager {
     /// 5. Create the swap record in the database
     /// 6. Return the deposit details to the user
     pub async fn create_swap(&self, request: CreateSwapRequest) -> SwapResult<CreateSwapResponse> {
-        let quote = request.quote;
+        let CreateSwapRequest {
+            quote,
+            user_destination_address,
+            user_evm_account_address,
+            metadata,
+        } = request;
+
+        let metadata = metadata.unwrap_or_default();
+        Self::validate_metadata(&metadata)?;
+
         // 1. Check if quote has expired
         if quote.expires_at < utc::now() {
             return Err(SwapError::QuoteExpired);
@@ -181,7 +193,7 @@ impl SwapManager {
                 &quote.market_maker_id,
                 &quote.id,
                 &quote.hash(),
-                &request.user_destination_address,
+                user_destination_address.as_str(),
                 response_tx,
             )
             .await;
@@ -241,8 +253,9 @@ impl SwapManager {
             user_deposit_salt,
             user_deposit_address: user_deposit_address.clone(),
             mm_nonce,
-            user_destination_address: request.user_destination_address,
-            user_evm_account_address: request.user_evm_account_address,
+            metadata,
+            user_destination_address,
+            user_evm_account_address,
             status: SwapStatus::WaitingUserDepositInitiated,
             user_deposit_status: None,
             mm_deposit_status: None,
@@ -346,6 +359,28 @@ impl SwapManager {
                     .map(|d| d.deposit_detected_at),
             },
         })
+    }
+
+    fn validate_metadata(metadata: &Metadata) -> SwapResult<()> {
+        if let Some(value) = metadata.affiliate.as_ref() {
+            if value.len() > 32 {
+                return InvalidMetadataSnafu {
+                    reason: "affiliate must be 32 characters or fewer".to_string(),
+                }
+                .fail();
+            }
+        }
+
+        if let Some(value) = metadata.start_asset.as_ref() {
+            if value.len() > 32 {
+                return InvalidMetadataSnafu {
+                    reason: "start_asset must be 32 characters or fewer".to_string(),
+                }
+                .fail();
+            }
+        }
+
+        Ok(())
     }
 
     #[must_use]

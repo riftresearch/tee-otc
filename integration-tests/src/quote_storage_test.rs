@@ -1,7 +1,7 @@
 use alloy::primitives::U256;
 use chrono::{Duration, Utc};
 use market_maker::quote_storage::QuoteStorage;
-use otc_models::{ChainType, Currency, Lot, Quote, TokenIdentifier};
+use otc_models::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use tokio::task::JoinSet;
 use uuid::Uuid;
@@ -37,6 +37,11 @@ async fn test_quote_storage_round_trip(
             },
             amount: U256::from(500000000000000000u64),
         },
+        fee_schedule: FeeSchedule {
+            network_fee_sats: 1800,
+            liquidity_fee_sats: 2800,
+            protocol_fee_sats: 900,
+        },
         expires_at: utc::now() + Duration::minutes(10),
         created_at: utc::now(),
     };
@@ -58,6 +63,7 @@ async fn test_quote_storage_round_trip(
     );
     assert_eq!(retrieved_quote.from.amount, original_quote.from.amount);
     assert_eq!(retrieved_quote.to.amount, original_quote.to.amount);
+    assert_eq!(retrieved_quote.fee_schedule, original_quote.fee_schedule);
 
     Ok(())
 }

@@ -57,7 +57,7 @@ impl RFQMessageHandler {
                 };
 
                 let quote = match &rfq_result {
-                    RFQResult::Success(quote) => Some(quote.quote.clone()),
+                    RFQResult::Success(quote) => Some(quote.clone()),
                     RFQResult::MakerUnavailable(_) => None,
                     RFQResult::InvalidRequest(_) => None,
                 };

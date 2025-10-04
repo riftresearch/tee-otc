@@ -78,7 +78,10 @@ async fn run_server(
     let server_start = tokio::time::Instant::now();
     info!("[Devnet Server] Starting devnet server...");
 
-    let mut devnet_builder = RiftDevnet::builder().interactive(true).using_esplora(true).bitcoin_mining_mode(MiningMode::Interval(5));
+    let mut devnet_builder = RiftDevnet::builder()
+        .interactive(true)
+        .using_esplora(true)
+        .bitcoin_mining_mode(MiningMode::Interval(5));
 
     for address in fund_address {
         devnet_builder = devnet_builder.funded_evm_address(address);

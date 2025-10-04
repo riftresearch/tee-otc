@@ -156,6 +156,7 @@ impl From<crate::services::swap_manager::SwapError> for OtcServerError {
             SwapError::InvalidRefundAttempt { reason } => {
                 OtcServerError::BadRequest { message: reason }
             }
+            SwapError::InvalidMetadata { reason } => OtcServerError::BadRequest { message: reason },
             SwapError::DumpToAddress { err } => OtcServerError::Internal { message: err },
         }
     }

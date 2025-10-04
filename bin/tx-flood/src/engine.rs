@@ -2,7 +2,7 @@ use std::{error::Error as StdError, sync::Arc, time::Instant};
 
 use anyhow::{anyhow, Context, Result};
 use otc_models::{ChainType, Currency, Lot, Quote, QuoteRequest, TokenIdentifier};
-use otc_protocols::rfq::{QuoteWithFees, RFQResult};
+use otc_protocols::rfq::RFQResult;
 use otc_server::api::swaps::{CreateSwapRequest, CreateSwapResponse, SwapResponse};
 use reqwest::{Client, Url};
 use rfq_server::server::QuoteResponse;
@@ -126,15 +126,17 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
             return Err(err);
         }
     };
+    let quote_id = quote.id;
     send_update(
         &update_tx,
-        SwapUpdate::new(index, SwapStage::QuoteReceived { quote_id: quote.id }),
+        SwapUpdate::new(index, SwapStage::QuoteReceived { quote_id }),
     );
 
     let create_swap_request = CreateSwapRequest {
         quote: quote.clone(),
         user_destination_address: config.user_destination_address.clone(),
         user_evm_account_address: config.user_evm_account_address,
+        metadata: None,
     };
 
     let swap_response = match create_swap(&client, &create_swap_url, &create_swap_request).await {
@@ -259,13 +261,19 @@ async fn request_quote(client: &Client, url: &Url, request: &QuoteRequest) -> Re
         ));
     }
 
-    let body: QuoteResponse = response
-        .json()
-        .await
-        .context("failed to parse quote response")?;
+    let response_text = response.text().await.unwrap();
 
+    tracing::info!("quote request response: {}", response_text);
+    /*
+
+       {"request_id":"30968d0d-9c30-47b5-8192-69c641927b58","quote":{"type":"success","data":{"quote":{"id":"a253750b-0aa1-4ef7-8d72-916efb5ed1ff","market_maker_id":"a4c6da0d-a071-40ea-b69c-e23d49327d42","from":{"currency":{"chain":"ethereum","token":{"type":"│
+    │Address","data":"0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"},"decimals":8},"amount":"0x2711"},"to":{"currency":{"chain":"bitcoin","token":{"type":"Native"},"decimals":8},"amount":"0x2425"},"expires_at":"2025-10-03T19:16:48.257931300Z","created_at":"202│
+    │5-10-03T19:11:48.257932966Z"},"fees":{"network_fee_sats":448,"liquidity_fee_sats":0,"protocol_fee_sats":300}}},"total_quotes_received":1,"market_makers_contacted":1}                                                                                        │
+         */
+
+    let body: QuoteResponse = serde_json::from_str(&response_text).unwrap();
     match body.quote {
-        Some(RFQResult::Success(QuoteWithFees { quote, .. })) => Ok(quote),
+        Some(RFQResult::Success(quote)) => Ok(quote),
         Some(RFQResult::MakerUnavailable(reason)) => {
             Err(anyhow!("no market maker available for request: {reason}"))
         }

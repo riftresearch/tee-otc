@@ -266,7 +266,7 @@ impl Swap {
 mod tests {
     use std::str::FromStr;
 
-    use crate::{ChainType, Currency, Lot, Quote, TokenIdentifier};
+    use crate::{ChainType, Currency, FeeSchedule, Lot, Metadata, Quote, TokenIdentifier};
 
     use super::*;
     use alloy::primitives::Address;
@@ -295,10 +295,16 @@ mod tests {
                     },
                     amount: U256::from(1000000u64),
                 },
+                fee_schedule: FeeSchedule {
+                    network_fee_sats: 120,
+                    liquidity_fee_sats: 240,
+                    protocol_fee_sats: 60,
+                },
                 expires_at: utc::now() + Duration::hours(1),
                 created_at: utc::now(),
             },
             market_maker_id: Uuid::new_v4(),
+            metadata: Metadata::default(),
             user_deposit_salt: [0u8; 32],
             user_deposit_address: "0x123".to_string(),
             mm_nonce: [0u8; 16],

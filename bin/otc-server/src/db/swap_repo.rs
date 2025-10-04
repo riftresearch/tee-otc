@@ -9,8 +9,8 @@ use tracing::warn;
 use uuid::Uuid;
 
 use super::conversions::{
-    chain_type_from_db, lot_from_db, mm_deposit_status_to_json, settlement_status_to_json,
-    user_deposit_status_from_json, user_deposit_status_to_json,
+    chain_type_from_db, lot_from_db, metadata_to_json, mm_deposit_status_to_json,
+    settlement_status_to_json, user_deposit_status_from_json, user_deposit_status_to_json,
 };
 use super::row_mappers::FromRow;
 use crate::db::quote_repo::QuoteRepository;
@@ -63,6 +63,7 @@ impl SwapRepository {
             Some(status) => Some(settlement_status_to_json(status)?),
             None => None,
         };
+        let metadata_json = metadata_to_json(&swap.metadata)?;
 
         self.quote_repo.create(&swap.quote).await?;
 
@@ -70,6 +71,7 @@ impl SwapRepository {
             r"
             INSERT INTO swaps (
                 id, quote_id, market_maker_id,
+                metadata,
                 user_deposit_salt, user_deposit_address, mm_nonce,
                 user_destination_address, user_evm_account_address,
                 status,
@@ -79,14 +81,19 @@ impl SwapRepository {
                 created_at, updated_at
             )
             VALUES (
-                $1, $2, $3, $4, $5, $6, $7, $8,
-                $9, $10, $11, $12, $13, $14, $15, $16, $17, $18
+                $1, $2, $3, $4,
+                $5, $6, $7,
+                $8, $9,
+                $10, $11, $12, $13, $14,
+                $15, $16,
+                $17, $18, $19
             )
             ",
         )
         .bind(swap.id)
         .bind(swap.quote.id)
         .bind(swap.market_maker_id)
+        .bind(metadata_json)
         .bind(&swap.user_deposit_salt[..])
         .bind(&swap.user_deposit_address)
         .bind(&swap.mm_nonce[..])
@@ -113,6 +120,7 @@ impl SwapRepository {
             r"
             SELECT 
                 s.id, s.quote_id, s.market_maker_id,
+                s.metadata,
                 s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
                 s.user_destination_address, s.user_evm_account_address,
                 s.status,
@@ -121,8 +129,10 @@ impl SwapRepository {
                 s.mm_notified_at, s.mm_private_key_sent_at,
                 s.created_at, s.updated_at,
                 -- Quote fields
-                q.id as quote_id, q.from_chain, q.from_token, q.from_amount, q.from_decimals,
+                q.id as quote_id,
+                q.from_chain, q.from_token, q.from_amount, q.from_decimals,
                 q.to_chain, q.to_token, q.to_amount, q.to_decimals,
+                q.fee_schedule AS quote_fee_schedule,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
@@ -229,6 +239,7 @@ impl SwapRepository {
             r"
             SELECT 
                 s.id, s.quote_id, s.market_maker_id,
+                s.metadata,
                 s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
                 s.user_destination_address, s.user_evm_account_address,
                 s.status,
@@ -237,8 +248,10 @@ impl SwapRepository {
                 s.mm_notified_at, s.mm_private_key_sent_at,
                 s.created_at, s.updated_at,
                 -- Quote fields
-                q.id as quote_id, q.from_chain, q.from_token, q.from_amount, q.from_decimals,
+                q.id as quote_id,
+                q.from_chain, q.from_token, q.from_amount, q.from_decimals,
                 q.to_chain, q.to_token, q.to_amount, q.to_decimals,
+                q.fee_schedule AS quote_fee_schedule,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
@@ -396,7 +409,6 @@ impl SwapRepository {
             .as_ref()
             .map(settlement_status_to_json)
             .transpose()?;
-
         sqlx::query(
             r"
             UPDATE swaps
@@ -434,6 +446,7 @@ impl SwapRepository {
             r"
             SELECT 
                 s.id, s.quote_id, s.market_maker_id,
+                s.metadata,
                 s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
                 s.user_destination_address, s.user_evm_account_address,
                 s.status,
@@ -442,8 +455,10 @@ impl SwapRepository {
                 s.mm_notified_at, s.mm_private_key_sent_at,
                 s.created_at, s.updated_at,
                 -- Quote fields
-                q.id as quote_id, q.from_chain, q.from_token, q.from_amount, q.from_decimals,
+                q.id as quote_id,
+                q.from_chain, q.from_token, q.from_amount, q.from_decimals,
                 q.to_chain, q.to_token, q.to_amount, q.to_decimals,
+                q.fee_schedule AS quote_fee_schedule,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
@@ -663,8 +678,8 @@ mod tests {
     use alloy::primitives::U256;
     use chrono::{Duration, Utc};
     use otc_models::{
-        ChainType, Currency, Lot, MMDepositStatus, Quote, SettlementStatus, Swap, SwapStatus,
-        TokenIdentifier, UserDepositStatus,
+        ChainType, Currency, FeeSchedule, Lot, MMDepositStatus, Metadata, Quote, SettlementStatus,
+        Swap, SwapStatus, TokenIdentifier, UserDepositStatus,
     };
     use serde_json;
     use uuid::Uuid;
@@ -694,6 +709,11 @@ mod tests {
                 },
                 amount: U256::from(500000000000000000u64), // 0.5 ETH
             },
+            fee_schedule: FeeSchedule {
+                network_fee_sats: 1100,
+                liquidity_fee_sats: 2100,
+                protocol_fee_sats: 600,
+            },
             market_maker_id: Uuid::new_v4(),
             expires_at: utc::now() + Duration::hours(1),
             created_at: utc::now(),
@@ -710,6 +730,10 @@ mod tests {
             id: Uuid::new_v4(),
             market_maker_id: quote.market_maker_id,
             quote: quote.clone(),
+            metadata: Metadata {
+                affiliate: Some("affiliate_123".to_string()),
+                start_asset: Some("btc".to_string()),
+            },
             user_deposit_salt: user_salt,
             user_deposit_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
             mm_nonce,
@@ -750,6 +774,14 @@ mod tests {
             retrieved_swap.user_deposit_address,
             original_swap.user_deposit_address
         );
+        assert_eq!(
+            retrieved_swap.metadata.affiliate,
+            original_swap.metadata.affiliate
+        );
+        assert_eq!(
+            retrieved_swap.metadata.start_asset,
+            original_swap.metadata.start_asset
+        );
         assert_eq!(retrieved_swap.mm_nonce, original_swap.mm_nonce);
         assert_eq!(
             retrieved_swap.user_destination_address,
@@ -789,6 +821,11 @@ mod tests {
                 },
                 amount: U256::from(1000000000000000000u64),
             },
+            fee_schedule: FeeSchedule {
+                network_fee_sats: 1200,
+                liquidity_fee_sats: 2200,
+                protocol_fee_sats: 700,
+            },
             market_maker_id: Uuid::new_v4(),
             expires_at: utc::now() + Duration::hours(1),
             created_at: utc::now(),
@@ -806,6 +843,7 @@ mod tests {
             id: Uuid::new_v4(),
             market_maker_id: quote.market_maker_id,
             quote: quote.clone(),
+            metadata: Metadata::default(),
             user_deposit_salt: user_salt,
             user_deposit_address: "bc1qnahvmnz8vgsdmrr68l5mfr8v8q9fxqz3n5d9u0".to_string(),
             mm_nonce,
@@ -897,6 +935,11 @@ mod tests {
                 },
                 amount: U256::from(500000000000000000u64),
             },
+            fee_schedule: FeeSchedule {
+                network_fee_sats: 900,
+                liquidity_fee_sats: 1700,
+                protocol_fee_sats: 450,
+            },
             market_maker_id: Uuid::new_v4(),
             expires_at: utc::now() + Duration::hours(1),
             created_at: utc::now(),
@@ -913,6 +956,7 @@ mod tests {
             id: Uuid::new_v4(),
             market_maker_id: quote.market_maker_id,
             quote: quote.clone(),
+            metadata: Metadata::default(),
             user_deposit_salt: user_salt,
             user_deposit_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
             mm_nonce,

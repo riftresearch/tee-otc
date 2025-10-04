@@ -213,15 +213,16 @@ async fn test_swap_from_bitcoin_to_ethereum(
 
     assert!(quote.is_some(), "Quote should be present");
     let quote = match quote.as_ref().unwrap() {
-        RFQResult::Success(quote) => quote.quote.clone(),
+        RFQResult::Success(quote) => quote.clone(),
         _ => panic!("Quote should be a success"),
     };
 
     // create a swap request
     let swap_request = CreateSwapRequest {
-        quote,
+        quote: quote.clone(),
         user_destination_address: user_account.ethereum_address.to_string(),
         user_evm_account_address: user_account.ethereum_address,
+        metadata: None,
     };
 
     let response = client
@@ -424,7 +425,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
     let quote_response: rfq_server::server::QuoteResponse = quote_response.json().await.unwrap();
 
     let quote = match quote_response.quote.expect("Quote should be present") {
-        RFQResult::Success(success) => success.quote,
+        RFQResult::Success(success) => success,
         other => panic!("Unexpected quote result: {other:#?}"),
     };
 
@@ -432,6 +433,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
         quote,
         user_destination_address: user_account.ethereum_address.to_string(),
         user_evm_account_address: user_account.ethereum_address,
+        metadata: None,
     };
 
     let swap_response = client
@@ -658,15 +660,16 @@ async fn test_swap_from_ethereum_to_bitcoin(
 
     assert!(quote.is_some(), "Quote should be present");
     let quote = match quote.as_ref().unwrap() {
-        RFQResult::Success(quote) => quote.quote.clone(),
+        RFQResult::Success(quote) => quote.clone(),
         _ => panic!("Quote should be a success"),
     };
 
     // create a swap request
     let swap_request = CreateSwapRequest {
-        quote,
+        quote: quote.clone(),
         user_destination_address: user_account.bitcoin_wallet.address.to_string(),
         user_evm_account_address: user_account.ethereum_address,
+        metadata: None,
     };
 
     let response = client

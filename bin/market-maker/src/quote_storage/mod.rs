@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use otc_models::{ChainType, Currency, Lot, Quote, TokenIdentifier};
+use otc_models::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
+use serde_json;
 use snafu::prelude::*;
 use sqlx::{
     migrate::Migrator,
@@ -30,6 +31,9 @@ pub enum QuoteStorageError {
 
     #[snafu(display("Invalid U256 value: {}", value))]
     InvalidU256 { value: String },
+
+    #[snafu(display("Invalid fee schedule: {}", source))]
+    InvalidFeeSchedule { source: serde_json::Error },
 }
 
 pub type Result<T> = std::result::Result<T, QuoteStorageError>;
@@ -94,6 +98,8 @@ impl QuoteStorage {
 
         let from_amount = quote.from.amount.to_string();
         let to_amount = quote.to.amount.to_string();
+        let fee_schedule =
+            serde_json::to_value(&quote.fee_schedule).context(InvalidFeeScheduleSnafu)?;
 
         sqlx::query(
             r#"
@@ -108,10 +114,11 @@ impl QuoteStorage {
                 to_token,
                 to_amount,
                 to_decimals,
+                fee_schedule,
                 expires_at,
                 created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             ON CONFLICT (id) DO NOTHING
             "#,
         )
@@ -125,6 +132,7 @@ impl QuoteStorage {
         .bind(to_token)
         .bind(to_amount)
         .bind(to_decimals)
+        .bind(fee_schedule)
         .bind(quote.expires_at)
         .bind(quote.created_at)
         .execute(&self.pool)
@@ -148,6 +156,7 @@ impl QuoteStorage {
                 to_token,
                 to_amount,
                 to_decimals,
+                fee_schedule,
                 expires_at,
                 created_at
             FROM mm_quotes
@@ -176,6 +185,7 @@ impl QuoteStorage {
                 to_token,
                 to_amount,
                 to_decimals,
+                fee_schedule,
                 expires_at,
                 created_at
             FROM mm_quotes
@@ -311,6 +321,11 @@ impl QuoteStorage {
             }
         })?;
 
+        let fee_schedule_json: serde_json::Value =
+            row.try_get("fee_schedule").context(DatabaseSnafu)?;
+        let fee_schedule: FeeSchedule =
+            serde_json::from_value(fee_schedule_json).context(InvalidFeeScheduleSnafu)?;
+
         Ok(Quote {
             id,
             market_maker_id,
@@ -322,6 +337,7 @@ impl QuoteStorage {
                 currency: to_currency,
                 amount: to_amount,
             },
+            fee_schedule,
             expires_at,
             created_at,
         })

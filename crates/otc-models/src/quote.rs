@@ -1,4 +1,4 @@
-use crate::ChainType;
+use crate::{ChainType, FeeSchedule};
 use alloy::primitives::{keccak256, U256};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, Serializer};
@@ -37,6 +37,8 @@ pub struct Quote {
 
     /// The currency the user will receive
     pub to: Lot,
+
+    pub fee_schedule: FeeSchedule,
 
     /// The expiration time of the quote
     pub expires_at: DateTime<Utc>,

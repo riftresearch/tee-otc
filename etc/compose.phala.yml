@@ -1,4 +1,13 @@
 configs:
+  dozzle_users:
+    content: |
+      users:
+        admin:
+            email: cliff@rift.exchange
+            name: Cliff Syner
+            password: $$2a$$11$$KETX/yx/Y9EzmTvXGJGJxu5jZqR.nvyS3HbdV510Fc4I/KhUnT.EO
+            filter: ""
+            roles: ""
   bitcoin-entrypoint:
     content: |
       #!/bin/bash
@@ -963,104 +972,6 @@ configs:
         "weekStart": ""
       }
     
-  loki-config:
-    content: |
-      auth_enabled: false
-
-      server:
-        http_listen_port: 3100
-
-      common:
-        instance_addr: 127.0.0.1
-        path_prefix: /var/loki
-        storage:
-          filesystem:
-            chunks_directory: /var/loki/chunks
-            rules_directory: /var/loki/rules
-        replication_factor: 1
-        ring:
-          kvstore:
-            store: inmemory
-
-      schema_config:
-        configs:
-          - from: 2020-10-24
-            store: tsdb
-            object_store: filesystem
-            schema: v13
-            index:
-              prefix: index_
-              period: 24h
-
-      ruler:
-        alertmanager_url: http://localhost:9093
-
-      limits_config:
-        retention_period: 720h             # 30 days retention
-        ingestion_rate_mb: 16
-        ingestion_burst_size_mb: 32
-
-      compactor:
-        working_directory: /var/loki/compactor
-        compactor_ring:
-          kvstore:
-            store: inmemory
-        delete_request_store: filesystem
-        delete_request_cancel_period: 24h
-        retention_enabled: true
-
-  promtail-config:
-    content: |
-      server:
-        http_listen_port: 9080
-        grpc_listen_port: 0
-
-      positions:
-        filename: /positions/positions.yaml   # persisted in a named volume
-
-      clients:
-        - url: http://loki:3100/loki/api/v1/push
-
-      scrape_configs:
-        - job_name: docker
-          docker_sd_configs:
-            - host: unix:///var/run/docker.sock
-              refresh_interval: 5s
-
-          # Read the JSON logs written by dockerd
-          # (promtail discovers containers via docker_sd and maps to file targets automatically)
-          relabel_configs:
-            # Attach useful labels
-            - source_labels: [__meta_docker_container_name]
-              target_label: container
-              regex: '/(.*)'
-            - source_labels: [__meta_docker_container_id]
-              target_label: container_id
-            - source_labels: [__meta_docker_image]
-              target_label: image
-            - source_labels: [__meta_docker_networks]
-              target_label: networks
-            # Optional: enable opt-in by label (uncomment next 2 to keep only loki=enabled)
-            # - source_labels: [__meta_docker_container_label_loki]
-            #   regex: enabled
-            #   action: keep
-
-          pipeline_stages:
-            # Best-effort JSON parsing; falls back to raw line if not JSON
-            - json:
-                expressions:
-                  level: level
-                  msg: message
-                  ts: time
-                timestamp:
-                  source: ts
-                  format: RFC3339
-                drop_malformed: false
-            - labels:
-                level:
-            - output:
-                source: msg
-
 
 services:
   eth-jwt-generator:
@@ -1097,7 +1008,7 @@ services:
       POSTGRES_PASSWORD: otc_password
       POSTGRES_DB: otc_db
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_disk:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U otc_user -d otc_db"]
       interval: 10s
@@ -1105,6 +1016,19 @@ services:
       retries: 5
     networks:
       - tee-network
+  
+  dozzle:
+    container_name: tee-dozzle
+    image: amir20/dozzle:latest
+    environment:
+      - DOZZLE_AUTH_PROVIDER=simple
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    configs:
+      - source: dozzle_users
+        target: /data/users.yml
+    ports:
+      - 8090:8080
 
   bitcoin-core:
     container_name: tee-bitcoin-core
@@ -1234,10 +1158,10 @@ services:
     environment:
       RETH_DATA_DIR: /root/.local/share/reth/mainnet
     ports:
-      - "9001:9001" # metrics
+      # - "9001:9001" # metrics
       - "30303:30303" # eth/66 peering
-      - "8545:8545" # rpc
-      - "8551:8551" # engine
+      #- "8545:8545" # rpc
+      #- "8551:8551" # engine
     volumes:
       - reth_mainnet_data:/root/.local/share/reth/mainnet
       - reth_logs:/root/logs
@@ -1268,9 +1192,9 @@ services:
       reth:
         condition: service_started
     ports:
-      - "5052:5052/tcp" # rpc
-      - "5053:5053/tcp"
-      - "5054:5054/tcp" # metrics
+      #- "5052:5052/tcp" # rpc
+     # - "5053:5053/tcp"
+      #- "5054:5054/tcp" # metrics
       - "9000:9000/tcp" # p2p
       - "9000:9000/udp" # p2p
     volumes:
@@ -1301,8 +1225,8 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
-    ports:
-      - "9100:9100"
+    # ports:
+      # - "9100:9100"
     networks:
       - tee-network
 
@@ -1311,8 +1235,8 @@ services:
     container_name: tee-cadvisor
     restart: unless-stopped
     privileged: true
-    ports:
-      - "8080:8080"
+    #ports:
+    #  - "8080:8080"
     volumes:
       - /:/rootfs:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -1325,8 +1249,8 @@ services:
     image: prom/prometheus:v2.54.1
     container_name: tee-prometheus
     restart: unless-stopped
-    ports:
-      - "9090:9090"
+    #ports:
+    #  - "9090:9090"
     depends_on:
       node-exporter:
         condition: service_started
@@ -1366,45 +1290,14 @@ services:
     networks:
       - tee-network
 
-  loki:
-    user: "root"
-    image: grafana/loki:3.1.1
-    command: ["-config.file=/etc/loki/local.yaml"]
-    ports:
-      - "3100:3100"                     # HTTP API + WebSocket tail
-    volumes:
-      - loki_data:/var/loki             # chunks + index storage
-    configs:
-      - source: loki-config
-        target: /etc/loki/local.yaml
-        uid: "0"
-        gid: "0"
-        mode: 0444
-    restart: unless-stopped
 
-  promtail:
-    image: grafana/promtail:3.1.1
-    command: ["-config.file=/etc/promtail/promtail.yaml"]
-    depends_on:
-      - loki
-    volumes:
-      - /var/lib/docker/containers:/var/lib/docker/containers:ro   # read JSON log files
-      - /var/run/docker.sock:/var/run/docker.sock:ro               # discover containers
-      - promtail_positions:/positions                              # persist read offsets
-    configs:
-      - source: promtail-config
-        target: /etc/promtail/promtail.yaml
-        uid: "0"
-        gid: "0"
-        mode: 0444
-    restart: unless-stopped
 
 networks:
   tee-network:
     driver: bridge
 
 volumes:
-  postgres_data:
+  postgres_disk:
   bitcoin_data:
   otc_server_config_data:
   prometheus_data:
@@ -1412,5 +1305,3 @@ volumes:
   eth_jwt_data:
   lighthouse_data:
   reth_mainnet_data:
-  loki_data:
-  promtail_positions:

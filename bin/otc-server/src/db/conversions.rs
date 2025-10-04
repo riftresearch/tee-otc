@@ -1,7 +1,8 @@
 use crate::error::{OtcServerError, OtcServerResult};
 use alloy::primitives::U256;
 use otc_models::{
-    ChainType, Currency, Lot, MMDepositStatus, SettlementStatus, TokenIdentifier, UserDepositStatus,
+    ChainType, Currency, FeeSchedule, Lot, MMDepositStatus, Metadata, SettlementStatus,
+    TokenIdentifier, UserDepositStatus,
 };
 use serde_json;
 
@@ -107,6 +108,30 @@ pub fn settlement_status_to_json(status: &SettlementStatus) -> OtcServerResult<s
 pub fn settlement_status_from_json(value: serde_json::Value) -> OtcServerResult<SettlementStatus> {
     serde_json::from_value(value).map_err(|e| OtcServerError::InvalidData {
         message: format!("Failed to deserialize settlement status: {e}"),
+    })
+}
+
+pub fn metadata_to_json(metadata: &Metadata) -> OtcServerResult<serde_json::Value> {
+    serde_json::to_value(metadata).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to serialize metadata: {e}"),
+    })
+}
+
+pub fn metadata_from_json(value: serde_json::Value) -> OtcServerResult<Metadata> {
+    serde_json::from_value(value).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to deserialize metadata: {e}"),
+    })
+}
+
+pub fn fee_schedule_to_json(schedule: &FeeSchedule) -> OtcServerResult<serde_json::Value> {
+    serde_json::to_value(schedule).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to serialize fee schedule: {e}"),
+    })
+}
+
+pub fn fee_schedule_from_json(value: serde_json::Value) -> OtcServerResult<FeeSchedule> {
+    serde_json::from_value(value).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to deserialize fee schedule: {e}"),
     })
 }
 

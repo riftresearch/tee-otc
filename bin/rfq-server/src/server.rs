@@ -17,8 +17,8 @@ use futures_util::{SinkExt, StreamExt};
 use metrics::{describe_gauge, gauge};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
-use otc_models::QuoteRequest;
-use otc_protocols::rfq::{ProtocolMessage, QuoteWithFees, RFQRequest, RFQResponse, RFQResult};
+use otc_models::{Quote, QuoteRequest};
+use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse, RFQResult};
 use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 use std::{
@@ -52,7 +52,7 @@ static PROMETHEUS_HANDLE: OnceLock<Arc<PrometheusHandle>> = OnceLock::new();
 #[derive(Serialize, Deserialize, Debug)]
 pub struct QuoteResponse {
     pub request_id: Uuid,
-    pub quote: Option<RFQResult<QuoteWithFees>>,
+    pub quote: Option<RFQResult<Quote>>,
     pub total_quotes_received: usize,
     pub market_makers_contacted: usize,
 }

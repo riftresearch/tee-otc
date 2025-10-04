@@ -13,6 +13,7 @@ pub struct Swap {
     pub market_maker_id: Uuid,
 
     pub quote: Quote,
+    pub metadata: Metadata,
 
     // Salt for deterministic wallet generation when combined with the TEE master key
     pub user_deposit_salt: [u8; 32],
@@ -45,6 +46,14 @@ pub struct Swap {
 
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct Metadata {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub affiliate: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub start_asset: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

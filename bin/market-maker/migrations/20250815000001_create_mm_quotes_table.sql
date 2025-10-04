@@ -25,7 +25,9 @@ CREATE TABLE IF NOT EXISTS mm_quotes (
     to_token JSONB NOT NULL,
     to_amount TEXT NOT NULL, -- U256 stored as string
     to_decimals SMALLINT NOT NULL,
-    
+
+    fee_schedule JSONB NOT NULL,
+
     -- Timestamps
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL,

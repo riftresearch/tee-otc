@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::error::OtcServerResult;
 
-use super::conversions::lot_to_db;
+use super::conversions::{fee_schedule_to_json, lot_to_db};
 use super::row_mappers::FromRow;
 
 #[derive(Clone)]
@@ -21,6 +21,7 @@ impl QuoteRepository {
     pub async fn create(&self, quote: &Quote) -> OtcServerResult<()> {
         let (from_chain, from_token, from_amount, from_decimals) = lot_to_db(&quote.from)?;
         let (to_chain, to_token, to_amount, to_decimals) = lot_to_db(&quote.to)?;
+        let fee_schedule_json = fee_schedule_to_json(&quote.fee_schedule)?;
 
         sqlx::query(
             r#"
@@ -28,11 +29,12 @@ impl QuoteRepository {
                 id, 
                 from_chain, from_token, from_amount, from_decimals,
                 to_chain, to_token, to_amount, to_decimals,
+                fee_schedule,
                 market_maker_id, 
                 expires_at, 
                 created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
             "#,
         )
         .bind(quote.id)
@@ -44,6 +46,7 @@ impl QuoteRepository {
         .bind(to_token)
         .bind(to_amount)
         .bind(to_decimals as i16)
+        .bind(fee_schedule_json)
         .bind(quote.market_maker_id)
         .bind(quote.expires_at)
         .bind(quote.created_at)
@@ -60,6 +63,7 @@ impl QuoteRepository {
                 id,
                 from_chain, from_token, from_amount, from_decimals,
                 to_chain, to_token, to_amount, to_decimals,
+                fee_schedule,
                 market_maker_id,
                 expires_at,
                 created_at
@@ -86,6 +90,7 @@ impl QuoteRepository {
                 id,
                 from_chain, from_token, from_amount, from_decimals,
                 to_chain, to_token, to_amount, to_decimals,
+                fee_schedule,
                 market_maker_id,
                 expires_at,
                 created_at
@@ -115,6 +120,7 @@ impl QuoteRepository {
                 id,
                 from_chain, from_token, from_amount, from_decimals,
                 to_chain, to_token, to_amount, to_decimals,
+                fee_schedule,
                 market_maker_id,
                 expires_at,
                 created_at
@@ -157,7 +163,7 @@ mod tests {
     use crate::db::Database;
     use alloy::primitives::U256;
     use chrono::{Duration, Utc};
-    use otc_models::{ChainType, Currency, Lot, Quote, TokenIdentifier};
+    use otc_models::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
     use uuid::Uuid;
 
     #[sqlx::test]
@@ -184,6 +190,11 @@ mod tests {
                     decimals: 18,
                 },
                 amount: U256::from(500000000000000000u64), // 0.5 ETH in wei
+            },
+            fee_schedule: FeeSchedule {
+                network_fee_sats: 1000,
+                liquidity_fee_sats: 2000,
+                protocol_fee_sats: 500,
             },
             market_maker_id: Uuid::new_v4(),
             expires_at: utc::now() + Duration::minutes(10),
@@ -224,6 +235,7 @@ mod tests {
             original_quote.to.currency.token
         );
         assert_eq!(retrieved_quote.to.amount, original_quote.to.amount);
+        assert_eq!(retrieved_quote.fee_schedule, original_quote.fee_schedule);
 
         // Validate timestamps (with some tolerance for DB precision)
         assert!(
@@ -270,6 +282,11 @@ mod tests {
                     decimals: 18,
                 },
                 amount: U256::from(1000000000000000000000u128), // 1000 DAI (18 decimals)
+            },
+            fee_schedule: FeeSchedule {
+                network_fee_sats: 1500,
+                liquidity_fee_sats: 2500,
+                protocol_fee_sats: 750,
             },
             market_maker_id: Uuid::new_v4(),
             expires_at: utc::now() + Duration::minutes(5),
@@ -335,6 +352,11 @@ mod tests {
                 },
                 amount: U256::from(21000000u64) * U256::from(100000000u64), // 21M BTC in sats
             },
+            fee_schedule: FeeSchedule {
+                network_fee_sats: 5000,
+                liquidity_fee_sats: 6000,
+                protocol_fee_sats: 2000,
+            },
             market_maker_id: Uuid::new_v4(),
             expires_at: utc::now() + Duration::hours(1),
             created_at: utc::now(),
@@ -378,6 +400,11 @@ mod tests {
                 },
                 amount: U256::from(1000000000000000000u64),
             },
+            fee_schedule: FeeSchedule {
+                network_fee_sats: 100,
+                liquidity_fee_sats: 200,
+                protocol_fee_sats: 50,
+            },
             market_maker_id: mm_identifier,
             expires_at: utc::now() - Duration::hours(1), // Already expired
             created_at: utc::now() - Duration::hours(2),
@@ -401,6 +428,11 @@ mod tests {
                 },
                 amount: U256::from(2000000000000000000u64),
             },
+            fee_schedule: FeeSchedule {
+                network_fee_sats: 150,
+                liquidity_fee_sats: 250,
+                protocol_fee_sats: 75,
+            },
             market_maker_id: mm_identifier,
             expires_at: utc::now() + Duration::minutes(30),
             created_at: utc::now(),
@@ -423,6 +455,11 @@ mod tests {
                     decimals: 8,
                 },
                 amount: U256::from(300000u64),
+            },
+            fee_schedule: FeeSchedule {
+                network_fee_sats: 175,
+                liquidity_fee_sats: 275,
+                protocol_fee_sats: 95,
             },
             market_maker_id: mm_identifier,
             expires_at: utc::now() + Duration::hours(1),

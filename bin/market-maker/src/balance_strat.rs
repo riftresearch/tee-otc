@@ -42,7 +42,7 @@ impl QuoteBalanceStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
+    use otc_models::{ChainType, Currency, FeeSchedule, Lot, TokenIdentifier};
     use uuid::Uuid;
 
     fn create_test_quote(amount: u64) -> Quote {
@@ -62,6 +62,11 @@ mod tests {
             to: Lot {
                 currency,
                 amount: U256::from(amount),
+            },
+            fee_schedule: FeeSchedule {
+                network_fee_sats: 50,
+                liquidity_fee_sats: 75,
+                protocol_fee_sats: 25,
             },
             expires_at: utc::now(),
             created_at: utc::now(),

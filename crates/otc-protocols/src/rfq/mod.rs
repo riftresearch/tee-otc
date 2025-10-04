@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
-use otc_models::{Lot, Quote, QuoteRequest};
+use otc_models::{Quote, QuoteRequest};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+pub use otc_models::FeeSchedule;
 
 /// Protocol wrapper for RFQ messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -54,19 +56,6 @@ pub enum RFQResult<T> {
     InvalidRequest(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FeeSchedule {
-    pub network_fee_sats: u64,
-    pub liquidity_fee_sats: u64,
-    pub protocol_fee_sats: u64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct QuoteWithFees {
-    pub quote: Quote,
-    pub fees: FeeSchedule,
-}
-
 /// Messages sent from Market Maker to RFQ server
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -74,7 +63,7 @@ pub enum RFQResponse {
     /// MM's response with their quote (or None if they can't quote)
     QuoteResponse {
         request_id: Uuid,
-        quote: RFQResult<QuoteWithFees>,
+        quote: RFQResult<Quote>,
         timestamp: DateTime<Utc>,
     },
 

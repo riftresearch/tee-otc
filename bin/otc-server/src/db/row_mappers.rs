@@ -8,8 +8,8 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::conversions::{
-    lot_from_db, mm_deposit_status_from_json, settlement_status_from_json,
-    user_deposit_status_from_json,
+    fee_schedule_from_json, lot_from_db, metadata_from_json, mm_deposit_status_from_json,
+    settlement_status_from_json, user_deposit_status_from_json,
 };
 use crate::error::{OtcServerError, OtcServerResult};
 
@@ -28,6 +28,8 @@ impl<'r> FromRow<'r> for Quote {
         let to_token: serde_json::Value = row.try_get("to_token")?;
         let to_amount: String = row.try_get("to_amount")?;
         let to_decimals: i16 = row.try_get("to_decimals")?;
+        let fee_schedule_json: serde_json::Value = row.try_get("fee_schedule")?;
+        let fee_schedule = fee_schedule_from_json(fee_schedule_json)?;
         let market_maker_id: Uuid = row.try_get("market_maker_id")?;
         let expires_at: DateTime<Utc> = row.try_get("expires_at")?;
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
@@ -39,6 +41,7 @@ impl<'r> FromRow<'r> for Quote {
             id,
             from,
             to,
+            fee_schedule,
             market_maker_id,
             expires_at,
             created_at,
@@ -83,6 +86,8 @@ impl<'r> FromRow<'r> for Swap {
         let to_token: serde_json::Value = row.try_get("to_token")?;
         let to_amount: String = row.try_get("to_amount")?;
         let to_decimals: i16 = row.try_get("to_decimals")?;
+        let fee_schedule_json: serde_json::Value = row.try_get("quote_fee_schedule")?;
+        let fee_schedule = fee_schedule_from_json(fee_schedule_json)?;
         let quote_market_maker_id: Uuid = row.try_get("quote_market_maker_id")?;
         let expires_at: DateTime<Utc> = row.try_get("expires_at")?;
         let quote_created_at: DateTime<Utc> = row.try_get("quote_created_at")?;
@@ -94,6 +99,7 @@ impl<'r> FromRow<'r> for Swap {
             id: quote_id,
             from,
             to,
+            fee_schedule,
             market_maker_id: quote_market_maker_id,
             expires_at,
             created_at: quote_created_at,
@@ -102,6 +108,8 @@ impl<'r> FromRow<'r> for Swap {
         let user_deposit_address: String = row.try_get("user_deposit_address")?;
         let user_destination_address: String = row.try_get("user_destination_address")?;
         let status: SwapStatus = row.try_get("status")?;
+        let metadata_json: serde_json::Value = row.try_get("metadata")?;
+        let metadata = metadata_from_json(metadata_json)?;
 
         // Handle JSONB fields
         let user_deposit_json: Option<serde_json::Value> = row.try_get("user_deposit_status")?;
@@ -137,6 +145,7 @@ impl<'r> FromRow<'r> for Swap {
             id,
             market_maker_id,
             quote,
+            metadata,
             user_deposit_salt,
             user_deposit_address,
             mm_nonce,

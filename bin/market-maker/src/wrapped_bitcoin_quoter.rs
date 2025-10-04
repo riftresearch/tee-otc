@@ -10,7 +10,7 @@ use alloy::providers::DynProvider;
 use alloy::{primitives::U256, providers::Provider};
 use blockchain_utils::{compute_protocol_fee_sats, inverse_compute_protocol_fee};
 use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest, TokenIdentifier};
-use otc_protocols::rfq::{FeeSchedule, QuoteWithFees, RFQResult};
+use otc_protocols::rfq::{FeeSchedule, RFQResult};
 use snafu::Snafu;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -227,7 +227,7 @@ impl WrappedBitcoinQuoter {
         &self,
         market_maker_id: Uuid,
         quote_request: &QuoteRequest,
-    ) -> Result<RFQResult<QuoteWithFees>> {
+    ) -> Result<RFQResult<Quote>> {
         if let Some(error_message) = is_fillable_request(quote_request) {
             info!("Unfillable quote request: {:?}", quote_request);
             return Ok(RFQResult::InvalidRequest(error_message));
@@ -258,22 +258,20 @@ impl WrappedBitcoinQuoter {
                     quote_exact_input(amount, send_fees_in_sats, self.trade_spread_bps);
 
                 match quote_result {
-                    RFQResult::Success((rx_btc, fees)) => RFQResult::Success(QuoteWithFees {
-                        quote: Quote {
-                            id: quote_id,
-                            market_maker_id,
-                            from: Lot {
-                                currency: quote_request.from.clone(),
-                                amount: quote_request.amount,
-                            },
-                            to: Lot {
-                                currency: quote_request.to.clone(),
-                                amount: U256::from(rx_btc),
-                            },
-                            expires_at: utc::now() + QUOTE_EXPIRATION_TIME,
-                            created_at: utc::now(),
+                    RFQResult::Success((rx_btc, fees)) => RFQResult::Success(Quote {
+                        id: quote_id,
+                        market_maker_id,
+                        from: Lot {
+                            currency: quote_request.from.clone(),
+                            amount: quote_request.amount,
                         },
-                        fees,
+                        to: Lot {
+                            currency: quote_request.to.clone(),
+                            amount: U256::from(rx_btc),
+                        },
+                        fee_schedule: fees,
+                        expires_at: utc::now() + QUOTE_EXPIRATION_TIME,
+                        created_at: utc::now(),
                     }),
                     RFQResult::MakerUnavailable(error) => RFQResult::MakerUnavailable(error),
                     RFQResult::InvalidRequest(error) => RFQResult::InvalidRequest(error),
@@ -283,22 +281,20 @@ impl WrappedBitcoinQuoter {
                 let quote_result =
                     quote_exact_output(amount, send_fees_in_sats, self.trade_spread_bps);
                 match quote_result {
-                    RFQResult::Success((tx_btc, fees)) => RFQResult::Success(QuoteWithFees {
-                        quote: Quote {
-                            id: quote_id,
-                            market_maker_id,
-                            from: Lot {
-                                currency: quote_request.from.clone(),
-                                amount: U256::from(tx_btc),
-                            },
-                            to: Lot {
-                                currency: quote_request.to.clone(),
-                                amount: quote_request.amount,
-                            },
-                            expires_at: utc::now() + QUOTE_EXPIRATION_TIME,
-                            created_at: utc::now(),
+                    RFQResult::Success((tx_btc, fees)) => RFQResult::Success(Quote {
+                        id: quote_id,
+                        market_maker_id,
+                        from: Lot {
+                            currency: quote_request.from.clone(),
+                            amount: U256::from(tx_btc),
                         },
-                        fees,
+                        to: Lot {
+                            currency: quote_request.to.clone(),
+                            amount: quote_request.amount,
+                        },
+                        fee_schedule: fees,
+                        expires_at: utc::now() + QUOTE_EXPIRATION_TIME,
+                        created_at: utc::now(),
                     }),
                     RFQResult::MakerUnavailable(error) => RFQResult::MakerUnavailable(error),
                     RFQResult::InvalidRequest(error) => RFQResult::InvalidRequest(error),
@@ -309,20 +305,12 @@ impl WrappedBitcoinQuoter {
         Ok(self.validate_quote_balance(rfq_result).await)
     }
 
-    async fn validate_quote_balance(
-        &self,
-        rfq_result: RFQResult<QuoteWithFees>,
-    ) -> RFQResult<QuoteWithFees> {
+    async fn validate_quote_balance(&self, rfq_result: RFQResult<Quote>) -> RFQResult<Quote> {
         match rfq_result {
-            RFQResult::Success(quote_with_fees) => {
-                match self
-                    .ensure_cached_balance_can_fill(&quote_with_fees.quote)
-                    .await
-                {
-                    Ok(()) => RFQResult::Success(quote_with_fees),
-                    Err(message) => RFQResult::MakerUnavailable(message),
-                }
-            }
+            RFQResult::Success(quote) => match self.ensure_cached_balance_can_fill(&quote).await {
+                Ok(()) => RFQResult::Success(quote),
+                Err(message) => RFQResult::MakerUnavailable(message),
+            },
             other => other,
         }
     }

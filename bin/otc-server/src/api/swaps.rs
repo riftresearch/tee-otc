@@ -1,6 +1,6 @@
 use alloy::primitives::{Address, U256};
 use chrono::{DateTime, Utc};
-use otc_models::{ChainType, Quote, RefundSwapReason};
+use otc_models::{ChainType, Metadata, Quote, RefundSwapReason};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -45,6 +45,10 @@ pub struct CreateSwapRequest {
 
     /// User's EVM account that is authorized to control the swap
     pub user_evm_account_address: Address,
+
+    /// Optional metadata describing the swap source
+    #[serde(default)]
+    pub metadata: Option<Metadata>,
 }
 
 /// Response after successfully creating a swap

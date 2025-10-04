@@ -1,7 +1,7 @@
 use crate::mm_registry::RfqMMRegistry;
 use futures_util::future;
-use otc_models::{QuoteMode, QuoteRequest};
-use otc_protocols::rfq::{QuoteWithFees, RFQResponse, RFQResult};
+use otc_models::{Quote, QuoteMode, QuoteRequest};
+use otc_protocols::rfq::{RFQResponse, RFQResult};
 use snafu::Snafu;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -31,7 +31,7 @@ pub struct QuoteAggregator {
 #[derive(Debug, Clone)]
 pub struct QuoteRequestResult {
     pub request_id: Uuid,
-    pub best_quote: Option<RFQResult<QuoteWithFees>>,
+    pub best_quote: Option<RFQResult<Quote>>,
     pub total_quotes_received: usize,
     pub market_makers_contacted: usize,
 }
@@ -103,18 +103,18 @@ impl QuoteAggregator {
                     RFQResult::Success(quote) => Some(quote),
                     _ => None,
                 })
-                .max_by_key(|q| q.quote.to.amount),
+                .max_by_key(|q| q.to.amount),
             QuoteMode::ExactOutput => quotes
                 .iter()
                 .filter_map(|q| match q {
                     RFQResult::Success(quote) => Some(quote),
                     _ => None,
                 })
-                .max_by_key(|q| q.quote.from.amount),
+                .max_by_key(|q| q.from.amount),
         };
 
         // Relevant fail quote - prioritize InvalidRequest over MakerUnavailable
-        let best_fail_quote: Option<RFQResult<QuoteWithFees>> = quotes
+        let best_fail_quote: Option<RFQResult<Quote>> = quotes
             .iter()
             .find_map(|q| match q {
                 RFQResult::InvalidRequest(e) => Some(RFQResult::InvalidRequest(e.clone())),
@@ -131,16 +131,12 @@ impl QuoteAggregator {
         if let Some(best_quote) = best_success_quote {
             if let Err(e) = self
                 .mm_registry
-                .notify_quote_selected(
-                    best_quote.quote.market_maker_id,
-                    request_id,
-                    best_quote.quote.id,
-                )
+                .notify_quote_selected(best_quote.market_maker_id, request_id, best_quote.id)
                 .await
             {
                 warn!(
-                    market_maker_id = %best_quote.quote.market_maker_id,
-                    quote_id = %best_quote.quote.id,
+                    market_maker_id = %best_quote.market_maker_id,
+                    quote_id = %best_quote.id,
                     error = %e,
                     "Failed to notify market maker of quote selection"
                 );
@@ -166,7 +162,7 @@ impl QuoteAggregator {
         &self,
         receivers: Vec<(Uuid, mpsc::Receiver<RFQResponse>)>,
         _request_id: Uuid,
-    ) -> Vec<RFQResult<QuoteWithFees>> {
+    ) -> Vec<RFQResult<Quote>> {
         let mut quotes = Vec::new();
 
         // Convert receivers into futures

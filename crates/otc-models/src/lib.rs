@@ -1,6 +1,7 @@
 pub mod api_key;
 pub mod chain;
 pub mod constants;
+pub mod fees;
 pub mod quote;
 pub mod status;
 pub mod swap;
@@ -10,6 +11,7 @@ pub mod wallet;
 pub use api_key::*;
 pub use chain::*;
 pub use constants::*;
+pub use fees::*;
 pub use quote::*;
 pub use status::*;
 pub use swap::*;
