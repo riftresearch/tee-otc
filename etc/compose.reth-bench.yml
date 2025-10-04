@@ -41,10 +41,6 @@ configs:
       rm -rf /tmp/*
       
       echo "Starting Reth with arguments: $*"
-      # If --num-tasks is not provided, default to $(nproc)
-      if ! printf '%s\0' "$@" | grep -z -- '--num-tasks' >/dev/null; then
-        set -- "$@" --num-tasks "$(nproc)"
-      fi
 
       exec reth "$@"
 
@@ -98,7 +94,7 @@ services:
       --datadir /root/.local/share/reth/holesky
       --from 4439800 
       --to 4539800
-      --num-tasks $(nproc)
+      --num-tasks 16 
 
 networks:
   reth-network:
