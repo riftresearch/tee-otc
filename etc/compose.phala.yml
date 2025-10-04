@@ -1028,7 +1028,7 @@ services:
       - source: dozzle_users
         target: /data/users.yml
     ports:
-      - 8090:8080
+      - 8095:8080
 
   bitcoin-core:
     container_name: tee-bitcoin-core
@@ -1096,6 +1096,7 @@ services:
 
   otc-server:
     image: riftresearch/otc-server:main-37c3c8f
+    restart: unless-stopped
     container_name: tee-otc-server
     depends_on:
       postgres:

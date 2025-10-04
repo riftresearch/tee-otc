@@ -1,0 +1,104 @@
+configs:
+  reth-entrypoint:
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+      
+      # Reth snapshot configuration
+      archive_url="https://snapshots.publicnode.com/ethereum-holesky-reth-archive-4539801.tar.lz4"
+      reth_data_dir="$$RETH_DATA_DIR"
+      
+      echo "Checking Reth data directory: $$reth_data_dir"
+      
+      # Check if the holesky directory is empty (no db or static_files folders)
+      if [[ ! -d "$$reth_data_dir/db" ]] && [[ ! -d "$$reth_data_dir/static_files" ]]; then
+          echo "Reth data directory appears to be empty. Downloading Reth snapshot..."
+          
+          # Ensure the data directory exists
+          mkdir -p "$$reth_data_dir"
+          
+          echo "Downloading Reth snapshot from: $$archive_url"
+          echo "Extracting directly to: $$reth_data_dir"
+          
+          # Download and extract directly using wget and tar with lz4
+          # This follows the exact pattern from the Merkle documentation
+          if wget -O - "$$archive_url" | tar -I lz4 -xvf - -C "$$reth_data_dir"; then
+              echo "Reth snapshot download and extraction successful"
+              echo "Data directory size: $$(du -sh $$reth_data_dir | cut -f1)"
+          else
+              echo "Error: Failed to download Reth snapshot."
+              echo "Cannot proceed without snapshot data."
+              exit 1
+          fi
+      else
+          echo "Reth data directory already contains blockchain data"
+          if [[ -d "$$reth_data_dir" ]]; then
+              echo "Data directory size: $$(du -sh $$reth_data_dir | cut -f1)"
+          fi
+      fi
+      
+      # Clean up any temporary files
+      rm -rf /tmp/*
+      
+      echo "Starting Reth with arguments: $*"
+      exec reth "$@"
+
+
+services:
+  reth:
+    restart: unless-stopped
+    container_name: reth-holesky
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM ghcr.io/paradigmxyz/reth:v1.8.1
+        
+        USER root
+        
+        RUN apt-get update && apt-get install -y \
+            wget \
+            lz4 \
+            bash \
+            coreutils \
+            && rm -rf /var/lib/apt/lists/*
+        
+        # Create reth user and data directory
+        RUN useradd -m -u 1000 -s /bin/bash reth \
+            && mkdir -p /root/.local/share/reth/holesky \
+            && chown -R reth:reth /root/.local/share/reth
+        
+        ENTRYPOINT ["/usr/local/bin/reth-entrypoint.sh"]
+    #depends_on:
+      #eth-jwt-generator:
+      #  condition: service_completed_successfully
+    environment:
+      RETH_DATA_DIR: /root/.local/share/reth/holesky
+    ports:
+      - "9001:9001" # metrics
+      - "30303:30303" # eth/66 peering
+      - "8545:8545" # rpc
+      - "8551:8551" # engine
+    volumes:
+      - reth_holesky_data:/root/.local/share/reth/holesky
+      - reth_logs:/root/logs
+      #- eth_jwt_data:/root/jwt:ro
+    configs:
+      - source: reth-entrypoint
+        target: /usr/local/bin/reth-entrypoint.sh
+        mode: 0755
+    pid: host
+    command: >
+      re-execute
+      --chain holesky
+      --datadir /root/.local/share/reth/holesky
+      --from 4439800 
+      --to 4539800
+      --num-tasks $(nproc)
+
+networks:
+  reth-network:
+    driver: bridge
+
+volumes:
+  reth_logs:
+  reth_holesky_data:
