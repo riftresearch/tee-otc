@@ -47,7 +47,10 @@ configs:
 
 services:
   reth:
-    restart: unless-stopped
+    mem_limit: "30g"          
+    mem_reservation: "26g"    
+    memswap_limit: "30g"      
+    restart: no 
     container_name: reth-holesky
     build:
       context: .
