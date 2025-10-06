@@ -1182,6 +1182,8 @@ services:
       --authrpc.jwtsecret /root/jwt/jwt.hex
       --http --http.addr 0.0.0.0 --http.port 8545
       --http.api "eth,net,web3"
+    networks:
+      - tee-network
     
   lighthouse:
     restart: unless-stopped
@@ -1210,6 +1212,8 @@ services:
       --execution-jwt /root/jwt/jwt.hex
       --checkpoint-sync-url https://sync-mainnet.beaconcha.in
       --checkpoint-sync-url-timeout=300
+    networks:
+      - tee-network
 
   node-exporter:
     image: prom/node-exporter:v1.8.2
