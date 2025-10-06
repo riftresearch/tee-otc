@@ -1,0 +1,181 @@
+configs:
+  bitcoin-entrypoint:
+    content: |
+      #!/bin/bash
+      set -euo pipefail
+
+      archive_url="https://rift-blockchain-archive.s3.us-west-1.amazonaws.com/bitcoind-datadir-2025-09-11.tar.lz4"
+
+      echo "Checking Bitcoin directory: $$BITCOIN_DATA_DIR"
+
+      # If both core subdirs are missing, treat as empty
+      if [[ ! -d "$$BITCOIN_DATA_DIR/blocks" ]] && [[ ! -d "$$BITCOIN_DATA_DIR/chainstate" ]]; then
+          echo "Bitcoin data directory appears to be empty. Downloading blockchain data..."
+          echo "Download will be streamed and decompressed on the fly (lz4)."
+
+          # Ensure target dir exists
+          mkdir -p "$$BITCOIN_DATA_DIR"
+
+          echo "Downloading from: $$archive_url"
+          echo "Extracting directly to: $$BITCOIN_DATA_DIR"
+
+          # Stream download -> lz4 decode -> tar extract
+          if wget -O - "$$archive_url" | tar -I lz4 -xvf - -C "$$BITCOIN_DATA_DIR"; then
+              echo "Download and extraction successful"
+
+              # Ensure correct ownership if running as root
+              if id -u bitcoin >/dev/null 2>&1; then
+                  chown -R bitcoin:bitcoin "$$BITCOIN_DATA_DIR" || true
+              fi
+
+              echo "Data directory size: $$(du -sh $$BITCOIN_DATA_DIR | cut -f1)"
+          else
+              echo "Warning: Failed to download or extract blockchain data. Bitcoin Core will sync from genesis."
+              echo "This will take significantly longer but is still functional."
+          fi
+      else
+          echo "Bitcoin data directory already contains blockchain data"
+          echo "Data directory size: $$(du -sh $$BITCOIN_DATA_DIR | cut -f1)"
+      fi
+
+      # Clean up any temporary files
+      rm -rf /tmp/*
+
+      echo "Starting Bitcoin Core with arguments: $*"
+      exec bitcoind "$@"
+
+services:
+    bitcoin-core:
+      container_name: bitcoin-core
+      build:
+        context: .
+        platforms:
+          - linux/amd64
+        dockerfile_inline: |
+          FROM debian:bookworm-slim
+          RUN apt-get update \
+            && apt-get install -y --no-install-recommends \
+              ca-certificates \
+              curl \
+              tar \
+              bash \
+              lz4 \
+              wget \
+              aria2 \
+            && rm -rf /var/lib/apt/lists/*
+
+          RUN useradd -m -u 1000 -s /bin/bash bitcoin \
+            && mkdir -p /home/bitcoin/.bitcoin \
+            && chown -R bitcoin:bitcoin /home/bitcoin/.bitcoin
+          WORKDIR /opt/bitcoin
+          RUN curl -fsSL "https://bitcoincore.org/bin/bitcoin-core-29.0/bitcoin-29.0-x86_64-linux-gnu.tar.gz" -o bitcoin.tar.gz \
+            && tar -xzf bitcoin.tar.gz --strip-components=1 \
+            && install -m 0755 -o root -g root -t /usr/local/bin bin/* \
+            && rm -rf /opt/bitcoin
+
+          EXPOSE 8332 8333
+          VOLUME ["/home/bitcoin/.bitcoin"]
+          USER bitcoin
+          WORKDIR /home/bitcoin
+          ENTRYPOINT ["/usr/local/bin/bitcoin-entrypoint.sh"]
+      environment:
+        BITCOIN_DATA_DIR: /home/bitcoin/.bitcoin
+      ports:
+        - "8332:8332"
+        - "8333:8333"
+      command:
+        - "-server=1"
+        - "-txindex=1"
+        - "-rpcbind=0.0.0.0"
+        - "-rpcallowip=0.0.0.0/0"
+        - "-rpcuser=user"
+        - "-rpcpassword=pass"
+        - "-datadir=/home/bitcoin/.bitcoin"
+        - "-fallbackfee=0.0002"
+      volumes:
+        - bitcoind_data:/home/bitcoin/.bitcoin
+      configs:
+        - source: bitcoin-entrypoint
+          target: /usr/local/bin/bitcoin-entrypoint.sh
+          mode: 0755
+      healthcheck:
+        test:
+          [
+            "CMD-SHELL",
+            "bitcoin-cli -rpcuser=user -rpcpassword=pass getblockchaininfo > /dev/null || exit 1",
+          ]
+        interval: 20s
+        timeout: 10s
+        retries: 10
+        start_period: 30s
+      networks:
+        - bitcoin-network
+      platform: linux/amd64
+    electrs:
+      container_name: electrs
+      build:
+        context: .
+        dockerfile_inline: |
+          FROM rust:1.75 AS builder
+          WORKDIR /app
+
+          # Build deps for bindgen + rocksdb
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+              clang \
+              llvm-dev \
+              libclang-dev \
+              pkg-config \
+              cmake \
+              build-essential \
+              libssl-dev \
+              git \
+              ca-certificates \
+            && rm -rf /var/lib/apt/lists/*
+
+          # (Optional but robust) make libclang discoverable for bindgen
+          # If bindgen still can't find libclang, uncomment the next two lines:
+          # RUN echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> /etc/environment
+          # ENV LIBCLANG_PATH=/usr/lib/llvm-15/lib
+
+          RUN git clone https://github.com/Blockstream/electrs.git
+          WORKDIR /app/electrs
+          RUN git checkout 811a9908b52d28a7f08303b775ae7aef8ceeee07
+
+          # Build release
+          RUN cargo build --release
+
+          FROM debian:bookworm-slim
+          RUN apt-get update && apt-get install -y --no-install-recommends \
+              ca-certificates \
+            && rm -rf /var/lib/apt/lists/*
+
+          WORKDIR /app
+          COPY --from=builder /app/electrs/target/release/electrs /app/
+          EXPOSE 3000
+          CMD ["./electrs"]
+      command:
+        - "--daemon-dir"
+        - "/home/bitcoin/.bitcoin"
+        - "--db-dir"
+        - "/var/lib/electrs"
+        - "-vvvvv"
+        - "--http-addr"
+        - "0.0.0.0:3000"
+      ports:
+        - "3000:3000"
+      volumes:
+        - bitcoind_data:/home/bitcoin/.bitcoin
+        - electrs_data:/var/lib/electrs
+      depends_on:
+        bitcoin-core:
+          condition: service_healthy
+      networks:
+        - bitcoin-network
+
+networks:
+  bitcoin-network:
+    driver: bridge
+
+volumes:
+  bitcoind_data:
+  electrs_data:

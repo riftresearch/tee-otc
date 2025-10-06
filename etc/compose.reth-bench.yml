@@ -9,6 +9,7 @@ configs:
       reth_data_dir="$$RETH_DATA_DIR"
 
       echo "Checking Reth data directory: $$reth_data_dir"
+
       
       # Check if the holesky directory is empty (no db or static_files folders)
       if [[ ! -d "$$reth_data_dir/db" ]] && [[ ! -d "$$reth_data_dir/static_files" ]]; then
@@ -17,12 +18,33 @@ configs:
           # Ensure the data directory exists
           mkdir -p "$$reth_data_dir"
           
-          echo "Downloading Reth snapshot from: $$archive_url"
-          echo "Extracting directly to: $$reth_data_dir"
+          # Define temporary download location
+          snapshot_file="/tmp/reth-snapshot.tar.lz4"
           
-          # Download and extract directly using wget and tar with lz4
-          # This follows the exact pattern from the Merkle documentation
-          reth download --datadir "$$reth_data_dir" --chain holesky --url "$$archive_url" -vvvv
+          echo "Downloading Reth snapshot from: $$archive_url"
+          echo "Download location: $$snapshot_file"
+          
+          # Download with curl using range headers for resumable downloads
+          # -C - : Continue/resume a previous transfer (auto-detects offset)
+          # -L : Follow redirects
+          # -o : Output file
+          # --progress-bar : Show progress
+          curl -C - -L --progress-bar -o "$$snapshot_file" "$$archive_url"
+          
+          echo "Download complete. Extracting to: $$reth_data_dir"
+          
+          # Extract the snapshot
+          # Use pv if available for progress, otherwise plain extraction
+          if command -v pv &> /dev/null; then
+              pv "$$snapshot_file" | lz4 -d | tar -x -C "$$reth_data_dir"
+          else
+              lz4 -d "$$snapshot_file" | tar -x -C "$$reth_data_dir"
+          fi
+          
+          echo "Extraction complete"
+          
+          # Clean up the downloaded snapshot file
+          rm -f "$$snapshot_file"
       else
           echo "Reth data directory already contains blockchain data"
           if [[ -d "$$reth_data_dir" ]]; then
@@ -30,7 +52,7 @@ configs:
           fi
       fi
       
-      # Clean up any temporary files
+      # Clean up any other temporary files
       rm -rf /tmp/*
       
       echo "Starting Reth with arguments: $*"
@@ -54,6 +76,7 @@ services:
         
         RUN apt-get update && apt-get install -y \
             wget \
+            curl \ 
             lz4 \
             bash \
             coreutils \
@@ -76,7 +99,7 @@ services:
       - "8545:8545" # rpc
       - "8551:8551" # engine
     volumes:
-      - reth_holesky_data_2:/root/.local/share/reth/holesky
+      - reth_holesky_data_3:/root/.local/share/reth/holesky
       - reth_logs:/root/logs
       #- eth_jwt_data:/root/jwt:ro
     configs:
@@ -98,4 +121,4 @@ networks:
 
 volumes:
   reth_logs:
-  reth_holesky_data_2:
+  reth_holesky_data_3:
