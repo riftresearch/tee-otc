@@ -1161,7 +1161,7 @@ services:
     ports:
       # - "9001:9001" # metrics
       - "30303:30303" # eth/66 peering
-      #- "8545:8545" # rpc
+      - "8545:8545" # rpc
       #- "8551:8551" # engine
     volumes:
       - reth_mainnet_data:/root/.local/share/reth/mainnet

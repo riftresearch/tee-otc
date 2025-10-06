@@ -8,9 +8,6 @@ configs:
       archive_url="https://snapshots.publicnode.com/ethereum-holesky-reth-archive-4539801.tar.lz4"
       reth_data_dir="$$RETH_DATA_DIR"
 
-      # Clean the data directory contents (not the mount point itself)
-      rm -rf "$$reth_data_dir"/*
-      
       echo "Checking Reth data directory: $$reth_data_dir"
       
       # Check if the holesky directory is empty (no db or static_files folders)
@@ -79,7 +76,7 @@ services:
       - "8545:8545" # rpc
       - "8551:8551" # engine
     volumes:
-      - reth_holesky_data:/root/.local/share/reth/holesky
+      - reth_holesky_data_2:/root/.local/share/reth/holesky
       - reth_logs:/root/logs
       #- eth_jwt_data:/root/jwt:ro
     configs:
@@ -101,4 +98,4 @@ networks:
 
 volumes:
   reth_logs:
-  reth_holesky_data:
+  reth_holesky_data_2:
