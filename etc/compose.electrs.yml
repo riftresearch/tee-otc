@@ -100,7 +100,7 @@ services:
         test:
           [
             "CMD-SHELL",
-            "bitcoin-cli -rpcuser=user -rpcpassword=pass getblockchaininfo > /dev/null || exit 1",
+            "bitcoin-cli -datadir=/home/bitcoin/.bitcoin getblockchaininfo > /dev/null || exit 1",
           ]
         interval: 20s
         timeout: 10s
