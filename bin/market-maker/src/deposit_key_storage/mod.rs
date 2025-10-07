@@ -155,6 +155,7 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
         let (chain, token, decimals) = Self::serialize_currency(&lot.currency);
         let target = lot.amount.to_string();
         let reservation_id = Uuid::new_v4();
+        let now = utc::now();
 
         // Greedy prefix-sum reservation under concurrency
         let rows: Vec<PgRow> = sqlx::query(
@@ -180,7 +181,7 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
             UPDATE mm_deposits i
             SET status = 'reserved',
                 reserved_by = $5,
-                reserved_at = NOW()
+                reserved_at = $6
             FROM take
             WHERE i.private_key = take.private_key
             RETURNING i.private_key, i.amount::TEXT, i.funding_tx_hash;
@@ -191,6 +192,7 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
         .bind(decimals)
         .bind(&target)
         .bind(reservation_id)
+        .bind(now)
         .fetch_all(&self.pool)
         .await
         .context(DatabaseSnafu)?;
@@ -232,13 +234,14 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
     async fn store_deposit(&self, deposit: &Deposit) -> Result<()> {
         let (chain, token, decimals) = Self::serialize_currency(&deposit.holdings.currency);
         let amount = deposit.holdings.amount.to_string();
+        let now = utc::now();
 
         // Use ON CONFLICT DO NOTHING to make this idempotent - if the private_key already exists,
         sqlx::query(
             r#"
             INSERT INTO mm_deposits (
-                private_key, chain, token, decimals, amount, status, funding_tx_hash
-            ) VALUES ($1, $2, $3, $4, $5::numeric, 'available', $6)
+                private_key, chain, token, decimals, amount, status, funding_tx_hash, created_at
+            ) VALUES ($1, $2, $3, $4, $5::numeric, 'available', $6, $7)
             ON CONFLICT (private_key) DO NOTHING
             "#,
         )
@@ -248,6 +251,7 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
         .bind(decimals)
         .bind(&amount)
         .bind(&deposit.funding_tx_hash)
+        .bind(now)
         .execute(&self.pool)
         .await
         .context(DatabaseSnafu)?;

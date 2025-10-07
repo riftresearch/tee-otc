@@ -114,6 +114,8 @@ impl QuoteRepository {
     }
 
     pub async fn get_expired(&self, limit: i64) -> OtcServerResult<Vec<Quote>> {
+        let now = utc::now();
+
         let rows = sqlx::query(
             r#"
             SELECT 
@@ -125,12 +127,13 @@ impl QuoteRepository {
                 expires_at,
                 created_at
             FROM quotes
-            WHERE expires_at <= NOW()
+            WHERE expires_at <= $2
             ORDER BY expires_at ASC
             LIMIT $1
             "#,
         )
         .bind(limit)
+        .bind(now)
         .fetch_all(&self.pool)
         .await?;
 

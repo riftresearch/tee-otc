@@ -148,15 +148,18 @@ impl SwapRepository {
     }
 
     pub async fn update_status(&self, id: Uuid, status: SwapStatus) -> OtcServerResult<()> {
+        let now = utc::now();
+
         sqlx::query(
             r"
             UPDATE swaps
-            SET status = $2, updated_at = NOW()
+            SET status = $2, updated_at = $3
             WHERE id = $1
             ",
         )
         .bind(id)
         .bind(status)
+        .bind(now)
         .execute(&self.pool)
         .await?;
 
@@ -169,18 +172,20 @@ impl SwapRepository {
         status: &UserDepositStatus,
     ) -> OtcServerResult<()> {
         let status_json = user_deposit_status_to_json(status)?;
+        let now = utc::now();
 
         sqlx::query(
             r"
             UPDATE swaps
             SET 
                 user_deposit_status = $2,
-                updated_at = NOW()
+                updated_at = $3
             WHERE id = $1
             ",
         )
         .bind(id)
         .bind(status_json)
+        .bind(now)
         .execute(&self.pool)
         .await?;
 
@@ -193,18 +198,20 @@ impl SwapRepository {
         status: &MMDepositStatus,
     ) -> OtcServerResult<()> {
         let status_json = mm_deposit_status_to_json(status)?;
+        let now = utc::now();
 
         sqlx::query(
             r"
             UPDATE swaps
             SET 
                 mm_deposit_status = $2,
-                updated_at = NOW()
+                updated_at = $3
             WHERE id = $1
             ",
         )
         .bind(id)
         .bind(status_json)
+        .bind(now)
         .execute(&self.pool)
         .await?;
 
@@ -217,18 +224,20 @@ impl SwapRepository {
         status: &SettlementStatus,
     ) -> OtcServerResult<()> {
         let status_json = settlement_status_to_json(status)?;
+        let now = utc::now();
 
         sqlx::query(
             r"
             UPDATE swaps
             SET 
                 settlement_status = $2,
-                updated_at = NOW()
+                updated_at = $3
             WHERE id = $1
             ",
         )
         .bind(id)
         .bind(status_json)
+        .bind(now)
         .execute(&self.pool)
         .await?;
 

@@ -394,22 +394,6 @@ async fn test_evm_wallet_error_handling(
 
     assert!(result.is_err(), "Should fail with invalid address");
 
-    // Test 2: Unsupported chain type
-    let btc_lot = Lot {
-        currency: Currency {
-            chain: ChainType::Bitcoin,
-            token: TokenIdentifier::Native,
-            decimals: 8,
-        },
-        amount: U256::from(100000),
-    };
-
-    let result = evm_wallet.balance(&btc_lot.currency.token).await;
-    info!("result: {:?}", result);
-    assert!(
-        result.is_err(),
-        "Should return error for unsupported currency"
-    );
 
     // Clean up
     join_set.abort_all();

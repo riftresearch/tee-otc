@@ -172,6 +172,8 @@ impl QuoteStorage {
     }
 
     pub async fn get_active_quotes(&self, market_maker_id: Uuid) -> Result<Vec<Quote>> {
+        let now = utc::now();
+
         let rows = sqlx::query(
             r#"
             SELECT 
@@ -190,11 +192,12 @@ impl QuoteStorage {
                 created_at
             FROM mm_quotes
             WHERE market_maker_id = $1 
-            AND expires_at > NOW()
+            AND expires_at > $2
             ORDER BY created_at DESC
             "#,
         )
         .bind(market_maker_id)
+        .bind(now)
         .fetch_all(&self.pool)
         .await
         .context(DatabaseSnafu)?;
@@ -240,12 +243,15 @@ impl QuoteStorage {
     }
 
     pub async fn delete_expired_quotes(&self) -> Result<u64> {
+        let now = utc::now();
+
         let result = sqlx::query(
             r#"
             DELETE FROM mm_quotes
-            WHERE expires_at < NOW()
+            WHERE expires_at < $1
             "#,
         )
+        .bind(now)
         .execute(&self.pool)
         .await
         .context(DatabaseSnafu)?;

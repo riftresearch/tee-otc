@@ -36,7 +36,7 @@ CREATE TABLE quotes (
 
     market_maker_id UUID NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL 
 );
 
 -- Create swaps table with enhanced state tracking
@@ -73,8 +73,8 @@ CREATE TABLE swaps (
     mm_notified_at TIMESTAMPTZ,
     mm_private_key_sent_at TIMESTAMPTZ,
     
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    created_at TIMESTAMPTZ NOT NULL,
+    updated_at TIMESTAMPTZ NOT NULL 
 );
 
 -- Create indexes for efficient queries
