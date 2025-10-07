@@ -235,6 +235,8 @@ impl SwapRepository {
     }
 
     pub async fn get_active_swaps(&self) -> OtcServerResult<Vec<Swap>> {
+        let cutoff_time = utc::now() - chrono::Duration::hours(24);
+        
         let rows = sqlx::query(
             r"
             SELECT 
@@ -256,9 +258,11 @@ impl SwapRepository {
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
             WHERE s.status NOT IN ('settled', 'failed')
+              AND NOT (s.created_at < $1 AND s.user_deposit_status IS NULL)
             ORDER BY s.created_at DESC
             ",
         )
+        .bind(cutoff_time)
         .fetch_all(&self.pool)
         .await?;
 
