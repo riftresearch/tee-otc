@@ -88,8 +88,6 @@ services:
         - "-txindex=1"
         - "-rpcbind=0.0.0.0"
         - "-rpcallowip=0.0.0.0/0"
-        - "-rpcuser=user"
-        - "-rpcpassword=pass"
         - "-datadir=/home/bitcoin/.bitcoin"
         - "-fallbackfee=0.0002"
       volumes:
