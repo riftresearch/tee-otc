@@ -2,105 +2,108 @@ configs:
   reth-entrypoint:
     content: |
       #!/bin/bash
-      set -euo pipefail
       
-      # Reth snapshot configuration
-      archive_url="https://snapshots.publicnode.com/ethereum-holesky-reth-archive-4539801.tar.lz4"
+      # Config
+      archive_url="$$ARCHIVE_URL"
       reth_data_dir="$$RETH_DATA_DIR"
-
-      echo "Checking Reth data directory: $$reth_data_dir"
-
       
-      # Check if the holesky directory is empty (no db or static_files folders)
-      if [[ ! -d "$$reth_data_dir/db" ]] && [[ ! -d "$$reth_data_dir/static_files" ]]; then
-          echo "Reth data directory appears to be empty. Downloading Reth snapshot..."
-          
-          # Ensure the data directory exists
-          mkdir -p "$$reth_data_dir"
-          
-          # Define temporary download location
-          snapshot_file="/tmp/reth-snapshot.tar.lz4"
-          
-          echo "Downloading Reth snapshot from: $$archive_url"
-          echo "Download location: $$snapshot_file"
-          
-          # Download with wget using range headers for resumable downloads
-          # -c : Continue/resume a previous transfer
-          # -O : Output file
-          # --show-progress : Show progress bar
-          wget -c --show-progress -O "$$snapshot_file" "$$archive_url"
-          
-          echo "Download complete. Extracting to: $$reth_data_dir"
-          
-          # Extract the snapshot
-          # Use pv if available for progress, otherwise plain extraction
-          if command -v pv &> /dev/null; then
-              pv "$$snapshot_file" | lz4 -d | tar -x -C "$$reth_data_dir"
-          else
-              lz4 -d "$$snapshot_file" | tar -x -C "$$reth_data_dir"
-          fi
-          
-          echo "Extraction complete"
-          
-          # Clean up the downloaded snapshot file
-          rm -f "$$snapshot_file"
-      else
-          echo "Reth data directory already contains blockchain data"
-          if [[ -d "$$reth_data_dir" ]]; then
-              echo "Data directory size: $$(du -sh $$reth_data_dir | cut -f1)"
-          fi
+      # Guard: ensure env is set
+      if [[ -z "$${reth_data_dir:-}" ]]; then
+        echo "ERROR: RETH_DATA_DIR is empty or not set."
+        env | sort | sed -n '1,120p'
+        exit 1
       fi
       
-      # Clean up any other temporary files
-      rm -rf /tmp/*
+      if [[ -z "$${archive_url:-}" ]]; then
+        echo "ERROR: archive_url is empty."
+        exit 1
+      fi
       
+      echo "Checking Reth data directory: $$reth_data_dir"
+      echo "Download URL: $$archive_url"
+      
+      # Only download if db/static_files missing
+      if [[ ! -d "$$reth_data_dir/db" ]] && [[ ! -d "$$reth_data_dir/static_files" ]]; then
+        echo "Reth data directory appears empty. Downloading snapshot..."
+        mkdir -p "$$reth_data_dir"
+        snapshot_file="/tmp/reth-snapshot.tar.lz4"
+        echo "Saving to: $$snapshot_file"
+        
+        # Download with aria2c for speed and reliability
+        aria2c \
+          --continue=true \
+          --max-connection-per-server=16 \
+          --min-split-size=1M \
+          --split=16 \
+          --max-tries=1000 \
+          --retry-wait=5 \
+          --timeout=300 \
+          --lowest-speed-limit=5K \
+          --max-overall-download-limit=0 \
+          --dir=/tmp \
+          --out=reth-snapshot.tar.lz4 \
+          "$$archive_url"
+        
+        echo "Download complete. Verifying file..."
+        if [[ ! -s "$$snapshot_file" ]]; then
+          echo "Error: Snapshot file is empty. Exiting."
+          exit 1
+        fi
+        
+        echo "Extracting snapshot to: $$reth_data_dir"
+        if command -v pv >/dev/null 2>&1; then
+          pv "$$snapshot_file" | lz4 -d | tar -x -C "$$reth_data_dir"
+        else
+          lz4 -d "$$snapshot_file" | tar -x -C "$$reth_data_dir"
+        fi
+        
+        echo "Extraction complete."
+        rm -f "$$snapshot_file"
+      else
+        echo "Reth data directory already contains blockchain data."
+        if [[ -d "$$reth_data_dir" ]]; then
+          echo "Data directory size: $$(du -sh "$$reth_data_dir" | cut -f1)"
+        fi
+      fi
+      
+      rm -rf /tmp/*
       echo "Starting Reth with arguments: $*"
-
-      exec reth "$@"
-
+      exec reth $@
 
 services:
   reth:
-    mem_limit: "30g"          
-    mem_reservation: "26g"    
-    memswap_limit: "30g"      
-    restart: no 
+    mem_limit: "30g"
+    mem_reservation: "26g"
+    memswap_limit: "30g"
+    restart: "no"
     container_name: reth-holesky
     build:
       context: .
       dockerfile_inline: |
         FROM ghcr.io/paradigmxyz/reth:v1.8.1
-        
         USER root
-        
         RUN apt-get update && apt-get install -y \
-            wget \
-            curl \ 
+            aria2 \
             lz4 \
             bash \
             coreutils \
+            pv \
             && rm -rf /var/lib/apt/lists/*
-        
-        # Create reth user and data directory
         RUN useradd -m -u 1000 -s /bin/bash reth \
             && mkdir -p /root/.local/share/reth/holesky \
             && chown -R reth:reth /root/.local/share/reth
-        
         ENTRYPOINT ["/usr/local/bin/reth-entrypoint.sh"]
-    #depends_on:
-      #eth-jwt-generator:
-      #  condition: service_completed_successfully
     environment:
       RETH_DATA_DIR: /root/.local/share/reth/holesky
+      ARCHIVE_URL: https://snapshots.publicnode.com/ethereum-holesky-reth-archive-4539801.tar.lz4
     ports:
-      - "9001:9001" # metrics
-      - "30303:30303" # eth/66 peering
-      - "8545:8545" # rpc
-      - "8551:8551" # engine
+      - "9001:9001"
+      - "30303:30303"
+      - "8545:8545"
+      - "8551:8551"
     volumes:
-      - reth_holesky_data_5:/root/.local/share/reth/holesky
+      - reth_holesky_data_7:/root/.local/share/reth/holesky
       - reth_logs:/root/logs
-      #- eth_jwt_data:/root/jwt:ro
     configs:
       - source: reth-entrypoint
         target: /usr/local/bin/reth-entrypoint.sh
@@ -110,9 +113,9 @@ services:
       re-execute
       --chain holesky
       --datadir /root/.local/share/reth/holesky
-      --from 4439800 
+      --from 4439800
       --to 4539800
-      --num-tasks 16 
+      --num-tasks 16
 
 networks:
   reth-network:
@@ -120,4 +123,4 @@ networks:
 
 volumes:
   reth_logs:
-  reth_holesky_data_5:
+  reth_holesky_data_7:
