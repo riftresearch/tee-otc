@@ -620,7 +620,7 @@ impl RiftDevnetBuilder {
         ethereum_devnet
             .fund_eth_address(
                 market_maker_ethereum_address,
-                alloy::primitives::U256::from_str_radix("1000000000000000000000000", 10)
+                alloy::primitives::U256::from_str_radix("100000000000000000000", 10)
                     .map_err(|e| eyre::eyre!("Conversion error: {}", e))?,
             )
             .await

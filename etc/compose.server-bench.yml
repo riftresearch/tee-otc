@@ -1,0 +1,59 @@
+version: "3.8"
+
+services:
+  benchmark:
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM debian:bookworm-slim
+
+        # Install build tools, sysbench, and utilities
+        RUN apt-get update && apt-get install -y \
+            build-essential \
+            wget \
+            sysbench \
+            bash \
+            ca-certificates \
+            util-linux \
+            && rm -rf /var/lib/apt/lists/*
+
+        # Build and install iozone from source
+        WORKDIR /tmp
+        RUN wget https://www.iozone.org/src/current/iozone3_508.tar && \
+            tar -xf iozone3_508.tar && \
+            cd iozone3_508/src/current && \
+            make linux && \
+            cp iozone /usr/local/bin/ && \
+            rm -rf /tmp/iozone3_508*
+
+        WORKDIR /data
+        CMD ["/usr/local/bin/benchmark.sh"]
+
+    container_name: disk_cpu_benchmark
+    volumes:
+      - benchmark_data:/data
+    configs:
+      - source: benchmark_script
+        target: /usr/local/bin/benchmark.sh
+        mode: 0555
+    restart: "no"
+
+configs:
+  benchmark_script:
+    content: |
+      #!/bin/bash
+      echo "--- Detecting filesystem type wtih df ---"
+      df -T
+      echo "--- Detecting filesystem type with lsblk ---"
+      lsblk -f
+
+      echo "--- Running iozone disk benchmark ---"
+      iozone -e -t1 -i0 -i2 -r1k -s1g /data
+
+      echo "--- Running sysbench CPU benchmark ---"
+      sysbench cpu --threads=1 --time=30 run
+
+      echo "--- Benchmarks completed successfully ---"
+
+volumes:
+  benchmark_data:

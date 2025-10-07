@@ -325,8 +325,7 @@ configs:
                       "value": 80
                     }
                   ]
-                },
-                "unit": "s"
+                }
               },
               "overrides": []
             },
@@ -335,6 +334,106 @@ configs:
               "w": 12,
               "x": 12,
               "y": 0
+            },
+            "id": 10,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "disableTextWrap": false,
+                "editorMode": "builder",
+                "expr": "otc_swap_fees_total",
+                "fullMetaSearch": false,
+                "includeNullMetadata": true,
+                "instant": false,
+                "legendFormat": "__auto",
+                "range": true,
+                "refId": "A",
+                "useBackend": false
+              }
+            ],
+            "title": "Cumulative Fees",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "s"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 24,
+              "x": 0,
+              "y": 8
             },
             "id": 8,
             "options": {
@@ -435,7 +534,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 0,
-              "y": 8
+              "y": 16
             },
             "id": 1,
             "options": {
@@ -530,7 +629,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 8
+              "y": 16
             },
             "id": 2,
             "options": {
@@ -625,7 +724,7 @@ configs:
               "h": 8,
               "w": 24,
               "x": 0,
-              "y": 16
+              "y": 24
             },
             "id": 4,
             "options": {
@@ -731,7 +830,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 0,
-              "y": 24
+              "y": 32
             },
             "id": 5,
             "options": {
@@ -826,7 +925,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 24
+              "y": 32
             },
             "id": 6,
             "options": {
@@ -921,7 +1020,7 @@ configs:
               "h": 8,
               "w": 24,
               "x": 0,
-              "y": 32
+              "y": 40
             },
             "id": 7,
             "options": {
@@ -971,7 +1070,7 @@ configs:
         "version": 1,
         "weekStart": ""
       }
-    
+
 
 services:
   eth-jwt-generator:

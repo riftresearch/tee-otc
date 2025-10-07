@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use alloy::primitives::utils::format_units;
 use otc_models::{TokenIdentifier, CB_BTC_CONTRACT_ADDRESS};
 use snafu::{Location, ResultExt};
 use tokio::time::sleep;
@@ -97,20 +98,23 @@ pub async fn run_rebalancer(
             .context(GetBalanceSnafu)?;
         let cbbtc = cbbtc_balance.total_balance.to::<u64>();
 
+        let total_sats = btc.saturating_add(cbbtc);
+
         let eth_balance = evm_wallet
             .balance(&TokenIdentifier::Native)
             .await
             .context(GetBalanceSnafu)?;
-        let eth_native = eth_balance.native_balance.to::<u128>();
+        let eth_native = eth_balance.total_balance;
+        let eth_native_str: String = format_units(eth_native, "ether").unwrap();
+        let eth_native_f64 = eth_native_str.parse::<f64>().unwrap();
 
-        let total = btc.saturating_add(cbbtc);
 
         // --- metrics: snapshot every loop, even if no rebalance ---
         counter!("mm_loop_iterations_total").increment(1);
         gauge!("mm_balance_sats", "asset" => "btc").set(btc as f64);
         gauge!("mm_balance_sats", "asset" => "cbbtc").set(cbbtc as f64);
-        gauge!("mm_total_sats").set(total as f64);
-        gauge!("mm_eth_balance_wei").set(eth_native as f64);
+        gauge!("mm_total_sats").set(total_sats as f64);
+        gauge!("mm_eth_balance_ether").set(eth_native_f64);
 
         // Native vs deposit key balance metrics
         let btc_native = btc_balance.native_balance.to::<u64>();
@@ -125,17 +129,17 @@ pub async fn run_rebalancer(
 
         debug!(
             "inventory: btc={} sats, cbbtc={} sats, total={}",
-            btc, cbbtc, total
+            btc, cbbtc, total_sats
         );
-        if total == 0 {
+        if total_sats == 0 {
             gauge!("mm_inventory_ratio_bps").set(0.0);
             sleep(params.poll_interval).await;
             continue;
         }
 
         // Log detailed balance information with human-readable percentages
-        let btc_pct = (btc as f64 / total as f64) * 100.0;
-        let cbbtc_pct = (cbbtc as f64 / total as f64) * 100.0;
+        let btc_pct = (btc as f64 / total_sats as f64) * 100.0;
+        let cbbtc_pct = (cbbtc as f64 / total_sats as f64) * 100.0;
 
         info!(
             message = "detailed inventory breakdown",
@@ -147,7 +151,7 @@ pub async fn run_rebalancer(
             cbbtc_native_sats = cbbtc_native,
             cbbtc_deposit_key_sats = cbbtc_deposit_key,
             cbbtc_percentage = %format!("{:.2}%", cbbtc_pct),
-            total_sats = total
+            total_sats = total_sats
         );
 
         // --- symmetric band around target ---
@@ -171,7 +175,7 @@ pub async fn run_rebalancer(
         if let Some(side) = side {
             if execute_rebalance {
                 // snap-to-target trade size (in sats)
-                let trade_sats = sats_to_target(total, params.target_bps, r_bps);
+                let trade_sats = sats_to_target(total_sats, params.target_bps, r_bps);
                 if trade_sats == 0 {
                     sleep(params.poll_interval).await;
                     continue;

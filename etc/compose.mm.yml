@@ -420,7 +420,7 @@ configs:
                 "refId": "A"
               }
             ],
-            "title": "Cumulative Inventory Balance",
+            "title": "Cumulative BTC Inventory Balance",
             "transformations": [
               {
                 "id": "joinByField",
@@ -445,6 +445,105 @@ configs:
                 }
               }
             ],
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                }
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 0,
+              "y": 10
+            },
+            "id": 7,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "disableTextWrap": false,
+                "editorMode": "builder",
+                "expr": "mm_eth_balance_ether{instance=\"market-maker:9000\"}",
+                "fullMetaSearch": false,
+                "includeNullMetadata": true,
+                "instant": false,
+                "legendFormat": "eth",
+                "range": true,
+                "refId": "A",
+                "useBackend": false
+              }
+            ],
+            "title": "Ether Balance",
             "type": "timeseries"
           },
           {
@@ -508,9 +607,9 @@ configs:
               "overrides": []
             },
             "gridPos": {
-              "h": 7,
-              "w": 24,
-              "x": 0,
+              "h": 8,
+              "w": 12,
+              "x": 12,
               "y": 10
             },
             "id": 5,
@@ -612,7 +711,7 @@ configs:
               "h": 7,
               "w": 7,
               "x": 0,
-              "y": 17
+              "y": 18
             },
             "id": 1,
             "options": {
@@ -707,7 +806,7 @@ configs:
               "h": 7,
               "w": 9,
               "x": 7,
-              "y": 17
+              "y": 18
             },
             "id": 2,
             "options": {
@@ -802,7 +901,7 @@ configs:
               "h": 7,
               "w": 8,
               "x": 16,
-              "y": 17
+              "y": 18
             },
             "id": 3,
             "options": {
@@ -843,7 +942,7 @@ configs:
           "list": []
         },
         "time": {
-          "from": "now-12h",
+          "from": "now-15m",
           "to": "now"
         },
         "timepicker": {},
@@ -853,8 +952,6 @@ configs:
         "version": 1,
         "weekStart": ""
       }
-
-
 
 services:
   mm-postgres:
