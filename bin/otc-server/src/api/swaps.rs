@@ -5,6 +5,11 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlockHashResponse {
+    pub block_hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefundPayload {
     pub swap_id: Uuid,
     pub refund_recipient: String,
