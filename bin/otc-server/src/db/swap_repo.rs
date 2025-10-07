@@ -17,6 +17,7 @@ use crate::db::quote_repo::QuoteRepository;
 use crate::error::{OtcServerError, OtcServerResult};
 
 pub const SWAP_VOLUME_TOTAL_METRIC: &str = "otc_swap_volume_total";
+pub const SWAP_FEES_TOTAL_METRIC: &str = "otc_swap_fees_total";
 const SWAP_VOLUME_SIDE_LABEL: &str = "sell";
 const SWAP_VOLUME_SOURCE_LABEL: &str = "otc";
 
@@ -236,7 +237,7 @@ impl SwapRepository {
 
     pub async fn get_active_swaps(&self) -> OtcServerResult<Vec<Swap>> {
         let cutoff_time = utc::now() - chrono::Duration::hours(24);
-        
+
         let rows = sqlx::query(
             r"
             SELECT 
@@ -630,14 +631,23 @@ fn record_settlement_volume(swap: &Swap) {
     };
 
     let market = market_label(&swap.quote.from, &swap.quote.to);
+    let protocol_fee = swap.quote.fee_schedule.protocol_fee_sats;
 
     counter!(
         SWAP_VOLUME_TOTAL_METRIC,
-        "market" => market,
+        "market" => market.clone(),
         "side" => SWAP_VOLUME_SIDE_LABEL,
         "source" => SWAP_VOLUME_SOURCE_LABEL,
     )
     .increment(increment);
+
+    counter!(
+        SWAP_FEES_TOTAL_METRIC,
+        "market" => market,
+        "side" => SWAP_VOLUME_SIDE_LABEL,
+        "source" => SWAP_VOLUME_SOURCE_LABEL,
+    )
+    .increment(protocol_fee);
 }
 
 fn settlement_volume_increment(lot: &Lot) -> Option<u64> {
