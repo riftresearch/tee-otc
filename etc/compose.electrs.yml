@@ -155,6 +155,8 @@ services:
           CMD ["./electrs"]
       command:
         - "./electrs"
+        - "--daemon_rpc_addr"
+        - "bitcoin-core:8332"
         - "--daemon-dir"
         - "/home/bitcoin/.bitcoin"
         - "--db-dir"
