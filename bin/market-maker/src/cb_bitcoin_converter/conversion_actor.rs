@@ -97,6 +97,12 @@ pub async fn run_rebalancer(
             .context(GetBalanceSnafu)?;
         let cbbtc = cbbtc_balance.total_balance.to::<u64>();
 
+        let eth_balance = evm_wallet
+            .balance(&TokenIdentifier::Native)
+            .await
+            .context(GetBalanceSnafu)?;
+        let eth_native = eth_balance.native_balance.to::<u128>();
+
         let total = btc.saturating_add(cbbtc);
 
         // --- metrics: snapshot every loop, even if no rebalance ---
@@ -104,6 +110,7 @@ pub async fn run_rebalancer(
         gauge!("mm_balance_sats", "asset" => "btc").set(btc as f64);
         gauge!("mm_balance_sats", "asset" => "cbbtc").set(cbbtc as f64);
         gauge!("mm_total_sats").set(total as f64);
+        gauge!("mm_eth_balance_wei").set(eth_native as f64);
 
         // Native vs deposit key balance metrics
         let btc_native = btc_balance.native_balance.to::<u64>();

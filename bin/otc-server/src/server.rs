@@ -1,7 +1,12 @@
 use crate::{
-    OtcServerArgs, Result, api::swaps::{
-        BlockHashResponse, CreateSwapRequest, CreateSwapResponse, RefundSwapRequest, RefundSwapResponse, SwapResponse
-    }, config::Settings, db::{Database, swap_repo::SWAP_VOLUME_TOTAL_METRIC}, services::{MMRegistry, SwapManager, SwapMonitoringService}
+    api::swaps::{
+        BlockHashResponse, CreateSwapRequest, CreateSwapResponse, RefundSwapRequest,
+        RefundSwapResponse, SwapResponse,
+    },
+    config::Settings,
+    db::{swap_repo::SWAP_VOLUME_TOTAL_METRIC, Database},
+    services::{MMRegistry, SwapManager, SwapMonitoringService},
+    OtcServerArgs, Result,
 };
 use axum::{
     extract::{
@@ -453,7 +458,11 @@ async fn get_best_bitcoin_hash(
         .chain_registry
         .get(&otc_models::ChainType::Bitcoin)
         .unwrap();
-    chain.get_best_hash().await.map_err(Into::into).map(|hash| Json(BlockHashResponse { block_hash: hash }))
+    chain
+        .get_best_hash()
+        .await
+        .map_err(Into::into)
+        .map(|hash| Json(BlockHashResponse { block_hash: hash }))
 }
 
 async fn get_best_ethereum_hash(
@@ -463,11 +472,19 @@ async fn get_best_ethereum_hash(
         .chain_registry
         .get(&otc_models::ChainType::Ethereum)
         .unwrap();
-    chain.get_best_hash().await.map_err(Into::into).and_then(|hash| if hash.starts_with("0x") {
-        Ok(Json(BlockHashResponse { block_hash: hash }))
-    } else {
-        Ok(Json(BlockHashResponse { block_hash: format!("0x{}", hash) }))
-    })
+    chain
+        .get_best_hash()
+        .await
+        .map_err(Into::into)
+        .and_then(|hash| {
+            if hash.starts_with("0x") {
+                Ok(Json(BlockHashResponse { block_hash: hash }))
+            } else {
+                Ok(Json(BlockHashResponse {
+                    block_hash: format!("0x{}", hash),
+                }))
+            }
+        })
 }
 
 async fn create_swap(

@@ -194,58 +194,65 @@ impl Wallet for EVMWallet {
     }
 
     async fn balance(&self, token: &TokenIdentifier) -> WalletResult<WalletBalance> {
-        // TODO: This check should also include a check that we can pay for gas
-        if ensure_valid_token(token).is_err() {
-            return Err(WalletError::UnsupportedToken {
-                token: token.clone(),
-                loc: location!(),
-            });
-        }
-
-        let token_address = match token {
+        match token {
             TokenIdentifier::Native => {
-                return Err(WalletError::UnsupportedToken {
-                    token: token.clone(),
-                    loc: location!(),
-                });
+                let native_balance = self
+                    .provider
+                    .get_balance(self.tx_broadcaster.sender)
+                    .await
+                    .map_err(|e| WalletError::BalanceCheckFailed {
+                        source: Box::new(e),
+                    })?;
+
+                Ok(WalletBalance {
+                    total_balance: native_balance,
+                    native_balance,
+                    deposit_key_balance: U256::from(0),
+                })
             }
             TokenIdentifier::Address(address) => {
-                let res = address.parse::<Address>();
-                if res.is_err() {
-                    return Err(WalletError::UnsupportedToken {
-                        token: token.clone(),
-                        loc: location!(),
-                    });
+                // TODO: This check should also include a check that we can pay for gas
+                ensure_valid_token(token)?;
+
+                let token_address = match address.parse::<Address>() {
+                    Ok(addr) => addr,
+                    Err(_) => {
+                        return Err(WalletError::UnsupportedToken {
+                            token: token.clone(),
+                            loc: location!(),
+                        });
+                    }
+                };
+
+                let native_balance =
+                    get_erc20_balance(&self.provider, &token_address, &self.tx_broadcaster.sender)
+                        .await?;
+
+                let mut net_deposit_key_balance = U256::from(0);
+
+                if let Some(deposit_key_storage) = &self.deposit_key_storage {
+                    let deposit_key_bal = deposit_key_storage
+                        .balance(&Currency {
+                            chain: ChainType::Ethereum,
+                            token: token.clone(),
+                            decimals: 8, //TODO(med): this should not be hardcoded
+                        })
+                        .await
+                        .map_err(|e| WalletError::BalanceCheckFailed {
+                            source: Box::new(e),
+                        })?;
+                    net_deposit_key_balance += deposit_key_bal;
                 }
-                res.unwrap()
-            }
-        };
-        let native_balance =
-            get_erc20_balance(&self.provider, &token_address, &self.tx_broadcaster.sender).await?;
 
-        let mut net_deposit_key_balance = U256::from(0);
+                let total_balance = native_balance.saturating_add(net_deposit_key_balance);
 
-        if let Some(deposit_key_storage) = &self.deposit_key_storage {
-            let deposit_key_bal = deposit_key_storage
-                .balance(&Currency {
-                    chain: ChainType::Ethereum,
-                    token: token.clone(),
-                    decimals: 8, //TODO(med): this should not be hardcoded
+                Ok(WalletBalance {
+                    total_balance,
+                    native_balance,
+                    deposit_key_balance: net_deposit_key_balance,
                 })
-                .await
-                .map_err(|e| WalletError::BalanceCheckFailed {
-                    source: Box::new(e),
-                })?;
-            net_deposit_key_balance += deposit_key_bal;
+            }
         }
-
-        let total_balance = native_balance.saturating_add(net_deposit_key_balance);
-
-        Ok(WalletBalance {
-            total_balance,
-            native_balance,
-            deposit_key_balance: net_deposit_key_balance,
-        })
     }
 
     fn chain_type(&self) -> ChainType {

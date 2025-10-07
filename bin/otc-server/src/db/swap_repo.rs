@@ -236,7 +236,7 @@ impl SwapRepository {
 
     pub async fn get_active_swaps(&self) -> OtcServerResult<Vec<Swap>> {
         let cutoff_time = utc::now() - chrono::Duration::hours(24);
-        
+
         let rows = sqlx::query(
             r"
             SELECT 
