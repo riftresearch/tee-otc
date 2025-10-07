@@ -154,6 +154,7 @@ services:
           EXPOSE 3000
           CMD ["./electrs"]
       command:
+        - "./electrs"
         - "--daemon-dir"
         - "/home/bitcoin/.bitcoin"
         - "--db-dir"
@@ -161,6 +162,8 @@ services:
         - "-vvvvv"
         - "--http-addr"
         - "0.0.0.0:3000"
+        - "--utxos-limit"
+        - "100000"
       ports:
         - "3000:3000"
       volumes:

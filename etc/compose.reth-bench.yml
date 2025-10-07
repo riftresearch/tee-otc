@@ -24,12 +24,11 @@ configs:
           echo "Downloading Reth snapshot from: $$archive_url"
           echo "Download location: $$snapshot_file"
           
-          # Download with curl using range headers for resumable downloads
-          # -C - : Continue/resume a previous transfer (auto-detects offset)
-          # -L : Follow redirects
-          # -o : Output file
-          # --progress-bar : Show progress
-          curl -C - -L --progress-bar -o "$$snapshot_file" "$$archive_url"
+          # Download with wget using range headers for resumable downloads
+          # -c : Continue/resume a previous transfer
+          # -O : Output file
+          # --show-progress : Show progress bar
+          wget -c --show-progress -O "$$snapshot_file" "$$archive_url"
           
           echo "Download complete. Extracting to: $$reth_data_dir"
           
@@ -99,7 +98,7 @@ services:
       - "8545:8545" # rpc
       - "8551:8551" # engine
     volumes:
-      - reth_holesky_data_3:/root/.local/share/reth/holesky
+      - reth_holesky_data_5:/root/.local/share/reth/holesky
       - reth_logs:/root/logs
       #- eth_jwt_data:/root/jwt:ro
     configs:
@@ -121,4 +120,4 @@ networks:
 
 volumes:
   reth_logs:
-  reth_holesky_data_3:
+  reth_holesky_data_5:
