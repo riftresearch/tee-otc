@@ -1,7 +1,7 @@
 use metrics::counter;
 use otc_models::{
-    ChainType, Lot, MMDepositStatus, SettlementStatus, Swap, SwapStatus, TokenIdentifier,
-    UserDepositStatus,
+    ChainType, LatestRefund, Lot, MMDepositStatus, SettlementStatus, Swap, SwapStatus,
+    TokenIdentifier, UserDepositStatus,
 };
 use sqlx::postgres::PgPool;
 use sqlx::Row;
@@ -9,8 +9,9 @@ use tracing::warn;
 use uuid::Uuid;
 
 use super::conversions::{
-    chain_type_from_db, lot_from_db, metadata_to_json, mm_deposit_status_to_json,
-    settlement_status_to_json, user_deposit_status_from_json, user_deposit_status_to_json,
+    chain_type_from_db, latest_refund_to_json, lot_from_db, metadata_to_json,
+    mm_deposit_status_to_json, settlement_status_to_json, user_deposit_status_from_json,
+    user_deposit_status_to_json,
 };
 use super::row_mappers::FromRow;
 use crate::db::quote_repo::QuoteRepository;
@@ -64,6 +65,10 @@ impl SwapRepository {
             Some(status) => Some(settlement_status_to_json(status)?),
             None => None,
         };
+        let latest_refund_json = match &swap.latest_refund {
+            Some(status) => Some(latest_refund_to_json(status)?),
+            None => None,
+        };
         let metadata_json = metadata_to_json(&swap.metadata)?;
 
         self.quote_repo.create(&swap.quote).await?;
@@ -77,6 +82,7 @@ impl SwapRepository {
                 user_destination_address, user_evm_account_address,
                 status,
                 user_deposit_status, mm_deposit_status, settlement_status,
+                latest_refund,
                 failure_reason, failure_at,
                 mm_notified_at, mm_private_key_sent_at,
                 created_at, updated_at
@@ -87,7 +93,7 @@ impl SwapRepository {
                 $8, $9,
                 $10, $11, $12, $13, $14,
                 $15, $16,
-                $17, $18, $19
+                $17, $18, $19, $20
             )
             ",
         )
@@ -104,6 +110,7 @@ impl SwapRepository {
         .bind(user_deposit_json)
         .bind(mm_deposit_json)
         .bind(settlement_json)
+        .bind(latest_refund_json)
         .bind(&swap.failure_reason)
         .bind(swap.failure_at)
         .bind(swap.mm_notified_at)
@@ -126,6 +133,7 @@ impl SwapRepository {
                 s.user_destination_address, s.user_evm_account_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
+                s.latest_refund,
                 s.failure_reason, s.failure_at,
                 s.mm_notified_at, s.mm_private_key_sent_at,
                 s.created_at, s.updated_at,
@@ -218,6 +226,32 @@ impl SwapRepository {
         Ok(())
     }
 
+    pub async fn update_latest_refund(
+        &self,
+        id: Uuid,
+        refund: &LatestRefund,
+    ) -> OtcServerResult<()> {
+        let refund_json = latest_refund_to_json(refund)?;
+        let now = utc::now();
+
+        sqlx::query(
+            r#"
+            UPDATE swaps
+            SET
+                latest_refund = $2,
+                updated_at = $3
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(refund_json)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
     pub async fn update_settlement(
         &self,
         id: Uuid,
@@ -256,6 +290,7 @@ impl SwapRepository {
                 s.user_destination_address, s.user_evm_account_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
+                s.latest_refund,
                 s.failure_reason, s.failure_at,
                 s.mm_notified_at, s.mm_private_key_sent_at,
                 s.created_at, s.updated_at,
@@ -423,6 +458,11 @@ impl SwapRepository {
             .as_ref()
             .map(settlement_status_to_json)
             .transpose()?;
+        let latest_refund_json = swap
+            .latest_refund
+            .as_ref()
+            .map(latest_refund_to_json)
+            .transpose()?;
         sqlx::query(
             r"
             UPDATE swaps
@@ -431,11 +471,12 @@ impl SwapRepository {
                 user_deposit_status = $3,
                 mm_deposit_status = $4,
                 settlement_status = $5,
-                failure_reason = $6,
-                failure_at = $7,
-                mm_notified_at = $8,
-                mm_private_key_sent_at = $9,
-                updated_at = $10
+                latest_refund = $6,
+                failure_reason = $7,
+                failure_at = $8,
+                mm_notified_at = $9,
+                mm_private_key_sent_at = $10,
+                updated_at = $11
             WHERE id = $1
             ",
         )
@@ -444,6 +485,7 @@ impl SwapRepository {
         .bind(user_deposit_json)
         .bind(mm_deposit_json)
         .bind(settlement_json)
+        .bind(latest_refund_json)
         .bind(&swap.failure_reason)
         .bind(swap.failure_at)
         .bind(swap.mm_notified_at)
@@ -465,6 +507,7 @@ impl SwapRepository {
                 s.user_destination_address, s.user_evm_account_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
+                s.latest_refund,
                 s.failure_reason, s.failure_at,
                 s.mm_notified_at, s.mm_private_key_sent_at,
                 s.created_at, s.updated_at,
@@ -701,8 +744,8 @@ mod tests {
     use alloy::primitives::U256;
     use chrono::{Duration, Utc};
     use otc_models::{
-        ChainType, Currency, FeeSchedule, Lot, MMDepositStatus, Metadata, Quote, SettlementStatus,
-        Swap, SwapStatus, TokenIdentifier, UserDepositStatus,
+        ChainType, Currency, FeeSchedule, LatestRefund, Lot, MMDepositStatus, Metadata, Quote,
+        SettlementStatus, Swap, SwapStatus, TokenIdentifier, UserDepositStatus,
     };
     use serde_json;
     use uuid::Uuid;
@@ -768,6 +811,7 @@ mod tests {
             user_deposit_status: None,
             mm_deposit_status: None,
             settlement_status: None,
+            latest_refund: None,
             failure_reason: None,
             failure_at: None,
             mm_notified_at: None,
@@ -893,6 +937,7 @@ mod tests {
                 last_checked: now + Duration::minutes(5),
             }),
             settlement_status: None,
+            latest_refund: None,
             failure_reason: None,
             failure_at: None,
             mm_notified_at: None,
@@ -991,6 +1036,7 @@ mod tests {
             user_deposit_status: None,
             mm_deposit_status: None,
             settlement_status: None,
+            latest_refund: None,
             failure_reason: None,
             failure_at: None,
             mm_notified_at: None,
@@ -1050,6 +1096,92 @@ mod tests {
             updated.settlement_status.unwrap().tx_hash,
             "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
         );
+
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn test_update_latest_refund(pool: sqlx::PgPool) -> sqlx::Result<()> {
+        let db = Database::from_pool(pool.clone()).await.unwrap();
+        let swaps = db.swaps();
+
+        let quote = Quote {
+            id: Uuid::new_v4(),
+            from: Lot {
+                currency: Currency {
+                    chain: ChainType::Bitcoin,
+                    token: TokenIdentifier::Native,
+                    decimals: 8,
+                },
+                amount: U256::from(1500000u64),
+            },
+            to: Lot {
+                currency: Currency {
+                    chain: ChainType::Ethereum,
+                    token: TokenIdentifier::Native,
+                    decimals: 18,
+                },
+                amount: U256::from(600000000000000000u64),
+            },
+            fee_schedule: FeeSchedule {
+                network_fee_sats: 1000,
+                liquidity_fee_sats: 2000,
+                protocol_fee_sats: 500,
+            },
+            market_maker_id: Uuid::new_v4(),
+            expires_at: utc::now() + Duration::hours(1),
+            created_at: utc::now(),
+        };
+
+        let mut user_deposit_salt = [0u8; 32];
+        let mut mm_nonce = [0u8; 16];
+        getrandom::getrandom(&mut user_deposit_salt).unwrap();
+        getrandom::getrandom(&mut mm_nonce).unwrap();
+
+        let swap = Swap {
+            id: Uuid::new_v4(),
+            market_maker_id: quote.market_maker_id,
+            quote: quote.clone(),
+            metadata: Metadata::default(),
+            user_deposit_salt,
+            user_deposit_address: "bc1qabcdhg8nmn6zq2q9c5u4q4wcnn8w9sredp3g4s".to_string(),
+            mm_nonce,
+            user_destination_address: "0x1234567890123456789012345678901234567890".to_string(),
+            user_evm_account_address: "0x1234567890123456789012345678901234567890"
+                .parse()
+                .unwrap(),
+            status: SwapStatus::WaitingUserDepositInitiated,
+            user_deposit_status: None,
+            mm_deposit_status: None,
+            settlement_status: None,
+            latest_refund: None,
+            failure_reason: None,
+            failure_at: None,
+            mm_notified_at: None,
+            mm_private_key_sent_at: None,
+            created_at: utc::now(),
+            updated_at: utc::now(),
+        };
+
+        swaps.create(&swap).await.unwrap();
+
+        let refund_record = LatestRefund {
+            timestamp: utc::now(),
+            recipient_address: "1RefundRecipientAddress".to_string(),
+        };
+
+        swaps
+            .update_latest_refund(swap.id, &refund_record)
+            .await
+            .unwrap();
+
+        let refreshed_swap = swaps.get(swap.id).await.unwrap();
+        let latest_refund = refreshed_swap.latest_refund.expect("latest_refund set");
+        assert_eq!(
+            latest_refund.recipient_address,
+            refund_record.recipient_address
+        );
+        assert_eq!(latest_refund.timestamp, refund_record.timestamp);
 
         Ok(())
     }

@@ -8,8 +8,8 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::conversions::{
-    fee_schedule_from_json, lot_from_db, metadata_from_json, mm_deposit_status_from_json,
-    settlement_status_from_json, user_deposit_status_from_json,
+    fee_schedule_from_json, latest_refund_from_json, lot_from_db, metadata_from_json,
+    mm_deposit_status_from_json, settlement_status_from_json, user_deposit_status_from_json,
 };
 use crate::error::{OtcServerError, OtcServerResult};
 
@@ -130,6 +130,12 @@ impl<'r> FromRow<'r> for Swap {
             None => None,
         };
 
+        let latest_refund_json: Option<serde_json::Value> = row.try_get("latest_refund")?;
+        let latest_refund = match latest_refund_json {
+            Some(json) => Some(latest_refund_from_json(json)?),
+            None => None,
+        };
+
         let failure_reason: Option<String> = row.try_get("failure_reason")?;
         let failure_at: Option<DateTime<Utc>> = row.try_get("failure_at")?;
         let mm_notified_at: Option<DateTime<Utc>> = row.try_get("mm_notified_at")?;
@@ -155,6 +161,7 @@ impl<'r> FromRow<'r> for Swap {
             user_deposit_status,
             mm_deposit_status,
             settlement_status,
+            latest_refund,
             failure_reason,
             failure_at,
             mm_notified_at,

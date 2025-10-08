@@ -64,6 +64,9 @@ CREATE TABLE swaps (
 
     -- Settlement tracking
     settlement_status JSONB,
+
+    -- Refund tracking
+    latest_refund JSONB,
     
     -- Failure tracking
     failure_reason TEXT,

@@ -9,7 +9,7 @@ use crate::services::MMRegistry;
 use alloy::hex::FromHexError;
 use alloy::primitives::Address;
 use otc_chains::ChainRegistry;
-use otc_models::{Metadata, Swap, SwapStatus, TokenIdentifier};
+use otc_models::{LatestRefund, Metadata, Swap, SwapStatus, TokenIdentifier};
 use snafu::prelude::*;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -145,6 +145,17 @@ impl SwapManager {
                     )
                     .await
                     .map_err(|e| SwapError::DumpToAddress { err: e.to_string() })?;
+
+                let latest_refund = LatestRefund {
+                    timestamp: utc::now(),
+                    recipient_address: refund_request.payload.refund_recipient.clone(),
+                };
+
+                self.db
+                    .swaps()
+                    .update_latest_refund(swap_id, &latest_refund)
+                    .await
+                    .context(DatabaseSnafu)?;
 
                 Ok(RefundSwapResponse {
                     swap_id,
@@ -293,6 +304,7 @@ impl SwapManager {
             user_deposit_status: None,
             mm_deposit_status: None,
             settlement_status: None,
+            latest_refund: None,
             failure_reason: None,
             failure_at: None,
             mm_notified_at: None,

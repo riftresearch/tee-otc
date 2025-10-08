@@ -1,8 +1,8 @@
 use crate::error::{OtcServerError, OtcServerResult};
 use alloy::primitives::U256;
 use otc_models::{
-    ChainType, Currency, FeeSchedule, Lot, MMDepositStatus, Metadata, SettlementStatus,
-    TokenIdentifier, UserDepositStatus,
+    ChainType, Currency, FeeSchedule, LatestRefund, Lot, MMDepositStatus, Metadata,
+    SettlementStatus, TokenIdentifier, UserDepositStatus,
 };
 use serde_json;
 
@@ -108,6 +108,18 @@ pub fn settlement_status_to_json(status: &SettlementStatus) -> OtcServerResult<s
 pub fn settlement_status_from_json(value: serde_json::Value) -> OtcServerResult<SettlementStatus> {
     serde_json::from_value(value).map_err(|e| OtcServerError::InvalidData {
         message: format!("Failed to deserialize settlement status: {e}"),
+    })
+}
+
+pub fn latest_refund_to_json(status: &LatestRefund) -> OtcServerResult<serde_json::Value> {
+    serde_json::to_value(status).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to serialize latest refund: {e}"),
+    })
+}
+
+pub fn latest_refund_from_json(value: serde_json::Value) -> OtcServerResult<LatestRefund> {
+    serde_json::from_value(value).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to deserialize latest refund: {e}"),
     })
 }
 

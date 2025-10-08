@@ -317,6 +317,7 @@ mod tests {
             user_deposit_status: None,
             mm_deposit_status: None,
             settlement_status: None,
+            latest_refund: None,
             failure_reason: None,
             failure_at: None,
             mm_notified_at: None,

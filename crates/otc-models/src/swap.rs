@@ -36,6 +36,9 @@ pub struct Swap {
     // Settlement tracking
     pub settlement_status: Option<SettlementStatus>,
 
+    // Refund tracking
+    pub latest_refund: Option<LatestRefund>,
+
     // Failure/timeout tracking
     pub failure_reason: Option<String>,
     pub failure_at: Option<DateTime<Utc>>,
@@ -128,6 +131,12 @@ pub struct SettlementStatus {
     pub confirmations: u64,
     pub completed_at: Option<DateTime<Utc>>,
     pub fee: Option<U256>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LatestRefund {
+    pub timestamp: DateTime<Utc>,
+    pub recipient_address: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
