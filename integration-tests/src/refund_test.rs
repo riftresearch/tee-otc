@@ -1,3 +1,4 @@
+use crate::utils::RefundRequestSignature;
 use alloy::network::TransactionBuilder;
 use alloy::serde::storage::from_bytes_to_b256;
 use alloy::signers::k256::ecdsa::SigningKey;
@@ -5,7 +6,6 @@ use alloy::signers::k256::Secp256k1;
 use alloy::signers::local::PrivateKeySigner;
 use mock_instant::global::MockClock;
 use std::time::Duration;
-use crate::utils::RefundRequestSignature;
 
 use alloy::primitives::{Bytes, U256};
 use alloy::providers::{Provider, ProviderBuilder, WsConnect};
@@ -288,7 +288,9 @@ async fn test_refund_from_bitcoin_user_deposit(
         refund_recipient: user_account.bitcoin_wallet.address.to_string(),
         refund_transaction_fee: U256::from(2000),
     };
-    let signer = PrivateKeySigner::from_signing_key(SigningKey::from_bytes(&user_account.secret_bytes.into()).unwrap());
+    let signer = PrivateKeySigner::from_signing_key(
+        SigningKey::from_bytes(&user_account.secret_bytes.into()).unwrap(),
+    );
     let signature = refund_payload.sign(&signer).to_vec();
     let refund_request = RefundSwapRequest {
         payload: refund_payload,
@@ -586,7 +588,9 @@ async fn test_refund_from_evm_user_deposit(
 
     // Now refund the swap (advance time so that the swap can be refunded)
     MockClock::advance_system_time(Duration::from_secs(60 * 61));
-    let signer = PrivateKeySigner::from_signing_key(SigningKey::from_bytes(&user_account.secret_bytes.into()).unwrap());
+    let signer = PrivateKeySigner::from_signing_key(
+        SigningKey::from_bytes(&user_account.secret_bytes.into()).unwrap(),
+    );
     let refund_payload = RefundPayload {
         swap_id: response_json.swap_id,
         refund_recipient: user_account.ethereum_address.to_string(),

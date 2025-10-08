@@ -1,7 +1,6 @@
 pub mod transaction_broadcaster;
 
-use std::str::FromStr;
-use std::sync::Arc;
+use std::{str::FromStr, sync::Arc, time::Duration};
 
 use ::esplora_client::{OutPoint, Txid};
 use alloy::primitives::U256;
@@ -256,7 +255,38 @@ impl WalletTrait for BitcoinWallet {
         tx_hash: &str,
         confirmations: u64,
     ) -> Result<(), WalletError> {
-        // TODO(high): implement this
+        let txid = Txid::from_str(tx_hash).map_err(|e| WalletError::ParseAddressFailed {
+            context: e.to_string(),
+        })?;
+
+        loop {
+            let status = self
+                .esplora_client
+                .get_tx_status(&txid)
+                .await
+                .map_err(|e| WalletError::EsploraClientError {
+                    source: e,
+                    loc: location!(),
+                })?;
+
+            if status.confirmed {
+                if let Some(block_height) = status.block_height {
+                    let current_height = self.esplora_client.get_height().await.map_err(|e| {
+                        WalletError::EsploraClientError {
+                            source: e,
+                            loc: location!(),
+                        }
+                    })?;
+
+                    if (block_height as u64) + confirmations <= current_height as u64 {
+                        break;
+                    }
+                }
+            }
+
+            tokio::time::sleep(Duration::from_secs(12)).await;
+        }
+
         Ok(())
     }
 

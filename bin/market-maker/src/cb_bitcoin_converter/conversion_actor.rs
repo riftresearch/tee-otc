@@ -108,7 +108,6 @@ pub async fn run_rebalancer(
         let eth_native_str: String = format_units(eth_native, "ether").unwrap();
         let eth_native_f64 = eth_native_str.parse::<f64>().unwrap();
 
-
         // --- metrics: snapshot every loop, even if no rebalance ---
         counter!("mm_loop_iterations_total").increment(1);
         gauge!("mm_balance_sats", "asset" => "btc").set(btc as f64);

@@ -53,7 +53,10 @@ pub enum SwapError {
     InvalidEvmAccountAddress { source: FromHexError },
 
     #[snafu(display("Invalid destination address: {} for chain {:?}", address, chain))]
-    InvalidDestinationAddress { address: String, chain: otc_models::ChainType },
+    InvalidDestinationAddress {
+        address: String,
+        chain: otc_models::ChainType,
+    },
 
     #[snafu(display("Invalid refund attempt: {}", reason))]
     InvalidRefundAttempt { reason: String },
@@ -108,9 +111,16 @@ impl SwapManager {
     ) -> SwapResult<RefundSwapResponse> {
         let swap_id = refund_request.payload.swap_id;
         let swap = self.db.swaps().get(swap_id).await.context(DatabaseSnafu)?;
-        let signer_address = refund_request.payload.get_signer_address_from_signature(&refund_request.signature).map_err(|_| SwapError::BadRefundRequest { reason: "Bad signature".to_string() })?;
+        let signer_address = refund_request
+            .payload
+            .get_signer_address_from_signature(&refund_request.signature)
+            .map_err(|_| SwapError::BadRefundRequest {
+                reason: "Bad signature".to_string(),
+            })?;
         if signer_address != swap.user_evm_account_address {
-            return Err(SwapError::BadRefundRequest { reason: "Wrong signer address".to_string() });
+            return Err(SwapError::BadRefundRequest {
+                reason: "Wrong signer address".to_string(),
+            });
         }
 
         match swap.can_be_refunded() {
@@ -174,12 +184,14 @@ impl SwapManager {
         Self::validate_metadata(&metadata)?;
 
         // ensure the user destination address is valid
-        let receive_chain = self.chain_registry.get(&quote.to.currency.chain).ok_or(SwapError::ChainNotSupported {
-            chain: quote.to.currency.chain,
-        })?;
+        let receive_chain = self.chain_registry.get(&quote.to.currency.chain).ok_or(
+            SwapError::ChainNotSupported {
+                chain: quote.to.currency.chain,
+            },
+        )?;
 
-        if !receive_chain.validate_address(&user_destination_address) { 
-            return Err(SwapError::InvalidDestinationAddress { 
+        if !receive_chain.validate_address(&user_destination_address) {
+            return Err(SwapError::InvalidDestinationAddress {
                 address: user_destination_address,
                 chain: quote.to.currency.chain,
             });
@@ -189,7 +201,6 @@ impl SwapManager {
         if quote.expires_at < utc::now() {
             return Err(SwapError::QuoteExpired);
         }
-
 
         // 2. Ask market maker if they'll fill this quote
         info!(

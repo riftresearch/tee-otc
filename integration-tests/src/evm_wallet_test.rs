@@ -394,7 +394,6 @@ async fn test_evm_wallet_error_handling(
 
     assert!(result.is_err(), "Should fail with invalid address");
 
-
     // Clean up
     join_set.abort_all();
 

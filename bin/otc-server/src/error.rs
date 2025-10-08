@@ -157,9 +157,14 @@ impl From<crate::services::swap_manager::SwapError> for OtcServerError {
                 OtcServerError::BadRequest { message: reason }
             }
             SwapError::InvalidDestinationAddress { address, chain } => OtcServerError::BadRequest {
-                message: format!("Invalid destination address: {} for chain {:?}", address, chain),
+                message: format!(
+                    "Invalid destination address: {} for chain {:?}",
+                    address, chain
+                ),
             },
-            SwapError::BadRefundRequest { reason } => OtcServerError::BadRequest { message: reason },
+            SwapError::BadRefundRequest { reason } => {
+                OtcServerError::BadRequest { message: reason }
+            }
             SwapError::InvalidMetadata { reason } => OtcServerError::BadRequest { message: reason },
             SwapError::DumpToAddress { err } => OtcServerError::Internal { message: err },
         }
