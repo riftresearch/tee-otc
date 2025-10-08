@@ -49,6 +49,9 @@ pub enum SwapError {
     #[snafu(display("Invalid EVM account address: {}", source))]
     InvalidEvmAccountAddress { source: FromHexError },
 
+    #[snafu(display("Invalid destination address: {} for chain {:?}", address, chain))]
+    InvalidDestinationAddress { address: String, chain: otc_models::ChainType },
+
     #[snafu(display("Invalid refund attempt: {}", reason))]
     InvalidRefundAttempt { reason: String },
 
@@ -164,10 +167,23 @@ impl SwapManager {
         let metadata = metadata.unwrap_or_default();
         Self::validate_metadata(&metadata)?;
 
+        // ensure the user destination address is valid
+        let receive_chain = self.chain_registry.get(&quote.to.currency.chain).ok_or(SwapError::ChainNotSupported {
+            chain: quote.to.currency.chain,
+        })?;
+
+        if !receive_chain.validate_address(&user_destination_address) { 
+            return Err(SwapError::InvalidDestinationAddress { 
+                address: user_destination_address,
+                chain: quote.to.currency.chain,
+            });
+        }
+
         // 1. Check if quote has expired
         if quote.expires_at < utc::now() {
             return Err(SwapError::QuoteExpired);
         }
+
 
         // 2. Ask market maker if they'll fill this quote
         info!(
