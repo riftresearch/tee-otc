@@ -25,6 +25,7 @@ reqwest = {workspace = true}
 uuid = {workspace= true}
 eip7702-delegator-contract = {workspace=true}
 eip3009-erc20-contract = {workspace=true}
+libc = {workspace=true} 
 utc = {workspace=true}
 
 

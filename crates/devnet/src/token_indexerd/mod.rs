@@ -1,13 +1,15 @@
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::time::Duration;
 use tokio::{
     net::TcpListener,
     process::{Child, Command},
-    time::{sleep, timeout},
 };
-use tracing::{info, warn};
+use tracing::info;
 use uuid::Uuid;
+
+#[cfg(unix)]
+#[allow(unused_imports)] // Needed for pre_exec method
+use std::os::unix::process::CommandExt;
 
 const HOST: &str = "127.0.0.1";
 
@@ -67,6 +69,17 @@ impl TokenIndexerInstance {
         .env("PONDER_CONTRACT_START_BLOCK", "0")
         .env("PONDER_LOG_LEVEL", "trace");
 
+        // Set the child process to be the leader of its own process group
+        // This prevents killing the parent test process when we clean up
+        #[cfg(unix)]
+        unsafe {
+            cmd.pre_exec(|| {
+                // setpgid(0, 0) makes this process the leader of a new process group
+                libc::setpgid(0, 0);
+                Ok(())
+            });
+        }
+
         if pipe_output {
             cmd.stdout(Stdio::inherit()).stderr(Stdio::inherit());
         } else {
@@ -110,23 +123,22 @@ impl Drop for TokenIndexerInstance {
 
 impl TokenIndexerInstance {
     fn kill_process_tree(&self, pid: u32) {
-        let mut pids = vec![pid];
-
-        // Get direct children
-        if let Ok(output) = std::process::Command::new("pgrep")
-            .arg("-P")
-            .arg(pid.to_string())
-            .output()
-        {
-            let children: Vec<u32> = String::from_utf8_lossy(&output.stdout)
-                .lines()
-                .filter_map(|line| line.trim().parse().ok())
-                .collect();
-            pids.extend(children);
+        let pgid = unsafe {
+            libc::getpgid(pid as i32)
+        };
+    
+        if pgid >= 0 {
+            // Send SIGTERM to entire process group
+            // This is safe because the child process was spawned with its own process group
+            // via setpgid(0, 0), so this will only kill the child and its descendants,
+            // not the parent test process
+            unsafe { libc::kill(-pgid, libc::SIGTERM); }
+        } else {
+            // Fallback: just kill the parent process if getpgid failed
+            let _ = std::process::Command::new("kill")
+                .arg("-TERM")
+                .arg(pid.to_string())
+                .output();
         }
-
-        // Kill all processes in one command
-        let pid_args: Vec<String> = pids.iter().map(|p| p.to_string()).collect();
-        let _ = std::process::Command::new("kill").args(&pid_args).output();
     }
 }

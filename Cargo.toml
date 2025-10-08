@@ -84,6 +84,7 @@ hmac = "0.12.1"
 base64 = "0.22.1"
 mock_instant = "0.6.0"
 dstack-sdk = "0.1.0"
+libc = "0.2.176"
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3
