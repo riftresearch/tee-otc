@@ -1,8 +1,10 @@
-use alloy::primitives::{Address, U256};
+use alloy::{dyn_abi::{DynSolType, DynSolValue}, primitives::{Address, U256, keccak256}, signers::Signature};
 use chrono::{DateTime, Utc};
 use otc_models::{ChainType, Metadata, Quote, RefundSwapReason};
 use serde::{Deserialize, Serialize};
+use std::sync::LazyLock;
 use uuid::Uuid;
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockHashResponse {
@@ -25,6 +27,46 @@ pub struct RefundSwapRequest {
     /// The signature of the full EIP712 typed data
     pub signature: Vec<u8>,
 }
+
+
+pub static RIFT_DOMAIN_TYPE: LazyLock<DynSolType> = LazyLock::new(|| DynSolType::Tuple(vec![
+    DynSolType::String,    // name
+    DynSolType::String,    // version
+    DynSolType::Uint(256), // chainId
+    DynSolType::Address,   // verifyingContract
+]));
+
+pub static RIFT_DOMAIN_VALUE: LazyLock<DynSolValue> = LazyLock::new(|| DynSolValue::Tuple(vec![
+    DynSolValue::String("Rift OTC".to_string()),
+    DynSolValue::String("1.0.0".to_string()),
+    DynSolValue::Uint(U256::from(1), 256),
+    DynSolValue::Address(Address::from([0x42; 20])),
+]));
+
+
+impl RefundPayload {
+    pub fn get_signer_address_from_signature(&self, signature: &[u8]) -> Result<Address, String> {
+        let message_value = DynSolValue::Tuple(vec![
+            DynSolValue::String(self.swap_id.to_string()),
+            DynSolValue::String(self.refund_recipient.to_string()),
+            DynSolValue::Uint(self.refund_transaction_fee, 256),
+        ]);
+
+        let encoded_domain = RIFT_DOMAIN_VALUE.abi_encode();
+        let encoded_message = message_value.abi_encode();
+
+        let domain_separator = keccak256(&encoded_domain);
+        let message_hash = keccak256(&encoded_message);
+        let eip712_hash = keccak256([&[0x19, 0x01], &domain_separator[..], &message_hash[..]].concat());
+        let recovered_address = Signature::from_raw(signature)
+            .map_err(|e| format!("Passed signature could not be parsed: {}", e))?
+            .recover_address_from_prehash(&eip712_hash)
+            .map_err(|e| format!("Bad signature for prehash: {}", e))?;
+
+        Ok(recovered_address)
+    }
+}
+
 
 /// Response after refunding a swap
 #[derive(Debug, Clone, Serialize, Deserialize)]

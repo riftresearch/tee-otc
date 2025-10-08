@@ -22,6 +22,9 @@ const MARKET_MAKER_VALIDATION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Snafu)]
 pub enum SwapError {
+    #[snafu(display("Bad refund request: {}", reason))]
+    BadRefundRequest { reason: String },
+
     #[snafu(display("Quote not found: {}", quote_id))]
     QuoteNotFound { quote_id: Uuid },
 
@@ -105,7 +108,10 @@ impl SwapManager {
     ) -> SwapResult<RefundSwapResponse> {
         let swap_id = refund_request.payload.swap_id;
         let swap = self.db.swaps().get(swap_id).await.context(DatabaseSnafu)?;
-        // TODO(high): Validate the EIP712 signature in the request before proceeding
+        let signer_address = refund_request.payload.get_signer_address_from_signature(&refund_request.signature).map_err(|_| SwapError::BadRefundRequest { reason: "Bad signature".to_string() })?;
+        if signer_address != swap.user_evm_account_address {
+            return Err(SwapError::BadRefundRequest { reason: "Wrong signer address".to_string() });
+        }
 
         match swap.can_be_refunded() {
             Some(reason) => {

@@ -5,12 +5,13 @@ use std::{
     time::Duration,
 };
 
+use alloy::{dyn_abi::DynSolValue, primitives::keccak256, signers::{local::PrivateKeySigner, Signer, SignerSync}};
 use bitcoincore_rpc_async::Auth;
 use blockchain_utils::create_websocket_wallet_provider;
 use ctor::ctor;
 use devnet::{get_new_temp_dir, MultichainAccount};
 use market_maker::{evm_wallet::EVMWallet, MarketMakerArgs};
-use otc_server::{api::SwapResponse, OtcServerArgs};
+use otc_server::{api::{swaps::{RefundPayload, RIFT_DOMAIN_VALUE}, SwapResponse}, OtcServerArgs};
 use rfq_server::RfqServerArgs;
 use sqlx::{
     postgres::{PgConnectOptions, PgPoolOptions},
@@ -20,6 +21,29 @@ use tokio::{net::TcpListener, task::JoinSet};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
+
+pub trait RefundRequestSignature { 
+    fn sign(&self, signer: &PrivateKeySigner) -> Vec<u8>;
+}
+
+impl RefundRequestSignature for RefundPayload {
+    fn sign(&self, signer: &PrivateKeySigner) -> Vec<u8> {
+        let message_value = DynSolValue::Tuple(vec![
+            DynSolValue::String(self.swap_id.to_string()),
+            DynSolValue::String(self.refund_recipient.to_string()),
+            DynSolValue::Uint(self.refund_transaction_fee, 256),
+        ]);
+
+        let encoded_domain = RIFT_DOMAIN_VALUE.abi_encode();
+        let encoded_message = message_value.abi_encode();
+
+        let domain_separator = keccak256(&encoded_domain);
+        let message_hash = keccak256(&encoded_message);
+        let eip712_hash = keccak256([&[0x19, 0x01], &domain_separator[..], &message_hash[..]].concat());
+        let signature = signer.sign_hash_sync(&eip712_hash).unwrap();
+        signature.as_bytes().to_vec()
+    }
+}
 
 pub trait PgConnectOptionsExt {
     fn to_database_url(&self) -> String;

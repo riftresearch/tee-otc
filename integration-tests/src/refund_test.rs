@@ -1,6 +1,11 @@
 use alloy::network::TransactionBuilder;
+use alloy::serde::storage::from_bytes_to_b256;
+use alloy::signers::k256::ecdsa::SigningKey;
+use alloy::signers::k256::Secp256k1;
+use alloy::signers::local::PrivateKeySigner;
 use mock_instant::global::MockClock;
 use std::time::Duration;
+use crate::utils::RefundRequestSignature;
 
 use alloy::primitives::{Bytes, U256};
 use alloy::providers::{Provider, ProviderBuilder, WsConnect};
@@ -278,14 +283,18 @@ async fn test_refund_from_bitcoin_user_deposit(
     }
     // now refund the swap (advance time so that the swap can be refunded)
     MockClock::advance_system_time(Duration::from_secs(60 * 61));
-    let refund_request = RefundSwapRequest {
-        payload: RefundPayload {
-            swap_id: response_json.swap_id,
-            refund_recipient: user_account.bitcoin_wallet.address.to_string(),
-            refund_transaction_fee: U256::from(2000),
-        },
-        signature: vec![],
+    let refund_payload = RefundPayload {
+        swap_id: response_json.swap_id,
+        refund_recipient: user_account.bitcoin_wallet.address.to_string(),
+        refund_transaction_fee: U256::from(2000),
     };
+    let signer = PrivateKeySigner::from_signing_key(SigningKey::from_bytes(&user_account.secret_bytes.into()).unwrap());
+    let signature = refund_payload.sign(&signer).to_vec();
+    let refund_request = RefundSwapRequest {
+        payload: refund_payload,
+        signature: signature,
+    };
+
     let refund_response = client
         .post(format!("http://localhost:{otc_port}/api/v1/refund",))
         .json(&refund_request)
@@ -293,7 +302,16 @@ async fn test_refund_from_bitcoin_user_deposit(
         .await
         .unwrap();
 
-    let refund_response: RefundSwapResponse = refund_response.json().await.unwrap();
+    let response_status = refund_response.status();
+    let response_json = match response_status {
+        StatusCode::OK => refund_response.json::<RefundSwapResponse>().await.unwrap(),
+        _ => {
+            let response_text = refund_response.text().await;
+            panic!(
+                "Refund request should be successful but got {response_status:#?} {response_text:#?}"
+            );
+        }
+    };
 
     let bal_before = devnet
         .bitcoin
@@ -310,7 +328,7 @@ async fn test_refund_from_bitcoin_user_deposit(
     devnet
         .bitcoin
         .rpc_client
-        .send_raw_transaction(refund_response.tx_data)
+        .send_raw_transaction(response_json.tx_data)
         .await
         .unwrap();
     devnet.bitcoin.mine_blocks(6).await.unwrap();
@@ -568,13 +586,16 @@ async fn test_refund_from_evm_user_deposit(
 
     // Now refund the swap (advance time so that the swap can be refunded)
     MockClock::advance_system_time(Duration::from_secs(60 * 61));
+    let signer = PrivateKeySigner::from_signing_key(SigningKey::from_bytes(&user_account.secret_bytes.into()).unwrap());
+    let refund_payload = RefundPayload {
+        swap_id: response_json.swap_id,
+        refund_recipient: user_account.ethereum_address.to_string(),
+        refund_transaction_fee: U256::from(0),
+    };
+    let signature = refund_payload.sign(&signer).to_vec();
     let refund_request = RefundSwapRequest {
-        payload: RefundPayload {
-            swap_id: response_json.swap_id,
-            refund_recipient: user_account.ethereum_address.to_string(),
-            refund_transaction_fee: U256::from(0),
-        },
-        signature: vec![],
+        payload: refund_payload,
+        signature: signature,
     };
 
     let refund_response = client
@@ -582,7 +603,7 @@ async fn test_refund_from_evm_user_deposit(
         .json(&refund_request)
         .send()
         .await
-        .unwrap()
+        .expect("Refund request should succeed")
         .json::<RefundSwapResponse>()
         .await
         .unwrap();
