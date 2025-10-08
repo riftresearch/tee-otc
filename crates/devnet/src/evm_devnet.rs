@@ -76,7 +76,7 @@ impl EthDevnet {
                     interactive,
                     anvil.endpoint_url().to_string().as_str(),
                     anvil.ws_endpoint_url().to_string().as_str(),
-                    true,
+                    false,
                     anvil.chain_id(),
                     database_url,
                 )
