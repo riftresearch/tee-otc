@@ -1,12 +1,14 @@
 use std::{sync::Arc, time::Duration};
 
-use alloy::signers::local::PrivateKeySigner;
+use alloy::{primitives::Address, providers::{DynProvider, Provider}, signers::local::PrivateKeySigner};
 use anyhow::{Context, Result};
+use eip3009_erc20_contract::GenericEIP3009ERC20::GenericEIP3009ERC20Instance;
 use market_maker::{
-    bitcoin_wallet::BitcoinWallet, evm_wallet::EVMWallet, wallet::Wallet,
+    bitcoin_wallet::{transaction_broadcaster::BitcoinTransactionBroadcaster, BitcoinWallet}, evm_wallet::{build_transaction_with_validation, create_payment_executions, transaction_broadcaster::{EVMTransactionBroadcaster, PreflightCheck, TransactionExecutionResult}, EVMWallet}, wallet::{Payment, Wallet},
     Result as MarketMakerResult, WalletError,
 };
-use otc_models::{ChainType, Lot};
+use otc_models::{ChainType, Lot, TokenIdentifier};
+use snafu::location;
 use tokio::{task::JoinSet, time::sleep};
 use tracing::{debug, warn};
 
@@ -14,28 +16,45 @@ use crate::args::{BitcoinWalletConfig, Config, EvmWalletConfig};
 use blockchain_utils::create_websocket_wallet_provider;
 
 #[derive(Clone)]
-pub enum PaymentWallet {
-    Bitcoin(Arc<BitcoinWallet>),
-    Ethereum(Arc<EVMWallet>),
+pub enum SinglePaymentWallet {
+    Bitcoin(Arc<BitcoinTransactionBroadcaster>),
+    Ethereum(Arc<EVMTransactionBroadcaster>, DynProvider),
 }
 
-impl PaymentWallet {
+impl SinglePaymentWallet {
     pub fn chain_type(&self) -> ChainType {
         match self {
-            PaymentWallet::Bitcoin(_) => ChainType::Bitcoin,
-            PaymentWallet::Ethereum(_) => ChainType::Ethereum,
+            SinglePaymentWallet::Bitcoin(_) => ChainType::Bitcoin,
+            SinglePaymentWallet::Ethereum(_, _) => ChainType::Ethereum,
         }
     }
 
     pub async fn create_payment(&self, lot: &Lot, recipient: &str) -> Result<String> {
         match self {
-            PaymentWallet::Bitcoin(wallet) => {
+            SinglePaymentWallet::Bitcoin(wallet) => {
                 create_bitcoin_payment_with_retry(wallet, lot, recipient).await
             }
-            PaymentWallet::Ethereum(wallet) => wallet
-                .create_payment(lot, recipient, None)
-                .await
-                .map_err(map_wallet_error),
+            SinglePaymentWallet::Ethereum(wallet, provider) => { 
+
+                let sender = wallet.sender;
+                let token_address = match &lot.currency.token {
+                    TokenIdentifier::Address(address) => address.parse::<Address>().unwrap(),
+                    TokenIdentifier::Native => return Err(map_wallet_error(WalletError::UnsupportedToken { token: lot.currency.token.clone(), loc: location!() })),
+                };
+                let token_contract = GenericEIP3009ERC20Instance::new(token_address, provider.clone());
+                let payment_executions = create_payment_executions(&token_contract, &[recipient.parse::<Address>().unwrap()], &[lot.amount]);
+                let transaction_request = build_transaction_with_validation(&sender, provider.clone(), payment_executions, None)?;
+                let wallet_result = wallet
+                    .broadcast_transaction(transaction_request, PreflightCheck::Simulate)
+                    .await
+                    .map_err(map_wallet_error)?;
+                match wallet_result {
+                    TransactionExecutionResult::Success(tx_receipt) => {
+                        Ok(tx_receipt.transaction_hash.to_string())
+                    }
+                    _ => Err(map_wallet_error(WalletError::TransactionCreationFailed { reason: format!("{wallet_result:?}") })),
+                }
+            }
         }
     }
 }
@@ -48,14 +67,18 @@ const BTC_PAYMENT_RETRY_ATTEMPTS: usize = 10;
 const BTC_PAYMENT_RETRY_BACKOFF: Duration = Duration::from_millis(500);
 
 async fn create_bitcoin_payment_with_retry(
-    wallet: &Arc<BitcoinWallet>,
+    wallet: &Arc<BitcoinTransactionBroadcaster>,
     lot: &Lot,
     recipient: &str,
 ) -> Result<String> {
     let mut attempt = 0usize;
     loop {
         attempt += 1;
-        match wallet.create_payment(lot, recipient, None).await {
+        let payments = vec![Payment {
+            to_address: recipient.to_string(),
+            lot: lot.clone(),
+        }];
+        match wallet.broadcast_transaction(payments, vec![], None).await {
             Ok(txid) => {
                 if attempt > 1 {
                     debug!(attempt = attempt, "bitcoin payment succeeded after retry");
@@ -73,7 +96,7 @@ async fn create_bitcoin_payment_with_retry(
                     sleep(BTC_PAYMENT_RETRY_BACKOFF).await;
                     continue;
                 }
-                return Err(map_wallet_error(err));
+                return Err(map_wallet_error(WalletError::BitcoinWalletClient { source: err, loc: location!() }));
             }
         }
     }
@@ -86,7 +109,7 @@ fn should_retry_missing_or_spent(error_message: &str) -> bool {
 }
 
 pub struct WalletResources {
-    pub payment_wallet: PaymentWallet,
+    pub payment_wallet: SinglePaymentWallet,
     pub join_set: JoinSet<MarketMakerResult<()>>,
 }
 
@@ -99,7 +122,7 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
                 .as_ref()
                 .context("missing Bitcoin wallet configuration")?;
             let wallet = init_bitcoin_wallet(btc_cfg, &mut join_set).await?;
-            PaymentWallet::Bitcoin(Arc::new(wallet))
+            SinglePaymentWallet::Bitcoin(Arc::new(wallet.tx_broadcaster))
         }
         ChainType::Ethereum => {
             let evm_cfg = config
@@ -107,7 +130,8 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
                 .as_ref()
                 .context("missing Ethereum wallet configuration")?;
             let wallet = init_evm_wallet(evm_cfg, &mut join_set).await?;
-            PaymentWallet::Ethereum(Arc::new(wallet))
+            let provider = wallet.provider.clone().erased();
+            SinglePaymentWallet::Ethereum(Arc::new(wallet.tx_broadcaster), provider)
         }
     };
 

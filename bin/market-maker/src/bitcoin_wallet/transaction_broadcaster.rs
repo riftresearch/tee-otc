@@ -21,12 +21,12 @@ use crate::bitcoin_wallet::{
     BuildTransactionSnafu, ExtractTransactionSnafu, PersistWalletSnafu, PsbtNotFinalizedSnafu,
     ReceiverFailedSnafu, SignTransactionSnafu, SyncWalletSnafu,
 };
+use crate::wallet::Payment;
 
 use super::{BitcoinWalletError, PARALLEL_REQUESTS};
 
 pub struct TransactionRequest {
-    pub lot: Lot,
-    pub to_address: String,
+    pub payments: Vec<Payment>,
     pub foreign_utxos: Vec<ForeignUtxo>,
     pub mm_payment_validation: Option<MarketMakerPaymentValidation>,
     pub response_tx: oneshot::Sender<Result<String, BitcoinWalletError>>,
@@ -57,8 +57,7 @@ impl BitcoinTransactionBroadcaster {
                     &connection,
                     &esplora_client,
                     network,
-                    request.lot,
-                    request.to_address,
+                    request.payments,
                     request.foreign_utxos,
                     request.mm_payment_validation,
                 )
@@ -78,16 +77,14 @@ impl BitcoinTransactionBroadcaster {
 
     pub async fn broadcast_transaction(
         &self,
-        lot: Lot,
-        to_address: String,
+        payments: Vec<Payment>,
         foreign_utxos: Vec<ForeignUtxo>,
         mm_payment_validation: Option<MarketMakerPaymentValidation>,
     ) -> Result<String, BitcoinWalletError> {
         let (response_tx, response_rx) = oneshot::channel();
 
         let request = TransactionRequest {
-            lot,
-            to_address,
+            payments,
             foreign_utxos,
             mm_payment_validation,
             response_tx,
@@ -114,30 +111,38 @@ async fn process_transaction(
     connection: &Arc<Mutex<bdk_wallet::rusqlite::Connection>>,
     esplora_client: &Arc<esplora_client::AsyncClient>,
     network: bitcoin::Network,
-    lot: Lot,
-    to_address: String,
+    payments: Vec<Payment>,
     foreign_utxos: Vec<ForeignUtxo>,
     mm_payment_validation: Option<MarketMakerPaymentValidation>,
 ) -> Result<String, BitcoinWalletError> {
     let start_time = Instant::now();
 
-    info!(
-        "Processing Bitcoin transaction to {} for {:?}",
-        to_address, lot
-    );
+    if payments.len() > 1 {
+        info!("Processing batch bitcoin payments to {:?}", payments);
+    } else {
+        info!("Processing bitcoin payment to {:?}", payments[0]);
+    }
 
     // Parse the recipient address
-    let address = Address::from_str(&to_address)
-        .map_err(|e| BitcoinWalletError::InvalidAddress {
-            reason: e.to_string(),
-        })?
-        .require_network(network)
-        .map_err(|_| BitcoinWalletError::InvalidAddress {
-            reason: format!(
-                "Address {} is not valid for network {:?}",
-                to_address, network
-            ),
-        })?;
+    let mut payment_tuple: Vec<(Address, Amount)> = vec![];
+
+    for payment in payments {
+        let address = Address::from_str(&payment.to_address)
+            .map_err(|e| BitcoinWalletError::InvalidAddress {
+                reason: e.to_string(),
+            })?
+            .require_network(network)
+            .map_err(|_| BitcoinWalletError::InvalidAddress {
+                reason: format!(
+                    "Address {} is not valid for network {:?}",
+                    payment.to_address, network
+                ),
+            })?;
+        payment_tuple.push((
+            address,
+            Amount::from_sat(payment.lot.amount.to::<u64>()),
+        ));
+    }
 
     // Sync wallet before building transaction
     light_sync_wallet(wallet, connection, esplora_client).await?;
@@ -147,13 +152,13 @@ async fn process_transaction(
 
     // Check balance
     let balance = wallet_guard.balance();
-    let amount_sats = lot.amount.to::<u64>();
-    let amount = Amount::from_sat(amount_sats);
-    info!("balance: {:?}", balance);
+    info!("Wallet Balance before payment: {:?}", balance);
 
     // Build transaction
     let mut tx_builder = wallet_guard.build_tx();
-    tx_builder.add_recipient(address.script_pubkey(), amount);
+    for (address, amount) in payment_tuple {
+        tx_builder.add_recipient(address.script_pubkey(), amount);
+    }
 
     // Add OP_RETURN output with nonce if provided
     if let Some(mm_payment_validation) = mm_payment_validation {

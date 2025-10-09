@@ -10,6 +10,12 @@ use tokio::sync::oneshot;
 
 use crate::bitcoin_wallet::BitcoinWalletError;
 
+#[derive(Debug, Clone)]
+pub struct Payment {
+    pub lot: Lot,
+    pub to_address: String,
+}
+
 #[derive(Debug, Snafu)]
 pub enum WalletError {
     #[snafu(display("Failed to update fee map: {}", error))]

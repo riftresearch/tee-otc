@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::{
     args::Config,
     status::{SwapStage, SwapUpdate, UiEvent},
-    wallets::PaymentWallet,
+    wallets::SinglePaymentWallet,
 };
 
 pub struct RunSummary {
@@ -23,7 +23,7 @@ pub struct RunSummary {
 
 pub async fn run_load_test(
     config: Arc<Config>,
-    wallet: PaymentWallet,
+    wallet: SinglePaymentWallet,
     update_tx: UnboundedSender<UiEvent>,
 ) -> Result<RunSummary> {
     let client = Client::builder()
@@ -89,7 +89,7 @@ struct SwapContext {
     quote_url: Url,
     create_swap_url: Url,
     swap_status_base: Url,
-    wallet: PaymentWallet,
+    wallet: SinglePaymentWallet,
     update_tx: UnboundedSender<UiEvent>,
     index: usize,
 }

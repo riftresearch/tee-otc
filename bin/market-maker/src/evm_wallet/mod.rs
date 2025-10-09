@@ -32,7 +32,7 @@ use crate::{
 
 pub struct EVMWallet {
     pub tx_broadcaster: transaction_broadcaster::EVMTransactionBroadcaster,
-    provider: Arc<WebsocketWalletProvider>,
+    pub provider: Arc<WebsocketWalletProvider>,
     deposit_key_storage: Option<Arc<DepositKeyStorage>>,
 }
 
@@ -320,7 +320,105 @@ async fn get_erc20_balance(
     Ok(balance)
 }
 
-async fn create_evm_transfer_transaction(
+/// Attempts to acquire funding executions from deposit key storage to cover the lot.
+/// Returns executions that transfer funds from deposit keys to the sender address.
+async fn get_funding_executions_from_deposits(
+    deposit_key_storage: &Arc<DepositKeyStorage>,
+    lot: &Lot,
+    provider: &Arc<WebsocketWalletProvider>,
+    sender: &Address,
+) -> Result<Vec<Execution>, WalletError> {
+    let fill_status = deposit_key_storage
+        .take_deposits_that_fill_lot(lot)
+        .await
+        .map_err(|e| WalletError::DepositKeyStorageError {
+            source: e,
+            loc: location!(),
+        })?;
+
+    let provider = provider.clone().erased();
+    match fill_status {
+        FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
+            let mut executions = Vec::with_capacity(deposits.len());
+            for deposit in deposits.iter() {
+                // Move funds from the deposit key wallet to the MM sender address
+                // so the subsequent payment transfer can be covered.
+                let execution = deposit
+                    .to_authorized_erc20_transfer(&provider, sender)
+                    .await?;
+                executions.push(execution);
+            }
+            Ok(executions)
+        }
+        FillStatus::Empty => Ok(Vec::new()),
+    }
+}
+
+/// Creates payment executions for transferring tokens to recipients.
+pub fn create_payment_executions(
+    token_contract: &GenericEIP3009ERC20Instance<DynProvider>,
+    recipients: &[Address],
+    amounts: &[U256],
+) -> Vec<Execution> {
+    let token_address = token_contract.address().clone();
+    recipients
+        .iter()
+        .zip(amounts.iter())
+        .map(|(recipient, amount)| {
+            let calldata = token_contract.transfer(*recipient, *amount).calldata().clone();
+            Execution {
+                target: token_address,
+                value: U256::ZERO,
+                callData: calldata,
+            }
+        })
+        .collect()
+}
+
+/// Builds the final transaction request with delegator contract execution.
+/// Applies mm_payment_validation nonce if provided.
+pub fn build_transaction_with_validation(
+    sender: &Address,
+    provider: DynProvider,
+    executions: Vec<Execution>,
+    mm_payment_validation: Option<&MarketMakerPaymentValidation>,
+) -> Result<TransactionRequest, WalletError> {
+    debug!("executions: {executions:?}");
+
+    let delegator_contract = EIP7702DelegatorInstance::new(
+        Address::from_str(EIP7702_DELEGATOR_CROSSCHAIN_ADDRESS).unwrap(),
+        provider,
+    );
+
+    let mut transaction_request = delegator_contract
+        .execute_1(
+            ModeCode::Batch.as_fixed_bytes32(),
+            executions.abi_encode().into(),
+        )
+        .into_transaction_request();
+
+    // B/c of EIP7702, we need to set the `to` to the actual broadcast address
+    transaction_request.set_to(*sender);
+
+    // Add nonce to the end of calldata if provided
+    if let Some(mm_payment_validation) = mm_payment_validation {
+        let nonce = mm_payment_validation.embedded_nonce;
+        // Audit: Consider how this could be problematic if done with arbitrary addresses (not whitelisted)
+        let mut calldata_with_nonce = transaction_request
+            .input
+            .input()
+            .to_owned()
+            .unwrap()
+            .to_vec();
+        calldata_with_nonce.extend_from_slice(&nonce);
+        transaction_request.set_input(calldata_with_nonce);
+        transaction_request.set_input_and_data();
+    }
+
+    Ok(transaction_request)
+}
+
+pub async fn create_evm_transfer_transaction(
     sender: &Address,
     provider: &Arc<WebsocketWalletProvider>,
     lot: &Lot,
@@ -331,125 +429,53 @@ async fn create_evm_transfer_transaction(
     match &lot.currency.token {
         TokenIdentifier::Native => unimplemented!(),
         TokenIdentifier::Address(address) => {
-            let token_address =
-                address
-                    .parse::<Address>()
-                    .map_err(|_| WalletError::ParseAddressFailed {
-                        context: "invalid token address".to_string(),
-                    })?;
-            let to_address =
-                to_address
-                    .parse::<Address>()
-                    .map_err(|_| WalletError::ParseAddressFailed {
-                        context: "invalid to address".to_string(),
-                    })?;
+            let token_address = address.parse::<Address>().map_err(|_| {
+                WalletError::ParseAddressFailed {
+                    context: "invalid token address".to_string(),
+                }
+            })?;
+            let to_address = to_address.parse::<Address>().map_err(|_| {
+                WalletError::ParseAddressFailed {
+                    context: "invalid to address".to_string(),
+                }
+            })?;
 
             let fee_address =
                 Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Ethereum])
                     .unwrap();
 
-            let token_contract = GenericEIP3009ERC20Instance::new(token_address, provider);
-            let recipients = match mm_payment_validation.is_some() {
-                true => vec![to_address, fee_address],
-                false => vec![to_address],
-            };
-            let amounts = match mm_payment_validation.is_some() {
-                true => {
-                    let fee_amount = mm_payment_validation.as_ref().unwrap().fee_amount;
-                    vec![lot.amount, fee_amount]
-                }
-                false => vec![lot.amount],
+            // Determine recipients and amounts based on whether we have payment validation
+            let (recipients, amounts) = match &mm_payment_validation {
+                Some(validation) => (
+                    vec![to_address, fee_address],
+                    vec![lot.amount, validation.fee_amount],
+                ),
+                None => (vec![to_address], vec![lot.amount]),
             };
 
-            let erc20_funding_executions = match deposit_key_storage {
-                Some(deposit_key_storage) => {
-                    // If this is set, we have the option to try to fill this request with funds
-                    // stored in the deposit key storage. Technically, this looks like adding some `Execution`s
-                    // to the `delegator_executions` vector, that will add funds from the deposit key storage
-                    // the the market maker address
-                    let fill_status = deposit_key_storage
-                        .take_deposits_that_fill_lot(lot)
-                        .await
-                        .map_err(|e| WalletError::DepositKeyStorageError {
-                            source: e,
-                            loc: location!(),
-                        })?;
-
-                    let provider = provider.clone().erased();
-                    match fill_status {
-                        FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
-                            let mut executions = Vec::new();
-                            for deposit in deposits.iter() {
-                                // Move funds from the deposit key wallet to the MM sender address
-                                // so the subsequent payment transfer can be covered.
-                                let execution = deposit
-                                    .to_authorized_erc20_transfer(&provider, sender)
-                                    .await?;
-                                executions.push(execution);
-                            }
-                            executions
-                        }
-                        FillStatus::Empty => {
-                            vec![]
-                        }
-                    }
+            // Acquire funding executions from deposit storage if available
+            let funding_executions = match &deposit_key_storage {
+                Some(storage) => {
+                    get_funding_executions_from_deposits(storage, lot, provider, sender).await?
                 }
-                None => {
-                    vec![]
-                }
+                None => Vec::new(),
             };
-            let payment_executions = recipients
-                .iter()
-                .zip(amounts.iter())
-                .map(|(recipient, amount)| {
-                    let calldata = token_contract
-                        .transfer(*recipient, *amount)
-                        .calldata()
-                        .clone();
-                    let target = token_address;
-                    let value = U256::from(0);
-                    Execution {
-                        target,
-                        value,
-                        callData: calldata,
-                    }
-                })
-                .collect::<Vec<_>>();
 
-            let executions = [erc20_funding_executions, payment_executions].concat();
+            // Create payment executions for transferring tokens
+            let token_contract = GenericEIP3009ERC20Instance::new(token_address, provider.clone().erased());
+            let payment_executions =
+                create_payment_executions(&token_contract, &recipients, &amounts);
 
-            debug!("executions: {executions:?}");
+            // Combine funding and payment executions
+            let executions = [funding_executions, payment_executions].concat();
 
-            let delegator_contract = EIP7702DelegatorInstance::new(
-                Address::from_str(EIP7702_DELEGATOR_CROSSCHAIN_ADDRESS).unwrap(),
-                provider,
-            );
-
-            let mut transaction_request = delegator_contract
-                .execute_1(
-                    ModeCode::Batch.as_fixed_bytes32(),
-                    executions.abi_encode().into(),
-                )
-                .into_transaction_request();
-
-            // B/c of EIP7702, we need to set the `to` to the actual broadcast address
-            transaction_request.set_to(*sender);
-
-            // Add nonce to the end of calldata if provided
-            if let Some(mm_payment_validation) = &mm_payment_validation {
-                let nonce = mm_payment_validation.embedded_nonce;
-                // Audit: Consider how this could be problematic if done with arbitrary addresses (not whitelisted)
-                let mut calldata_with_nonce = transaction_request
-                    .input
-                    .input()
-                    .to_owned()
-                    .unwrap()
-                    .to_vec();
-                calldata_with_nonce.extend_from_slice(&nonce);
-                transaction_request.set_input(calldata_with_nonce);
-                transaction_request.set_input_and_data();
-            }
-            Ok(transaction_request)
+            // Build final transaction with validation
+            build_transaction_with_validation(
+                sender,
+                provider.clone().erased(),
+                executions,
+                mm_payment_validation.as_ref(),
+            )
         }
     }
 }

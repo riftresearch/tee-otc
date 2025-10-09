@@ -23,7 +23,7 @@ use tracing::info;
 
 use crate::bitcoin_wallet::transaction_broadcaster::{ForeignUtxo, TransactionRequest};
 use crate::deposit_key_storage::{DepositKeyStorage, DepositKeyStorageTrait, FillStatus};
-use crate::wallet::{self, Wallet as WalletTrait, WalletBalance, WalletError};
+use crate::wallet::{self, Payment, Wallet as WalletTrait, WalletBalance, WalletError};
 use crate::WalletResult;
 
 const PARALLEL_REQUESTS: usize = 5;
@@ -407,8 +407,10 @@ impl WalletTrait for BitcoinWallet {
         // Send transaction request to the broadcaster
         self.tx_broadcaster
             .broadcast_transaction(
-                lot.clone(),
-                to_address.to_string(),
+                vec![Payment {
+                    to_address: to_address.to_string(),
+                    lot: lot.clone(),
+                }],
                 foreign_utxos,
                 mm_payment_validation,
             )
