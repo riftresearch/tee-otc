@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile_inline: |
-        FROM debian:bookworm-slim
+        FROM debian:trixie-slim
 
         # Install build tools, sysbench, and utilities
         RUN apt-get update && apt-get install -y \
