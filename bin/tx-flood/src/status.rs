@@ -15,6 +15,7 @@ pub struct SwapUpdate {
     pub stage: SwapStage,
     pub amount: Option<U256>,
     pub deposit_chain: Option<ChainType>,
+    pub sender_address: Option<String>,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -25,6 +26,7 @@ impl SwapUpdate {
             stage,
             amount: None,
             deposit_chain: None,
+            sender_address: None,
             timestamp: Utc::now(),
         }
     }
@@ -40,6 +42,24 @@ impl SwapUpdate {
             stage,
             amount: Some(amount),
             deposit_chain: Some(deposit_chain),
+            sender_address: None,
+            timestamp: Utc::now(),
+        }
+    }
+
+    pub fn with_sender(
+        index: usize,
+        stage: SwapStage,
+        amount: U256,
+        deposit_chain: ChainType,
+        sender_address: String,
+    ) -> Self {
+        Self {
+            index,
+            stage,
+            amount: Some(amount),
+            deposit_chain: Some(deposit_chain),
+            sender_address: Some(sender_address),
             timestamp: Utc::now(),
         }
     }

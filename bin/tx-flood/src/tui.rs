@@ -437,6 +437,7 @@ impl App {
             [
                 Constraint::Length(4),
                 Constraint::Length(12),
+                Constraint::Length(8),
                 Constraint::Length(12),
                 Constraint::Length(8),
                 Constraint::Length(28),
@@ -449,8 +450,9 @@ impl App {
             Row::new([
                 Cell::from("#"),
                 Cell::from("Swap"),
-                Cell::from("Amount"),
                 Cell::from("Deposit"),
+                Cell::from("Amount"),
+                Cell::from("Sender"),
                 Cell::from("Stage"),
                 Cell::from("Detail"),
                 Cell::from("Tx Hash"),
@@ -548,6 +550,7 @@ struct SwapRow {
     tx_hash: Option<String>,
     amount: Option<U256>,
     deposit_chain: Option<ChainType>,
+    sender_address: Option<String>,
     last_update: Option<String>,
     is_terminal: bool,
     is_error: bool,
@@ -563,6 +566,7 @@ impl SwapRow {
             tx_hash: None,
             amount: None,
             deposit_chain: None,
+            sender_address: None,
             last_update: None,
             is_terminal: false,
             is_error: false,
@@ -575,6 +579,9 @@ impl SwapRow {
         }
         if let Some(chain) = update.deposit_chain {
             self.deposit_chain = Some(chain);
+        }
+        if let Some(address) = update.sender_address {
+            self.sender_address = Some(address);
         }
         self.last_update = Some(update.timestamp.format("%H:%M:%S").to_string());
         match update.stage {
@@ -653,16 +660,21 @@ impl SwapRow {
             .swap_id
             .map(|id| short_uuid(&id).to_string())
             .unwrap_or_else(|| "-".to_string());
-        let amount_cell = self
-            .amount
-            .map(|amt| format_amount(amt))
-            .unwrap_or_else(|| "-".to_string());
         let deposit_cell = self
             .deposit_chain
             .map(|chain| match chain {
                 ChainType::Bitcoin => "BTC".to_string(),
                 ChainType::Ethereum => "ETH".to_string(),
             })
+            .unwrap_or_else(|| "-".to_string());
+        let amount_cell = self
+            .amount
+            .map(|amt| format_amount(amt))
+            .unwrap_or_else(|| "-".to_string());
+        let sender_cell = self
+            .sender_address
+            .as_ref()
+            .map(|addr| truncate_address(addr, 6))
             .unwrap_or_else(|| "-".to_string());
         let tx_cell = self.tx_hash.clone().unwrap_or_else(|| "-".to_string());
         let updated = self
@@ -683,8 +695,9 @@ impl SwapRow {
         Row::new(vec![
             Cell::from(self.index.to_string()),
             Cell::from(swap_cell),
-            Cell::from(amount_cell),
             Cell::from(deposit_cell),
+            Cell::from(amount_cell),
+            Cell::from(sender_cell),
             Cell::from(self.status_text.clone()),
             Cell::from(self.detail_text.clone()),
             Cell::from(tx_cell),
@@ -709,6 +722,14 @@ fn short_hash(hash: &str) -> String {
         let prefix = &hash[..6];
         let suffix = &hash[hash.len() - 4..];
         format!("{}...{}", prefix, suffix)
+    }
+}
+
+fn truncate_address(address: &str, chars: usize) -> String {
+    if address.len() <= chars {
+        address.to_string()
+    } else {
+        address.chars().take(chars).collect()
     }
 }
 

@@ -250,11 +250,11 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
     let deposit_lot =
         lot_from_response(&swap_response).context("invalid deposit lot in response")?;
 
-    let tx_hash = match wallets
+    let (tx_hash, sender_address) = match wallets
         .create_payment(index, &deposit_lot, &swap_response.deposit_address)
         .await
     {
-        Ok(hash) => hash,
+        Ok(result) => result,
         Err(err) => {
             send_update(
                 &update_tx,
@@ -272,7 +272,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
 
     send_update(
         &update_tx,
-        SwapUpdate::with_amount_and_chain(
+        SwapUpdate::with_sender(
             index,
             SwapStage::PaymentBroadcast {
                 swap_id,
@@ -280,6 +280,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
             },
             amount,
             deposit_chain,
+            sender_address,
         ),
     );
 
