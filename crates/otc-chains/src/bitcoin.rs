@@ -4,6 +4,8 @@ use alloy::hex;
 use alloy::primitives::U256;
 use async_trait::async_trait;
 use bdk_wallet::{signer::SignOptions, CreateParams, Wallet as BdkWallet};
+use bitcoin::base64::engine::general_purpose::STANDARD;
+use bitcoin::base64::Engine;
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
 use bitcoin::{Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, Transaction};
 use bitcoincore_rpc_async::{jsonrpc, Auth, Client, RpcApi};
@@ -26,7 +28,7 @@ impl ReqwestRpcTransport {
         let auth_header = if let Some((user, password)) = auth {
             let auth_header = format!(
                 "Basic {}",
-                bitcoin::base64::encode(format!("{}:{}", user, password))
+                STANDARD.encode(format!("{}:{}", user, password))
             );
             Some(auth_header)
         } else {
@@ -196,7 +198,7 @@ impl ChainOperations for BitcoinChain {
         }
         let private_key =
             PrivateKey::from_wif(private_key).map_err(|e| crate::Error::DumpToAddress {
-                message: "Invalid signer private key".to_string(),
+                message: format!("Invalid signer private key: {e}"),
             })?;
         let recipient_address = Address::from_str(recipient_address)?.assume_checked();
 

@@ -1,11 +1,9 @@
 use alloy::primitives::{Address, U256};
 use alloy::providers::PendingTransactionError;
 use async_trait::async_trait;
-use chrono::Duration;
-use dashmap::DashMap;
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_models::TokenIdentifier;
-use otc_models::{ChainType, Currency, Lot};
+use otc_models::{ChainType, Lot};
 use snafu::{Location, Snafu};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::oneshot;
@@ -220,7 +218,7 @@ impl Default for WalletManager {
 mod tests {
     use super::*;
     use alloy::primitives::U256;
-    use otc_models::TokenIdentifier;
+    use otc_models::{Currency, TokenIdentifier};
 
     struct MockWallet {}
 

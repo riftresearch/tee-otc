@@ -1,13 +1,12 @@
 use alloy::primitives::U256;
-use market_maker::{run_market_maker, MarketMakerArgs};
-use otc_server::{server::run_server, OtcServerArgs};
+use market_maker::run_market_maker;
+use otc_server::server::run_server;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
-use std::net::{IpAddr, Ipv4Addr};
 use std::time::Duration;
 use tokio::task::JoinSet;
 
 use crate::utils::{
-    build_mm_test_args, build_otc_server_test_args, get_free_port, get_whitelist_file_path,
+    build_mm_test_args, build_otc_server_test_args, get_free_port,
     wait_for_otc_server_to_be_ready, PgConnectOptionsExt, INTEGRATION_TEST_TIMEOUT_SECS,
     TEST_MARKET_MAKER_API_ID,
 };

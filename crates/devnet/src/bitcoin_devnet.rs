@@ -6,7 +6,7 @@ use bitcoincore_rpc_async::bitcoin::Txid;
 use bitcoincore_rpc_async::json::GetRawTransactionVerbose;
 use corepc_node::Conf;
 use log::info;
-use tokio::task::{JoinHandle, JoinSet};
+use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 use bitcoin::{Address as BitcoinAddress, Amount};
@@ -288,8 +288,8 @@ impl BitcoinDevnet {
 
         let alice_address_clone = alice_address.clone();
         let bitcoin_rpc_client_clone = bitcoin_rpc_client.clone();
-        let mining_thread = if let MiningMode::Interval(interval) = mining_mode {
-            Some(join_set.spawn(async move {
+        if let MiningMode::Interval(interval) = mining_mode {
+            join_set.spawn(async move {
                 loop {
                     bitcoin_rpc_client_clone
                         .generate_to_address(1, &alice_address_clone)
@@ -298,10 +298,8 @@ impl BitcoinDevnet {
 
                     tokio::time::sleep(Duration::from_secs(interval)).await;
                 }
-            }))
-        } else {
-            None
-        };
+            });
+        }
 
         let devnet = BitcoinDevnet {
             rpc_client: bitcoin_rpc_client.clone(),

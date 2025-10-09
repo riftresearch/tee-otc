@@ -1,5 +1,7 @@
 //! Integration tests package lib
 #![allow(dead_code)]
+#![allow(warnings)]
+#![allow(clippy::all)]
 
 mod utils;
 

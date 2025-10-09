@@ -1,4 +1,3 @@
-use alloy::primitives::U256;
 use otc_models::Lot;
 
 pub const PROTOCOL_FEE_BPS: u64 = 10;
@@ -39,6 +38,7 @@ impl FeeCalcFromLot for Lot {
     }
 }
 
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -50,9 +50,9 @@ mod tests {
             let fee_sats = compute_protocol_fee_sats(amount_sats);
             let amount_after_fee = amount_sats.saturating_sub(fee_sats);
             let amount_before_fee = inverse_compute_protocol_fee(amount_after_fee);
-            /// f = comp(a)
-            /// g = f - a
-            /// a = inv(g)
+            // f = comp(a)
+            // g = f - a
+            // a = inv(g)
             println!("amount_sats: {amount_sats}");
             println!("fee_sats: {fee_sats}");
             println!("amount_after_fee: {amount_after_fee}");

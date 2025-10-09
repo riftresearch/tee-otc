@@ -1,4 +1,3 @@
-use std::time::Duration;
 use std::{str::FromStr, sync::Arc};
 
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
@@ -12,7 +11,7 @@ use bdk_wallet::{
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_models::{ChainType, Lot};
 use snafu::ResultExt;
-use tokio::sync::{mpsc, oneshot, Mutex, RwLock};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tracing::{error, info};

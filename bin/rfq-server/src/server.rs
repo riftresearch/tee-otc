@@ -292,7 +292,7 @@ async fn mm_websocket_handler(
                 "Market maker {} authenticated via headers",
                 market_maker_tag
             );
-            let mm_uuid = market_maker_id.clone();
+            let mm_uuid = market_maker_id;
             ws.on_upgrade(move |socket| handle_mm_socket(socket, state, mm_uuid))
         }
         Err(e) => {
@@ -341,7 +341,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     let (sender_tx, mut sender_rx) = mpsc::channel::<Message>(100);
 
     // Spawn task to handle outgoing messages from the registry
-    let mm_id_clone = mm_uuid.clone();
+    let mm_id_clone = mm_uuid;
     let sender_tx_clone = sender_tx.clone();
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
@@ -355,7 +355,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     });
 
     // Spawn task to forward messages to the socket
-    let mm_id_clone = mm_uuid.clone();
+    let mm_id_clone = mm_uuid;
     let mut sender = sender;
     tokio::spawn(async move {
         while let Some(msg) = sender_rx.recv().await {

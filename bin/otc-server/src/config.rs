@@ -1,4 +1,4 @@
-use secrecy::{ExposeSecret, SecretBox, SecretSlice, SecretString};
+use secrecy::{ExposeSecret, SecretBox};
 use snafu::{ResultExt, Snafu};
 use std::{fs, path::Path};
 use zeroize::Zeroize;

@@ -333,12 +333,10 @@ fn lot_from_response(response: &CreateSwapResponse) -> Result<Lot> {
     let chain = parse_chain_type(&response.deposit_chain)?;
     let token = parse_token_identifier(&response.token);
 
-    if chain == ChainType::Ethereum {
-        if matches!(token, TokenIdentifier::Native) {
-            return Err(anyhow!(
-                "native Ethereum deposits are not currently supported by the load tester"
-            ));
-        }
+    if chain == ChainType::Ethereum && matches!(token, TokenIdentifier::Native) {
+        return Err(anyhow!(
+            "native Ethereum deposits are not currently supported by the load tester"
+        ));
     }
 
     Ok(Lot {

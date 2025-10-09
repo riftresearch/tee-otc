@@ -123,16 +123,16 @@ impl Drop for TokenIndexerInstance {
 
 impl TokenIndexerInstance {
     fn kill_process_tree(&self, pid: u32) {
-        let pgid = unsafe {
-            libc::getpgid(pid as i32)
-        };
-    
+        let pgid = unsafe { libc::getpgid(pid as i32) };
+
         if pgid >= 0 {
             // Send SIGTERM to entire process group
             // This is safe because the child process was spawned with its own process group
             // via setpgid(0, 0), so this will only kill the child and its descendants,
             // not the parent test process
-            unsafe { libc::kill(-pgid, libc::SIGTERM); }
+            unsafe {
+                libc::kill(-pgid, libc::SIGTERM);
+            }
         } else {
             // Fallback: just kill the parent process if getpgid failed
             let _ = std::process::Command::new("kill")

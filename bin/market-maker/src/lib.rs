@@ -12,7 +12,6 @@ pub mod price_oracle;
 pub mod quote_storage;
 mod rfq_client;
 mod rfq_handler;
-mod strategy;
 pub mod wallet;
 mod wrapped_bitcoin_quoter;
 
@@ -57,15 +56,22 @@ pub enum Error {
     Config { source: config::ConfigError },
 
     #[snafu(display("Client error: {}", source))]
-    Client { source: otc_client::ClientError },
+    Client {
+        #[snafu(source(from(otc_client::ClientError, Box::new)))]
+        source: Box<otc_client::ClientError>,
+    },
 
     #[snafu(display("Bitcoin wallet error: {}", source))]
     BitcoinWallet {
-        source: bitcoin_wallet::BitcoinWalletError,
+        #[snafu(source(from(bitcoin_wallet::BitcoinWalletError, Box::new)))]
+        source: Box<bitcoin_wallet::BitcoinWalletError>,
     },
 
     #[snafu(display("EVM wallet error: {}", source))]
-    GenericWallet { source: wallet::WalletError },
+    GenericWallet {
+        #[snafu(source(from(wallet::WalletError, Box::new)))]
+        source: Box<wallet::WalletError>,
+    },
 
     #[snafu(display("Provider error: {}", source))]
     Provider {
@@ -98,12 +104,14 @@ pub enum Error {
 
     #[snafu(display("Coinbase client error: {}", source))]
     CoinbaseClientError {
-        source: cb_bitcoin_converter::coinbase_client::ConversionError,
+        #[snafu(source(from(cb_bitcoin_converter::coinbase_client::ConversionError, Box::new)))]
+        source: Box<cb_bitcoin_converter::coinbase_client::ConversionError>,
     },
 
     #[snafu(display("Conversion actor error: {}", source))]
     ConversionActor {
-        source: cb_bitcoin_converter::ConversionActorError,
+        #[snafu(source(from(cb_bitcoin_converter::ConversionActorError, Box::new)))]
+        source: Box<cb_bitcoin_converter::ConversionActorError>,
     },
 
     #[snafu(display("Failed to install metrics recorder: {}", source))]
@@ -127,13 +135,17 @@ impl From<blockchain_utils::ProviderError> for Error {
 
 impl From<wallet::WalletError> for Error {
     fn from(error: wallet::WalletError) -> Self {
-        Error::GenericWallet { source: error }
+        Error::GenericWallet {
+            source: Box::new(error),
+        }
     }
 }
 
 impl From<otc_client::ClientError> for Error {
     fn from(error: otc_client::ClientError) -> Self {
-        Error::Client { source: error }
+        Error::Client {
+            source: Box::new(error),
+        }
     }
 }
 
@@ -392,7 +404,6 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     let otc_fill_client = otc_client::OtcFillClient::new(
         Config {
             market_maker_id,
-            market_maker_tag: args.market_maker_tag.clone(),
             api_secret: args.api_secret.clone(),
             otc_ws_url: args.otc_ws_url.clone(),
             reconnect_interval_secs: 5,
@@ -414,7 +425,6 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     let mut rfq_client = rfq_client::RfqClient::new(
         Config {
             market_maker_id,
-            market_maker_tag: args.market_maker_tag.clone(),
             api_secret: args.api_secret.clone(),
             otc_ws_url: args.otc_ws_url,
             reconnect_interval_secs: 5,
@@ -430,9 +440,9 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         .context(WrappedBitcoinQuoterSnafu)?;
     join_set.spawn(async move {
         rfq_client.run().await.map_err(|e| Error::Client {
-            source: otc_client::ClientError::BackgroundThreadExited {
+            source: Box::new(otc_client::ClientError::BackgroundThreadExited {
                 source: Box::new(e),
-            },
+            }),
         })
     });
 

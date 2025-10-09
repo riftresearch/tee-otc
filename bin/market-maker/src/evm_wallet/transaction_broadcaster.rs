@@ -9,7 +9,6 @@ use alloy::{
     transports::RpcError,
 };
 use blockchain_utils::WebsocketWalletProvider;
-use snafu::{prelude::*, ResultExt};
 use std::sync::Arc;
 use tokio::{
     sync::{
@@ -19,7 +18,7 @@ use tokio::{
     },
     task::JoinSet,
 };
-use tracing::{self, info};
+use tracing::{self};
 
 #[derive(Debug, Clone)]
 pub struct RevertInfo {

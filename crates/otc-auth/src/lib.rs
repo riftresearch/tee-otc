@@ -1,7 +1,7 @@
 pub mod api_keys;
 use otc_models::PublicApiKeyRecord;
 use snafu::{prelude::*, Whatever};
-use std::{collections::HashMap, path::PathBuf};
+use std::collections::HashMap;
 use uuid::Uuid;
 
 #[derive(Debug, Snafu)]

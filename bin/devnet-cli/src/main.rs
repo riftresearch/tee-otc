@@ -50,14 +50,10 @@ async fn main() -> Result<(), Whatever> {
             fork_block_number,
             token_indexer_database_url,
         } => {
-            let fork_config = if let Some(fork_url) = fork_url {
-                Some(ForkConfig {
-                    url: fork_url,
-                    block_number: fork_block_number,
-                })
-            } else {
-                None
-            };
+            let fork_config = fork_url.map(|fork_url| ForkConfig {
+                url: fork_url,
+                block_number: fork_block_number,
+            });
             run_server(fund_address, fork_config, token_indexer_database_url).await
         }
         Commands::Cache => run_cache().await,

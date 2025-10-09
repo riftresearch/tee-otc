@@ -1,6 +1,6 @@
 use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
-use otc_models::{ChainType, Lot};
+use otc_models::Lot;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 

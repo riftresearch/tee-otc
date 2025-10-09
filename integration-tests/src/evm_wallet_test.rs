@@ -487,8 +487,6 @@ async fn test_evm_wallet_actually_sends_token(
         }
     }
 
-    // Subscribe to transaction status updates
-    let mut status_receiver = evm_wallet.tx_broadcaster.subscribe_to_status_updates();
 
     // Create a currency for testing
     let lot = Lot {

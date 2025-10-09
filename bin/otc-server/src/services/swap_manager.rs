@@ -1,5 +1,5 @@
 use crate::api::swaps::{
-    CreateSwapRequest, CreateSwapResponse, DepositInfoResponse, RefundPayload, RefundSwapRequest,
+    CreateSwapRequest, CreateSwapResponse, DepositInfoResponse, RefundSwapRequest,
     RefundSwapResponse, SwapResponse,
 };
 use crate::config::Settings;
@@ -7,11 +7,9 @@ use crate::db::Database;
 use crate::error::OtcServerError;
 use crate::services::MMRegistry;
 use alloy::hex::FromHexError;
-use alloy::primitives::Address;
 use otc_chains::ChainRegistry;
 use otc_models::{LatestRefund, Metadata, Swap, SwapStatus, TokenIdentifier};
 use snafu::prelude::*;
-use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::oneshot;
 use tokio::time::{timeout, Duration};
@@ -139,7 +137,7 @@ impl SwapManager {
                 let tx_data = deposit_chain
                     .dump_to_address(
                         &swap.quote.from.currency.token,
-                        &deposit_wallet.private_key(),
+                        deposit_wallet.private_key(),
                         &refund_request.payload.refund_recipient,
                         refund_request.payload.refund_transaction_fee,
                     )

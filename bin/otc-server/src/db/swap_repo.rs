@@ -739,15 +739,13 @@ fn currency_label(lot: &Lot) -> String {
 
 #[cfg(test)]
 mod tests {
-    use crate::db::conversions::chain_type_to_db;
     use crate::db::Database;
     use alloy::primitives::U256;
-    use chrono::{Duration, Utc};
+    use chrono::Duration;
     use otc_models::{
         ChainType, Currency, FeeSchedule, LatestRefund, Lot, MMDepositStatus, Metadata, Quote,
         SettlementStatus, Swap, SwapStatus, TokenIdentifier, UserDepositStatus,
     };
-    use serde_json;
     use uuid::Uuid;
 
     #[sqlx::test]

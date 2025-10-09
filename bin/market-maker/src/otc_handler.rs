@@ -1,18 +1,11 @@
 use crate::deposit_key_storage::{Deposit, DepositKeyStorage, DepositKeyStorageTrait};
 use crate::payment_manager::PaymentManager;
 use crate::quote_storage::QuoteStorage;
-use crate::strategy::ValidationStrategy;
-use crate::{config::Config, wallet::WalletManager};
-use alloy::primitives::U256;
-use blockchain_utils::FeeCalcFromLot;
-use otc_chains::traits::MarketMakerPaymentValidation;
-use otc_protocols::mm::{MMErrorCode, MMRequest, MMResponse, MMStatus, ProtocolMessage};
+use otc_protocols::mm::{MMRequest, MMResponse, MMStatus, ProtocolMessage};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
 pub struct OTCMessageHandler {
-    config: Config,
-    strategy: ValidationStrategy,
     quote_storage: Arc<QuoteStorage>,
     deposit_key_storage: Arc<DepositKeyStorage>,
     payment_manager: Arc<PaymentManager>,
@@ -20,15 +13,11 @@ pub struct OTCMessageHandler {
 
 impl OTCMessageHandler {
     pub fn new(
-        config: Config,
         quote_storage: Arc<QuoteStorage>,
         deposit_key_storage: Arc<DepositKeyStorage>,
         payment_manager: Arc<PaymentManager>,
     ) -> Self {
-        let strategy = ValidationStrategy::new();
         Self {
-            config,
-            strategy,
             quote_storage,
             deposit_key_storage,
             payment_manager,
@@ -45,7 +34,7 @@ impl OTCMessageHandler {
                 quote_id,
                 quote_hash,
                 user_destination_address,
-                timestamp,
+                timestamp: _,
             } => {
                 info!(
                     "Received quote validation request for quote {} from user {}",
@@ -105,10 +94,8 @@ impl OTCMessageHandler {
             }
 
             MMRequest::UserDeposited {
-                request_id,
                 swap_id,
-                quote_id,
-                deposit_address,
+
                 user_tx_hash,
                 ..
             } => {

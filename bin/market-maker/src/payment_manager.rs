@@ -54,7 +54,7 @@ impl PaymentManager {
                     };
                 }
                 Ok(None) => {
-                    info!("Creating payment for swap {swap_id}");
+                    info!("Creating payment for swap {swap_id} and quote {quote_id}");
                 }
             }
             let tx_result = wallet
@@ -67,7 +67,7 @@ impl PaymentManager {
                     }),
                 )
                 .await;
-            info!("Payment created for swap {swap_id} {tx_result:?}");
+            info!("Payment created for swap {swap_id} and quote {quote_id} {tx_result:?}");
             match tx_result {
                 Ok(txid) => {
                     self.payment_storage

@@ -55,12 +55,8 @@ impl OtcFillClient {
         deposit_key_storage: Arc<DepositKeyStorage>,
         payment_manager: Arc<PaymentManager>,
     ) -> Self {
-        let handler = OTCMessageHandler::new(
-            config.clone(),
-            quote_storage,
-            deposit_key_storage,
-            payment_manager,
-        );
+        let handler =
+            OTCMessageHandler::new(quote_storage, deposit_key_storage, payment_manager);
         Self { config, handler }
     }
 

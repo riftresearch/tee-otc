@@ -498,12 +498,14 @@ fn calculate_fees_in_sats_to_send_cbbtc_on_eth(
     (gas_cost_wei / wei_per_sat).to::<u64>()
 }
 
+#[cfg(test)]
 mod tests {
-    use super::*;
+    use otc_protocols::rfq::RFQResult;
 
-    const BASE_FEE_GWEI: f64 = 0.5;
-    const MAX_PRIORITY_FEE_GWEI: f64 = 0.01;
-    const ETH_PER_BTC: f64 = 27.15;
+    use crate::wrapped_bitcoin_quoter::{
+        calculate_fees_in_sats_to_send_btc, quote_exact_input, quote_exact_output,
+    };
+
     const SATS_PER_VBYTE: f64 = 1.5;
     const TRADE_SPREAD_BPS: u64 = 13;
 

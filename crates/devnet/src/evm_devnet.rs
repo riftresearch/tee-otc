@@ -14,7 +14,6 @@ use alloy::{
     node_bindings::{Anvil, AnvilInstance},
     primitives::{Address, U256},
     providers::{ext::AnvilApi, DynProvider, Provider},
-    sol,
 };
 
 use crate::{get_new_temp_dir, token_indexerd::TokenIndexerInstance, RiftDevnetCache};
@@ -57,7 +56,7 @@ impl EthDevnet {
         );
 
         let private_key = anvil.keys()[0].clone().to_bytes().into();
-        let funded_address = anvil.addresses()[0].clone();
+        let funded_address = anvil.addresses()[0];
 
         let funded_provider = create_websocket_wallet_provider(
             anvil.ws_endpoint_url().to_string().as_str(),
@@ -192,7 +191,7 @@ async fn deploy_contracts(
     GenericEIP3009ERC20Instance<DynProvider>,
     EIP7702DelegatorInstance<DynProvider>,
 )> {
-    if let Some(cache) = devnet_cache {
+    if devnet_cache.is_some() {
         // no need to deploy, just create the instance from the cache
         let cbbtc_contract =
             GenericEIP3009ERC20Instance::new(CBBTC_ADDRESS.parse().unwrap(), provider.clone());

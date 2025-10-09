@@ -75,3 +75,7 @@ phala-deploy:
 # DOCKER_DEFAULT_PLATFORM=linux/amd64  
 dc +args:
     {{dc_files}} {{args}}
+
+# Run clippy
+clippy:
+    cargo clippy --fix --allow-dirty --allow-staged

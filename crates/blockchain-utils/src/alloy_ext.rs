@@ -15,7 +15,7 @@ use alloy::{
     transports::{impl_future, TransportResult},
 };
 use backoff::exponential::ExponentialBackoff;
-use snafu::{ResultExt, Snafu, Whatever};
+use snafu::Snafu;
 
 #[derive(Clone, Debug)]
 pub struct RetryWsConnect(WsConnect);

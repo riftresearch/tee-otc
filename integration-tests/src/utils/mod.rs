@@ -8,12 +8,12 @@ use std::{
 use alloy::{
     dyn_abi::DynSolValue,
     primitives::keccak256,
-    signers::{local::PrivateKeySigner, Signer, SignerSync},
+    signers::{local::PrivateKeySigner, SignerSync},
 };
 use bitcoincore_rpc_async::Auth;
 use blockchain_utils::create_websocket_wallet_provider;
 use ctor::ctor;
-use devnet::{get_new_temp_dir, MultichainAccount};
+use devnet::MultichainAccount;
 use market_maker::{evm_wallet::EVMWallet, MarketMakerArgs};
 use otc_server::{
     api::{
@@ -23,10 +23,7 @@ use otc_server::{
     OtcServerArgs,
 };
 use rfq_server::RfqServerArgs;
-use sqlx::{
-    postgres::{PgConnectOptions, PgPoolOptions},
-    Connection, PgConnection, Pool, Postgres,
-};
+use sqlx::{postgres::PgConnectOptions, Connection, PgConnection};
 use tokio::{net::TcpListener, task::JoinSet};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
@@ -317,7 +314,6 @@ pub async fn build_otc_server_test_args(
             .unwrap()
             .api_server_url
             .clone(),
-        ethereum_mainnet_chain_id: devnet.ethereum.anvil.chain_id(),
         bitcoin_rpc_url: devnet.bitcoin.rpc_url_with_cookie.clone(),
         bitcoin_rpc_auth: Auth::CookieFile(devnet.bitcoin.cookie.clone()),
         untrusted_esplora_http_server_url: devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),

@@ -31,20 +31,6 @@ use crate::evm_devnet::Mode;
 
 const _LOG_CHUNK_SIZE: u64 = 10000;
 
-#[derive(serde::Serialize, serde::Deserialize)]
-struct ContractMetadata {
-    rift_exchange_address: String,
-    token_address: String,
-    verifier_address: String,
-    deployment_block_number: u64,
-    periphery: Option<PeripheryMetadata>,
-}
-
-#[derive(serde::Serialize, serde::Deserialize)]
-struct PeripheryMetadata {
-    rift_auction_adapter_address: String,
-}
-
 pub struct RiftDevnetCache {
     pub cache_dir: PathBuf,
     populated: bool,
@@ -79,33 +65,6 @@ impl RiftDevnetCache {
             cache_dir,
             populated,
         }
-    }
-
-    async fn copy_cached_file(
-        &self,
-        file_path: &str,
-        operation_name: &str,
-    ) -> Result<tempfile::NamedTempFile> {
-        if !self.populated {
-            return Err(eyre::eyre!("{} {}", ERROR_MESSAGE, operation_name).into());
-        }
-
-        let cache_file = self.cache_dir.join(file_path);
-        let temp_file = get_new_temp_file()?;
-        let temp_file_path = temp_file.path().to_path_buf();
-
-        let output = tokio::process::Command::new("cp")
-            .arg(&cache_file)
-            .arg(&temp_file_path)
-            .output()
-            .await
-            .map_err(|e| eyre::eyre!("Failed to copy {}: {}", operation_name, e))?;
-
-        if !output.status.success() {
-            return Err(eyre::eyre!("Failed to copy {}: {}", operation_name, output.status).into());
-        }
-
-        Ok(temp_file)
     }
 
     /// Generic helper to copy a cached directory to a new temporary directory
@@ -566,13 +525,8 @@ impl RiftDevnetBuilder {
         }
 
         if self.interactive {
-            self.setup_interactive_mode(
-                &bitcoin_devnet,
-                &ethereum_devnet,
-                self.using_esplora,
-                &mut join_set,
-            )
-            .await?;
+            self.setup_interactive_mode(&bitcoin_devnet, &ethereum_devnet, self.using_esplora)
+                .await?;
         }
 
         let config_dir = get_new_temp_dir()?;
@@ -598,7 +552,6 @@ impl RiftDevnetBuilder {
         bitcoin_devnet: &BitcoinDevnet,
         ethereum_devnet: &EthDevnet,
         using_esplora: bool,
-        join_set: &mut JoinSet<Result<()>>,
     ) -> Result<()> {
         let setup_start = Instant::now();
         let market_maker_bitcoin_address =

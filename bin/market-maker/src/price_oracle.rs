@@ -53,9 +53,8 @@ struct CoinbaseTickerMessage {
     msg_type: String,
     product_id: Option<String>,
     best_bid: Option<String>,
-    best_ask: Option<String>,
-    price: Option<String>,
-    time: Option<String>,
+   best_ask: Option<String>,
+   price: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -150,7 +149,6 @@ impl BitcoinEtherPriceOracle {
             }
             time::sleep(RECONNECT_DELAY).await;
         }
-        Ok(())
     }
 
     async fn connect_and_stream(&self, ws_uri: &str, product_id: &str) -> Result<()> {
@@ -218,7 +216,7 @@ impl BitcoinEtherPriceOracle {
             let old_price = *btc_per_eth;
             *btc_per_eth = Some(price);
 
-            if old_price.map_or(true, |old| (price - old).abs() > 1e-10) {
+            if old_price.is_none_or(|old| (price - old).abs() > 1e-10) {
                 let eth_per_btc = 1.0 / price;
                 debug!(
                     "Price update: 1 ETH = {:.8} BTC | 1 BTC = {:.6} ETH",

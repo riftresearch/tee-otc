@@ -633,7 +633,7 @@ impl SwapRow {
         }
     }
 
-    fn to_table_row(&self) -> Row {
+    fn to_table_row(&self) -> Row<'_> {
         let swap_cell = self
             .swap_id
             .map(|id| short_uuid(&id).to_string())

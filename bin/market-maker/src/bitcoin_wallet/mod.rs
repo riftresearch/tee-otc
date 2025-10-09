@@ -11,11 +11,8 @@ use bdk_wallet::descriptor;
 use bdk_wallet::keys::DescriptorPublicKey;
 use bdk_wallet::rusqlite::Connection;
 use bdk_wallet::{
-    bitcoin::{Address, Network},
-    error::CreateTxError,
-    signer::SignerError,
-    AddForeignUtxoError, CreateParams, KeychainKind, LoadParams, LoadWithPersistError,
-    PersistedWallet,
+    bitcoin::Network, error::CreateTxError, signer::SignerError, AddForeignUtxoError, CreateParams,
+    KeychainKind, LoadParams, LoadWithPersistError, PersistedWallet,
 };
 use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};

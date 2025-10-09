@@ -26,12 +26,11 @@ const ALLOWED_TOKEN: &str = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf";
 pub struct EthereumChain {
     provider: DynProvider,
     evm_indexer_client: TokenIndexerClient,
-    chain_id: u64,
     allowed_token: Address,
 }
 
 impl EthereumChain {
-    pub async fn new(rpc_url: &str, evm_indexer_url: &str, chain_id: u64) -> Result<Self> {
+    pub async fn new(rpc_url: &str, evm_indexer_url: &str) -> Result<Self> {
         let provider = ProviderBuilder::new()
             .connect_http(rpc_url.parse().map_err(|_| crate::Error::Serialization {
                 message: "Invalid RPC URL".to_string(),
@@ -52,7 +51,6 @@ impl EthereumChain {
         Ok(Self {
             provider,
             evm_indexer_client,
-            chain_id,
             allowed_token,
         })
     }

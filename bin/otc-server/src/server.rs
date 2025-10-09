@@ -106,7 +106,6 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
     let ethereum_chain = EthereumChain::new(
         &args.ethereum_mainnet_rpc_url,
         &args.untrusted_ethereum_mainnet_token_indexer_url,
-        args.ethereum_mainnet_chain_id,
     )
     .await
     .map_err(|e| crate::Error::DatabaseInit {
@@ -408,7 +407,7 @@ async fn mm_websocket_handler(
                 "Market maker {} authenticated via headers",
                 market_maker_tag
             );
-            let mm_uuid = market_maker_id.clone();
+            let mm_uuid = market_maker_id;
             ws.on_upgrade(move |socket| handle_mm_socket(socket, state, mm_uuid))
         }
         Err(e) => {
@@ -480,19 +479,15 @@ async fn get_best_ethereum_hash(
         .chain_registry
         .get(&otc_models::ChainType::Ethereum)
         .unwrap();
-    chain
-        .get_best_hash()
-        .await
-        .map_err(Into::into)
-        .and_then(|hash| {
-            if hash.starts_with("0x") {
-                Ok(Json(BlockHashResponse { block_hash: hash }))
-            } else {
-                Ok(Json(BlockHashResponse {
-                    block_hash: format!("0x{}", hash),
-                }))
-            }
-        })
+    chain.get_best_hash().await.map_err(Into::into).map(|hash| {
+        if hash.starts_with("0x") {
+            Json(BlockHashResponse { block_hash: hash })
+        } else {
+            Json(BlockHashResponse {
+                block_hash: format!("0x{}", hash),
+            })
+        }
+    })
 }
 
 async fn create_swap(

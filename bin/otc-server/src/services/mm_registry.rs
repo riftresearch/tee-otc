@@ -1,10 +1,9 @@
 use dashmap::DashMap;
-use otc_models::{ChainType, Lot};
+use otc_models::Lot;
 use otc_protocols::mm::{MMRequest, ProtocolMessage};
 use snafu::Snafu;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot};
-use tokio::time::Duration;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -40,6 +39,12 @@ pub struct MarketMakerConnection {
 pub struct MMRegistry {
     connections: Arc<DashMap<Uuid, MarketMakerConnection>>,
     pending_validations: Arc<DashMap<Uuid, oneshot::Sender<Result<bool>>>>,
+}
+
+impl Default for MMRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl MMRegistry {
@@ -223,7 +228,7 @@ impl MMRegistry {
             "Validating quote with market maker"
         );
 
-        let mm_connection = if let Some(conn) = self.connections.get(&market_maker_id) {
+        let mm_connection = if let Some(conn) = self.connections.get(market_maker_id) {
             conn
         } else {
             warn!(
@@ -241,16 +246,15 @@ impl MMRegistry {
             sequence: 0, // TODO: Implement sequence tracking
             payload: MMRequest::ValidateQuote {
                 request_id: Uuid::new_v4(),
-                quote_id: quote_id.clone(),
-                quote_hash: quote_hash.clone(),
+                quote_id: *quote_id,
+                quote_hash: *quote_hash,
                 user_destination_address: user_destination_address.to_string(),
                 timestamp: utc::now(),
             },
         };
 
         // Store the response channel before sending the request
-        self.pending_validations
-            .insert(quote_id.clone(), response_tx);
+        self.pending_validations.insert(*quote_id, response_tx);
 
         // Send the validation request
         if let Err(e) = mm_connection.sender.send(request).await {
@@ -260,10 +264,9 @@ impl MMRegistry {
                 "Failed to send validation request"
             );
             // Remove the pending validation since we failed to send
-            if let Some((_, tx)) = self.pending_validations.remove(&quote_id) {
+            if let Some((_, tx)) = self.pending_validations.remove(quote_id) {
                 let _ = tx.send(Err(MMRegistryError::MessageSendError { source: e }));
             }
-            return;
         }
     }
 
@@ -298,10 +301,7 @@ impl MMRegistry {
 
     #[must_use]
     pub fn get_connected_market_makers(&self) -> Vec<Uuid> {
-        self.connections
-            .iter()
-            .map(|entry| entry.key().clone())
-            .collect()
+        self.connections.iter().map(|entry| *entry.key()).collect()
     }
 }
 

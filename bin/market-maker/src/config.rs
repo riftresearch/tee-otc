@@ -12,7 +12,6 @@ pub enum ConfigError {
 #[derive(Debug, Clone)]
 pub struct Config {
     pub market_maker_id: Uuid,
-    pub market_maker_tag: String,
     pub api_secret: String,
     pub otc_ws_url: String,
     pub reconnect_interval_secs: u64,

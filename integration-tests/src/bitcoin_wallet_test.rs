@@ -1,5 +1,5 @@
 use alloy::{hex, primitives::U256};
-use bitcoin::{Network, PrivateKey};
+use bitcoin::Network;
 use bitcoincore_rpc_async::{json::GetRawTransactionVerbose, RpcApi};
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::{
@@ -11,7 +11,7 @@ use otc_chains::traits::MarketMakerPaymentValidation;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::sync::Arc;
-use std::{str::FromStr, time::Duration};
+use std::time::Duration;
 use tokio::task::JoinSet;
 use tracing::info;
 
@@ -19,10 +19,7 @@ use crate::utils::PgConnectOptionsExt;
 
 /// Test that verifies the Bitcoin wallet basic functionality
 #[sqlx::test]
-async fn test_bitcoin_wallet_basic_operations(
-    _: PoolOptions<sqlx::Postgres>,
-    connect_options: PgConnectOptions,
-) {
+async fn test_bitcoin_wallet_basic_operations() {
     // Initialize logging for debugging
     let _ = tracing_subscriber::fmt()
         .with_target(false)
@@ -235,10 +232,7 @@ async fn test_bitcoin_wallet_basic_operations(
 
 /// Test error handling for various failure scenarios
 #[sqlx::test]
-async fn test_bitcoin_wallet_error_handling(
-    _: PoolOptions<sqlx::Postgres>,
-    connect_options: PgConnectOptions,
-) {
+async fn test_bitcoin_wallet_error_handling() {
     let _ = tracing_subscriber::fmt()
         .with_target(false)
         .with_max_level(tracing::Level::DEBUG)

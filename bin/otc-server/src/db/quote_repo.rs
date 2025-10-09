@@ -165,7 +165,7 @@ impl QuoteRepository {
 mod tests {
     use crate::db::Database;
     use alloy::primitives::U256;
-    use chrono::{Duration, Utc};
+    use chrono::Duration;
     use otc_models::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
     use uuid::Uuid;
 
