@@ -212,10 +212,28 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
         ),
     );
 
+    // Get the EVM account address for this specific swap
+    let user_evm_account_address = match wallets.get_evm_account_address(index) {
+        Ok(addr) => addr,
+        Err(err) => {
+            send_update(
+                &update_tx,
+                SwapUpdate::new(
+                    index,
+                    SwapStage::FinishedWithError {
+                        swap_id: None,
+                        reason: format!("failed to get EVM account address: {err}"),
+                    },
+                ),
+            );
+            return Err(err);
+        }
+    };
+
     let create_swap_request = CreateSwapRequest {
         quote: quote.clone(),
         user_destination_address,
-        user_evm_account_address: config.user_evm_account_address,
+        user_evm_account_address,
         metadata: None,
     };
 

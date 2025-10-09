@@ -36,7 +36,19 @@ use tracing::{debug, info, warn};
 use crate::args::{BitcoinWalletConfig, Config, EvmWalletConfig, SwapMode};
 use blockchain_utils::create_websocket_wallet_provider;
 use eip7702_delegator_contract::EIP7702Delegator::Execution;
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::OsRng, RngCore, Rng};
+
+/// Generate a random EVM address
+fn generate_random_evm_address() -> Address {
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 20] = rng.gen();
+    Address::from(bytes)
+}
+
+/// Generate multiple random EVM addresses
+fn generate_random_evm_addresses(count: usize) -> Vec<Address> {
+    (0..count).map(|_| generate_random_evm_address()).collect()
+}
 
 #[derive(Clone)]
 pub enum SinglePaymentWallet {
@@ -111,10 +123,14 @@ enum PaymentWalletMode {
         bitcoin: Arc<BitcoinTransactionBroadcaster>,
         bitcoin_address: String,
         ethereum: (Arc<EVMTransactionBroadcaster>, DynProvider),
+        // Random EVM addresses for Bitcoin swaps
+        random_evm_addresses: Arc<Vec<Address>>,
     },
     Dedicated {
         _funding_wallet: SinglePaymentWallet,
         dedicated: DedicatedWallets,
+        // Random EVM addresses for Bitcoin swaps (if BtcStart mode)
+        random_evm_addresses: Arc<Vec<Address>>,
     },
     DualDedicated {
         bitcoin: BitcoinDedicatedWallets,
@@ -135,17 +151,28 @@ impl PaymentWallets {
         bitcoin: Arc<BitcoinTransactionBroadcaster>,
         bitcoin_address: String,
         ethereum: (Arc<EVMTransactionBroadcaster>, DynProvider),
+        random_evm_addresses: Vec<Address>,
     ) -> Self {
         Self {
-            mode: Arc::new(PaymentWalletMode::DualShared { bitcoin, bitcoin_address, ethereum }),
+            mode: Arc::new(PaymentWalletMode::DualShared { 
+                bitcoin, 
+                bitcoin_address, 
+                ethereum,
+                random_evm_addresses: Arc::new(random_evm_addresses),
+            }),
         }
     }
 
-    fn dedicated(funding_wallet: SinglePaymentWallet, dedicated: DedicatedWallets) -> Self {
+    fn dedicated(
+        funding_wallet: SinglePaymentWallet,
+        dedicated: DedicatedWallets,
+        random_evm_addresses: Vec<Address>,
+    ) -> Self {
         Self {
             mode: Arc::new(PaymentWalletMode::Dedicated {
                 _funding_wallet: funding_wallet,
                 dedicated,
+                random_evm_addresses: Arc::new(random_evm_addresses),
             }),
         }
     }
@@ -184,7 +211,7 @@ impl PaymentWallets {
     ) -> Result<(String, String)> {
         match self.mode.as_ref() {
             PaymentWalletMode::Shared(wallet) => wallet.create_payment(lot, recipient).await,
-            PaymentWalletMode::DualShared { bitcoin, bitcoin_address, ethereum } => {
+            PaymentWalletMode::DualShared { bitcoin, bitcoin_address, ethereum, .. } => {
                 match lot.currency.chain {
                     ChainType::Bitcoin => {
                         let tx_hash = create_bitcoin_payment_with_retry(bitcoin, lot, recipient).await?;
@@ -257,6 +284,79 @@ impl PaymentWallets {
                         ethereum
                             .create_payment(*wallet_index, lot, recipient)
                             .await
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get the EVM account address that should control this swap
+    pub fn get_evm_account_address(&self, swap_index: usize) -> Result<Address> {
+        match self.mode.as_ref() {
+            PaymentWalletMode::Shared(wallet) => {
+                match wallet {
+                    SinglePaymentWallet::Ethereum(broadcaster, _) => {
+                        Ok(broadcaster.sender)
+                    }
+                    SinglePaymentWallet::Bitcoin(_, _) => {
+                        // BtcStart shared mode: return a random address for this swap
+                        // Since we don't have pre-generated addresses here, generate one
+                        Ok(generate_random_evm_address())
+                    }
+                }
+            }
+            PaymentWalletMode::DualShared { random_evm_addresses, ethereum, .. } => {
+                // For RandStart shared mode, check what we're doing
+                // If we have a random address for this index, use it (Bitcoin swap)
+                // Otherwise use the ethereum wallet address (Ethereum swap)
+                random_evm_addresses
+                    .get(swap_index)
+                    .copied()
+                    .or_else(|| Some(ethereum.0.sender))
+                    .ok_or_else(|| anyhow::anyhow!("no EVM address for swap {}", swap_index))
+            }
+            PaymentWalletMode::Dedicated { dedicated, random_evm_addresses, .. } => {
+                match dedicated {
+                    DedicatedWallets::Ethereum(wallets) => {
+                        // EthStart dedicated: use the dedicated wallet address
+                        wallets
+                            .wallets
+                            .get(swap_index)
+                            .map(|w| w.address())
+                            .ok_or_else(|| anyhow::anyhow!("no dedicated EVM wallet for swap {}", swap_index))
+                    }
+                    DedicatedWallets::Bitcoin(_) => {
+                        // BtcStart dedicated: use pre-generated random address
+                        random_evm_addresses
+                            .get(swap_index)
+                            .copied()
+                            .ok_or_else(|| anyhow::anyhow!("no random EVM address for swap {}", swap_index))
+                    }
+                }
+            }
+            PaymentWalletMode::DualDedicated { ethereum, index_mapping, .. } => {
+                // RandStart dedicated: for Bitcoin swaps, use the corresponding EVM wallet at the same index
+                // For Ethereum swaps, use the actual EVM wallet address
+                let (chain, wallet_index) = index_mapping
+                    .get(swap_index)
+                    .ok_or_else(|| anyhow::anyhow!("no wallet mapping for swap {}", swap_index))?;
+                
+                match chain {
+                    ChainType::Bitcoin => {
+                        // Bitcoin swap: use EVM wallet at the same global swap index
+                        ethereum
+                            .wallets
+                            .get(swap_index)
+                            .map(|w| w.address())
+                            .ok_or_else(|| anyhow::anyhow!("no EVM wallet for swap index {}", swap_index))
+                    }
+                    ChainType::Ethereum => {
+                        // Ethereum swap: use the actual EVM wallet
+                        ethereum
+                            .wallets
+                            .get(*wallet_index)
+                            .map(|w| w.address())
+                            .ok_or_else(|| anyhow::anyhow!("no EVM wallet for wallet index {}", wallet_index))
                     }
                 }
             }
@@ -527,7 +627,8 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
                 let dedicated =
                     create_dedicated_wallets(&funding_wallet, config).await?;
                 info!("dedicated single-payment wallets enabled");
-                PaymentWallets::dedicated(funding_wallet, dedicated)
+                // No random addresses needed for EthStart
+                PaymentWallets::dedicated(funding_wallet, dedicated, Vec::new())
             } else {
                 PaymentWallets::shared(funding_wallet)
             }
@@ -545,8 +646,11 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
                 let dedicated =
                     create_dedicated_wallets(&funding_wallet, config).await?;
                 info!("dedicated single-payment wallets enabled");
-                PaymentWallets::dedicated(funding_wallet, dedicated)
+                // Generate random EVM addresses for each Bitcoin swap
+                let random_addresses = generate_random_evm_addresses(config.total_swaps);
+                PaymentWallets::dedicated(funding_wallet, dedicated, random_addresses)
             } else {
+                // Shared mode: addresses generated on-the-fly in get_evm_account_address
                 PaymentWallets::shared(funding_wallet)
             }
         }
@@ -619,7 +723,14 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
                 info!("dedicated dual-chain wallets enabled");
                 PaymentWallets::dual_dedicated(bitcoin_dedicated, ethereum_dedicated, index_mapping)
             } else {
-                PaymentWallets::dual_shared(btc_broadcaster, btc_address, (evm_broadcaster, evm_provider))
+                // Generate random addresses only for Bitcoin swaps
+                let mut random_addresses = vec![Address::ZERO; directions.len()];
+                for (index, direction) in directions.iter().enumerate() {
+                    if direction.from_currency.chain == ChainType::Bitcoin {
+                        random_addresses[index] = generate_random_evm_address();
+                    }
+                }
+                PaymentWallets::dual_shared(btc_broadcaster, btc_address, (evm_broadcaster, evm_provider), random_addresses)
             }
         }
     };

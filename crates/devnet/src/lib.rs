@@ -621,6 +621,8 @@ impl RiftDevnetBuilder {
                     e
                 )
             })?;
+        
+        let funding_amount = bitcoin::Amount::from_btc(1000.0).unwrap().to_sat();
 
         // Fund demo_account with cbBTC
         ethereum_devnet

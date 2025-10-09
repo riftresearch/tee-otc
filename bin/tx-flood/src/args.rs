@@ -89,10 +89,6 @@ pub struct Args {
     #[arg(long, default_value_t = true)]
     pub randomize_amounts: bool,
 
-    /// EVM account address that controls the swap (used for swap auth)
-    #[arg(long, value_parser = parse_address, default_value = DEFAULT_RECIPIENT_EVM_ADDRESS)]
-    pub user_evm_account_address: Address,
-
     /// Bitcoin descriptor representing the funded wallet (wpkh(desc)...)
     #[arg(long, default_value = DEFAULT_BITCOIN_DESCRIPTOR)]
     pub bitcoin_wallet_descriptor: String,
@@ -155,7 +151,6 @@ pub struct Config {
     pub min_amount: U256,
     pub max_amount: U256,
     pub randomize_amounts: bool,
-    pub user_evm_account_address: Address,
     pub bitcoin: Option<BitcoinWalletConfig>,
     pub evm: Option<EvmWalletConfig>,
     pub dedicated_wallets: DedicatedWalletsConfig,
@@ -201,7 +196,6 @@ impl Args {
             min_amount,
             max_amount,
             randomize_amounts,
-            user_evm_account_address,
             bitcoin_wallet_descriptor,
             bitcoin_network,
             bitcoin_esplora_url,
@@ -323,7 +317,6 @@ impl Args {
             min_amount,
             max_amount,
             randomize_amounts,
-            user_evm_account_address,
             bitcoin,
             evm,
             dedicated_wallets,
@@ -344,6 +337,7 @@ fn parse_u256(value: &str) -> Result<U256, String> {
     }
 }
 
+#[allow(unused)]
 fn parse_address(value: &str) -> Result<Address, String> {
     Address::parse_checksummed(value, None).map_err(|e| e.to_string())
 }
