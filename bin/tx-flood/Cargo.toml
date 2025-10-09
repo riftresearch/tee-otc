@@ -31,3 +31,5 @@ chrono = { workspace = true }
 tempfile = {workspace=true}
 eip3009-erc20-contract = {workspace=true}
 snafu = {workspace=true}
+eip7702-delegator-contract = { workspace = true }
+rand = { workspace = true }

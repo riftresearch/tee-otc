@@ -487,7 +487,6 @@ async fn test_evm_wallet_actually_sends_token(
         }
     }
 
-
     // Create a currency for testing
     let lot = Lot {
         currency: Currency {

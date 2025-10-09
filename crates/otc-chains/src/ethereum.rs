@@ -275,6 +275,10 @@ impl EthereumChain {
             })?;
 
         if transfers.transfers.is_empty() {
+            if mm_payment.is_some() {
+                info!("No transfers found for mm_payment");
+                return Ok(None);
+            }
             info!("No transfers found");
             return Ok(None);
         }

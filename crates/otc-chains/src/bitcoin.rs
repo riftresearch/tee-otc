@@ -420,7 +420,6 @@ impl BitcoinChain {
         let address = bitcoin::Address::from_str(address)?.assume_checked();
 
         // Called a hint b/c the esplora client CANNOT be trusted to return non-fradulent data (b/c it not intended to run locally)
-        // Note that if there are more than 50 utxos available to the address, this could ignore a valid transfer (TODO: how to handle this?)
         let utxos = self
             .untrusted_esplora_client
             .get_address_utxo(&address)

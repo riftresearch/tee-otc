@@ -365,7 +365,10 @@ pub fn create_payment_executions(
         .iter()
         .zip(amounts.iter())
         .map(|(recipient, amount)| {
-            let calldata = token_contract.transfer(*recipient, *amount).calldata().clone();
+            let calldata = token_contract
+                .transfer(*recipient, *amount)
+                .calldata()
+                .clone();
             Execution {
                 target: token_address,
                 value: U256::ZERO,
@@ -429,16 +432,18 @@ pub async fn create_evm_transfer_transaction(
     match &lot.currency.token {
         TokenIdentifier::Native => unimplemented!(),
         TokenIdentifier::Address(address) => {
-            let token_address = address.parse::<Address>().map_err(|_| {
-                WalletError::ParseAddressFailed {
-                    context: "invalid token address".to_string(),
-                }
-            })?;
-            let to_address = to_address.parse::<Address>().map_err(|_| {
-                WalletError::ParseAddressFailed {
-                    context: "invalid to address".to_string(),
-                }
-            })?;
+            let token_address =
+                address
+                    .parse::<Address>()
+                    .map_err(|_| WalletError::ParseAddressFailed {
+                        context: "invalid token address".to_string(),
+                    })?;
+            let to_address =
+                to_address
+                    .parse::<Address>()
+                    .map_err(|_| WalletError::ParseAddressFailed {
+                        context: "invalid to address".to_string(),
+                    })?;
 
             let fee_address =
                 Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Ethereum])
@@ -462,7 +467,8 @@ pub async fn create_evm_transfer_transaction(
             };
 
             // Create payment executions for transferring tokens
-            let token_contract = GenericEIP3009ERC20Instance::new(token_address, provider.clone().erased());
+            let token_contract =
+                GenericEIP3009ERC20Instance::new(token_address, provider.clone().erased());
             let payment_executions =
                 create_payment_executions(&token_contract, &recipients, &amounts);
 

@@ -110,7 +110,6 @@ pub struct OtcServerArgs {
     #[arg(long, env = "UNTRUSTED_EVM_TOKEN_INDEXER_URL")]
     pub untrusted_ethereum_mainnet_token_indexer_url: String,
 
-
     /// Bitcoin RPC URL
     #[arg(long, env = "BITCOIN_RPC_URL")]
     pub bitcoin_rpc_url: String,

@@ -53,8 +53,8 @@ struct CoinbaseTickerMessage {
     msg_type: String,
     product_id: Option<String>,
     best_bid: Option<String>,
-   best_ask: Option<String>,
-   price: Option<String>,
+    best_ask: Option<String>,
+    price: Option<String>,
 }
 
 #[derive(Debug, Clone)]

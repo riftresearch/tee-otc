@@ -1,5 +1,6 @@
 use std::{collections::VecDeque, io, thread, time::Duration};
 
+use alloy::primitives::U256;
 use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
@@ -436,8 +437,10 @@ impl App {
             [
                 Constraint::Length(4),
                 Constraint::Length(12),
-                Constraint::Length(20),
-                Constraint::Percentage(40),
+                Constraint::Length(12),
+                Constraint::Length(8),
+                Constraint::Length(28),
+                Constraint::Min(25),
                 Constraint::Length(18),
                 Constraint::Length(10),
             ],
@@ -446,6 +449,8 @@ impl App {
             Row::new([
                 Cell::from("#"),
                 Cell::from("Swap"),
+                Cell::from("Amount"),
+                Cell::from("Deposit"),
                 Cell::from("Stage"),
                 Cell::from("Detail"),
                 Cell::from("Tx Hash"),
@@ -541,6 +546,8 @@ struct SwapRow {
     status_text: String,
     detail_text: String,
     tx_hash: Option<String>,
+    amount: Option<U256>,
+    deposit_chain: Option<ChainType>,
     last_update: Option<String>,
     is_terminal: bool,
     is_error: bool,
@@ -554,6 +561,8 @@ impl SwapRow {
             status_text: "pending".to_string(),
             detail_text: String::new(),
             tx_hash: None,
+            amount: None,
+            deposit_chain: None,
             last_update: None,
             is_terminal: false,
             is_error: false,
@@ -561,6 +570,12 @@ impl SwapRow {
     }
 
     fn apply(&mut self, update: SwapUpdate) {
+        if let Some(amount) = update.amount {
+            self.amount = Some(amount);
+        }
+        if let Some(chain) = update.deposit_chain {
+            self.deposit_chain = Some(chain);
+        }
         self.last_update = Some(update.timestamp.format("%H:%M:%S").to_string());
         match update.stage {
             SwapStage::QuoteRequested => {
@@ -638,6 +653,17 @@ impl SwapRow {
             .swap_id
             .map(|id| short_uuid(&id).to_string())
             .unwrap_or_else(|| "-".to_string());
+        let amount_cell = self
+            .amount
+            .map(|amt| format_amount(amt))
+            .unwrap_or_else(|| "-".to_string());
+        let deposit_cell = self
+            .deposit_chain
+            .map(|chain| match chain {
+                ChainType::Bitcoin => "BTC".to_string(),
+                ChainType::Ethereum => "ETH".to_string(),
+            })
+            .unwrap_or_else(|| "-".to_string());
         let tx_cell = self.tx_hash.clone().unwrap_or_else(|| "-".to_string());
         let updated = self
             .last_update
@@ -657,6 +683,8 @@ impl SwapRow {
         Row::new(vec![
             Cell::from(self.index.to_string()),
             Cell::from(swap_cell),
+            Cell::from(amount_cell),
+            Cell::from(deposit_cell),
             Cell::from(self.status_text.clone()),
             Cell::from(self.detail_text.clone()),
             Cell::from(tx_cell),
@@ -682,4 +710,21 @@ fn short_hash(hash: &str) -> String {
         let suffix = &hash[hash.len() - 4..];
         format!("{}...{}", prefix, suffix)
     }
+}
+
+fn format_amount(amount: U256) -> String {
+    // Format with thousands separators for readability
+    let s = amount.to_string();
+    let mut result = String::new();
+    let mut count = 0;
+    
+    for ch in s.chars().rev() {
+        if count > 0 && count % 3 == 0 {
+            result.push(',');
+        }
+        result.push(ch);
+        count += 1;
+    }
+    
+    result.chars().rev().collect()
 }

@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
     let log_rx = init_tracing(&config.log_level)?;
 
     let mut wallet_resources = wallets::setup_wallets(&config).await?;
-    let payment_wallet = wallet_resources.payment_wallet.clone();
+    let payment_wallets = wallet_resources.payment_wallets.clone();
 
     let (update_tx, update_rx) = unbounded_channel();
     let log_forward_tx = update_tx.clone();
@@ -44,7 +44,7 @@ async fn main() -> Result<()> {
     });
 
     let (tui_handle, exit_rx_handle) =
-        tui::spawn_tui(update_rx, config.total_swaps, payment_wallet.chain_type());
+        tui::spawn_tui(update_rx, config.total_swaps, payment_wallets.chain_type());
     let mut exit_rx = Some(exit_rx_handle);
 
     enum LoadOutcome {
@@ -55,7 +55,7 @@ async fn main() -> Result<()> {
 
     let mut load_test = std::pin::Pin::from(Box::new(engine::run_load_test(
         config.clone(),
-        payment_wallet,
+        payment_wallets,
         update_tx.clone(),
     )));
 

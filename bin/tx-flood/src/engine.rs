@@ -1,9 +1,11 @@
 use std::{error::Error as StdError, sync::Arc, time::Instant};
 
+use alloy::primitives::U256;
 use anyhow::{anyhow, Context, Result};
 use otc_models::{ChainType, Currency, Lot, Quote, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::swaps::{CreateSwapRequest, CreateSwapResponse, SwapResponse};
+use rand::Rng;
 use reqwest::{Client, Url};
 use rfq_server::server::QuoteResponse;
 use tokio::{sync::mpsc::UnboundedSender, time::sleep};
@@ -11,9 +13,9 @@ use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::{
-    args::Config,
+    args::{Config, SwapMode},
     status::{SwapStage, SwapUpdate, UiEvent},
-    wallets::SinglePaymentWallet,
+    wallets::PaymentWallets,
 };
 
 pub struct RunSummary {
@@ -23,7 +25,7 @@ pub struct RunSummary {
 
 pub async fn run_load_test(
     config: Arc<Config>,
-    wallet: SinglePaymentWallet,
+    wallets: PaymentWallets,
     update_tx: UnboundedSender<UiEvent>,
 ) -> Result<RunSummary> {
     let client = Client::builder()
@@ -48,7 +50,7 @@ pub async fn run_load_test(
             quote_url: config.quote_url.clone(),
             create_swap_url: create_swap_url.clone(),
             swap_status_base: swap_status_base.clone(),
-            wallet: wallet.clone(),
+            wallets: wallets.clone(),
             update_tx: update_tx.clone(),
             index: idx,
         };
@@ -89,7 +91,7 @@ struct SwapContext {
     quote_url: Url,
     create_swap_url: Url,
     swap_status_base: Url,
-    wallet: SinglePaymentWallet,
+    wallets: PaymentWallets,
     update_tx: UnboundedSender<UiEvent>,
     index: usize,
 }
@@ -101,17 +103,90 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
         quote_url,
         create_swap_url,
         swap_status_base,
-        wallet,
+        wallets,
         update_tx,
         index,
     } = ctx;
 
+    // Generate amount for this swap based on config
+    let amount = if config.randomize_amounts {
+        generate_random_amount(config.min_amount, config.max_amount)
+    } else {
+        config.min_amount
+    };
+
+    // Determine currencies and destination based on mode
+    let (from_currency, to_currency, user_destination_address) = match &config.mode {
+        SwapMode::EthStart => {
+            let cbbtc = Currency {
+                chain: ChainType::Ethereum,
+                token: TokenIdentifier::Address(
+                    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
+                ),
+                decimals: 8,
+            };
+            let btc = Currency {
+                chain: ChainType::Bitcoin,
+                token: TokenIdentifier::Native,
+                decimals: 8,
+            };
+            (
+                cbbtc,
+                btc,
+                "bcrt1qs758ursh4q9z627kt3pp5yysm78ddny6txaqgw".to_string(),
+            )
+        }
+        SwapMode::BtcStart => {
+            let btc = Currency {
+                chain: ChainType::Bitcoin,
+                token: TokenIdentifier::Native,
+                decimals: 8,
+            };
+            let cbbtc = Currency {
+                chain: ChainType::Ethereum,
+                token: TokenIdentifier::Address(
+                    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
+                ),
+                decimals: 8,
+            };
+            (
+                btc,
+                cbbtc,
+                "0x61f11ac1218cb522347f6D430202d8290DA1a28f".to_string(),
+            )
+        }
+        SwapMode::RandStart { directions } => {
+            let direction = directions
+                .get(index)
+                .ok_or_else(|| anyhow!("missing swap direction for index {}", index))?;
+            (
+                direction.from_currency.clone(),
+                direction.to_currency.clone(),
+                direction.user_destination_address.clone(),
+            )
+        }
+    };
+
+    let deposit_chain = from_currency.chain;
+
+    let quote_request = QuoteRequest {
+        mode: otc_models::QuoteMode::ExactInput,
+        from: from_currency,
+        to: to_currency,
+        amount,
+    };
+
     send_update(
         &update_tx,
-        SwapUpdate::new(index, SwapStage::QuoteRequested),
+        SwapUpdate::with_amount_and_chain(
+            index,
+            SwapStage::QuoteRequested,
+            amount,
+            deposit_chain,
+        ),
     );
 
-    let quote = match request_quote(&client, &quote_url, &config.quote_request).await {
+    let quote = match request_quote(&client, &quote_url, &quote_request).await {
         Ok(q) => q,
         Err(err) => {
             send_update(
@@ -129,12 +204,17 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
     let quote_id = quote.id;
     send_update(
         &update_tx,
-        SwapUpdate::new(index, SwapStage::QuoteReceived { quote_id }),
+        SwapUpdate::with_amount_and_chain(
+            index,
+            SwapStage::QuoteReceived { quote_id },
+            amount,
+            deposit_chain,
+        ),
     );
 
     let create_swap_request = CreateSwapRequest {
         quote: quote.clone(),
-        user_destination_address: config.user_destination_address.clone(),
+        user_destination_address,
         user_evm_account_address: config.user_evm_account_address,
         metadata: None,
     };
@@ -159,14 +239,19 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
     let swap_id = swap_response.swap_id;
     send_update(
         &update_tx,
-        SwapUpdate::new(index, SwapStage::SwapSubmitted { swap_id }),
+        SwapUpdate::with_amount_and_chain(
+            index,
+            SwapStage::SwapSubmitted { swap_id },
+            amount,
+            deposit_chain,
+        ),
     );
 
     let deposit_lot =
         lot_from_response(&swap_response).context("invalid deposit lot in response")?;
 
-    let tx_hash = match wallet
-        .create_payment(&deposit_lot, &swap_response.deposit_address)
+    let tx_hash = match wallets
+        .create_payment(index, &deposit_lot, &swap_response.deposit_address)
         .await
     {
         Ok(hash) => hash,
@@ -187,12 +272,14 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
 
     send_update(
         &update_tx,
-        SwapUpdate::new(
+        SwapUpdate::with_amount_and_chain(
             index,
             SwapStage::PaymentBroadcast {
                 swap_id,
                 tx_hash: tx_hash.clone(),
             },
+            amount,
+            deposit_chain,
         ),
     );
 
@@ -210,7 +297,12 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
         Ok(()) => {
             send_update(
                 &update_tx,
-                SwapUpdate::new(index, SwapStage::Settled { swap_id }),
+                SwapUpdate::with_amount_and_chain(
+                    index,
+                    SwapStage::Settled { swap_id },
+                    amount,
+                    deposit_chain,
+                ),
             );
             Ok(())
         }
@@ -419,6 +511,28 @@ async fn poll_swap_status(
 
         sleep(poll_interval).await;
     }
+}
+
+fn generate_random_amount(min: U256, max: U256) -> U256 {
+    if min == max {
+        return min;
+    }
+    
+    let mut rng = rand::thread_rng();
+    let range = max - min;
+    
+    // For small ranges that fit in u64, use efficient u64 random generation
+    if let Some(range_u64) = range.try_into().ok().filter(|&r: &u64| r <= u64::MAX) {
+        let random_offset = rng.gen_range(0..=range_u64);
+        return min + U256::from(random_offset);
+    }
+    
+    // For larger ranges, sample bytes and modulo
+    // This is less efficient but handles the full U256 range
+    let mut bytes = [0u8; 32];
+    rng.fill(&mut bytes);
+    let random_u256 = U256::from_be_bytes(bytes);
+    min + (random_u256 % (range + U256::from(1)))
 }
 
 fn send_update(tx: &UnboundedSender<UiEvent>, update: SwapUpdate) {

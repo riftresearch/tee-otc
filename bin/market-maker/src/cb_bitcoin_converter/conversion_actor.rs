@@ -140,7 +140,8 @@ pub async fn run_rebalancer(
         let btc_pct = (btc as f64 / total_sats as f64) * 100.0;
         let cbbtc_pct = (cbbtc as f64 / total_sats as f64) * 100.0;
 
-        info!(
+        // this info is shown in metrics, so we don't need to log it here
+        debug!(
             message = "detailed inventory breakdown",
             btc_total_sats = btc,
             btc_native_sats = btc_native,

@@ -1,13 +1,16 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use alloy::primitives::{Address, U256};
 use anyhow::{anyhow, Result};
 use bitcoin::Network;
 use clap::{Parser, ValueEnum};
-use otc_models::{ChainType, Currency, QuoteMode, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, TokenIdentifier};
+use rand::Rng;
 use reqwest::Url;
+use tempfile::TempDir;
 
-const DEFAULT_EVM_ADDRESS: &str = "0x61f11ac1218cb522347f6D430202d8290DA1a28f";
+const DEFAULT_RECIPIENT_EVM_ADDRESS: &str = "0x61f11ac1218cb522347f6D430202d8290DA1a28f";
+const DEFAULT_RECIPIENT_BITCOIN_ADDRESS: &str = "bcrt1qs758ursh4q9z627kt3pp5yysm78ddny6txaqgw";
 const DEFAULT_EVM_PRIVATE_KEY: &str =
     "2230f1b621d6865e08b75856c575da89317a944785f33a16d9f2192adedb9ca8";
 const DEFAULT_BITCOIN_DESCRIPTOR: &str =
@@ -15,8 +18,24 @@ const DEFAULT_BITCOIN_DESCRIPTOR: &str =
 const DEFAULT_EVM_WS_URL: &str = "ws://0.0.0.0:50101";
 const DEFAULT_EVM_HTTP_URL: &str = "http://0.0.0.0:50101";
 const DEFAULT_ESPLORA_URL: &str = "http://0.0.0.0:50103";
-const DEFAULT_CBBTC_ADDRESS: &str = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf";
-const DEFAULT_BITCOIN_ADDRESS: &str = "bcrt1qs758ursh4q9z627kt3pp5yysm78ddny6txaqgw";
+const CBBTC_ADDRESS: &str = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf";
+
+#[derive(ValueEnum, Debug, Clone, Copy)]
+pub enum ModeArg {
+    /// User sends cbBTC on Ethereum
+    EthStart,
+    /// User sends BTC on Bitcoin
+    BtcStart,
+    /// Randomly choose between eth-start and btc-start for each swap
+    RandStart,
+}
+
+#[derive(Debug, Clone)]
+pub struct SwapDirection {
+    pub from_currency: Currency,
+    pub to_currency: Currency,
+    pub user_destination_address: String,
+}
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "tx-flood")]
@@ -54,49 +73,25 @@ pub struct Args {
     #[arg(long, default_value = "10m", value_parser = parse_duration)]
     pub swap_timeout: Duration,
 
-    /// Quote mode to use when requesting quotes
-    #[arg(long, value_enum, default_value_t = QuoteModeArg::ExactInput)]
-    pub quote_mode: QuoteModeArg,
+    /// Swap mode: eth-start (send cbBTC), btc-start (send BTC), or rand-start (random)
+    #[arg(long, value_enum, default_value_t = ModeArg::EthStart)]
+    pub mode: ModeArg,
 
-    /// Chain the user will deposit from (quote.from.chain)
-    #[arg(long, value_enum, default_value_t = ChainArg::Ethereum)]
-    pub from_chain: ChainArg,
+    /// Minimum amount for quote requests (decimal or hex string, e.g. "5000" or "0x1388")
+    #[arg(long, default_value = "5000", value_parser = parse_u256)]
+    pub min_amount: U256,
 
-    /// Token identifier for the deposit side ("native" or an address)
-    #[arg(long, default_value = DEFAULT_CBBTC_ADDRESS)]
-    pub from_token: String,
+    /// Maximum amount for quote requests (decimal or hex string, e.g. "100000" or "0x186a0")
+    #[arg(long, default_value = "100000", value_parser = parse_u256)]
+    pub max_amount: U256,
 
-    /// Decimals for the deposit currency
-    #[arg(long, default_value_t = 8)]
-    pub from_decimals: u8,
-
-    /// Chain the user will receive funds on (quote.to.chain)
-    #[arg(long, value_enum, default_value_t = ChainArg::Bitcoin)]
-    pub to_chain: ChainArg,
-
-    /// Token identifier for the receive side ("native" or an address)
-    #[arg(long, default_value = "native")]
-    pub to_token: String,
-
-    /// Decimals for the receive currency
-    #[arg(long, default_value_t = 8)]
-    pub to_decimals: u8,
-
-    /// Amount for the quote request (decimal or hex string, e.g. "100000" or "0x186a0")
-    #[arg(long, default_value = "10001", value_parser = parse_u256)]
-    pub amount: U256,
-
-    /// Destination address the user will receive funds at
-    #[arg(long, default_value = DEFAULT_BITCOIN_ADDRESS)]
-    pub user_destination_address: String,
+    /// Enable randomized amounts between min_amount and max_amount for each swap
+    #[arg(long, default_value_t = true)]
+    pub randomize_amounts: bool,
 
     /// EVM account address that controls the swap (used for swap auth)
-    #[arg(long, value_parser = parse_address, default_value = DEFAULT_EVM_ADDRESS)]
+    #[arg(long, value_parser = parse_address, default_value = DEFAULT_RECIPIENT_EVM_ADDRESS)]
     pub user_evm_account_address: Address,
-
-    /// Path to the bitcoin wallet database
-    #[arg(long, default_value = "./demo-bitcoin-wallet.sqlite")]
-    pub bitcoin_wallet_db_path: String,
 
     /// Bitcoin descriptor representing the funded wallet (wpkh(desc)...)
     #[arg(long, default_value = DEFAULT_BITCOIN_DESCRIPTOR)]
@@ -125,6 +120,25 @@ pub struct Args {
     /// Number of confirmations required before the wallet considers a tx final
     #[arg(long, default_value_t = 1)]
     pub evm_confirmations: u64,
+
+    /// Enable dedicated per-swap wallets funded up-front from the master wallet
+    #[arg(long, default_value_t = false)]
+    pub dedicated_wallets: bool,
+
+    /// Additional sats to allocate to each dedicated Bitcoin wallet for miner fees
+    #[arg(long, default_value_t = 5_000)]
+    pub dedicated_wallet_bitcoin_fee_reserve_sats: u64,
+
+    /// Additional wei to allocate to each dedicated EVM wallet for gas fees
+    #[arg(long, default_value = "0x2386f26fc10000", value_parser = parse_u256)]
+    pub dedicated_wallet_evm_fee_reserve_wei: U256,
+}
+
+#[derive(Debug, Clone)]
+pub enum SwapMode {
+    EthStart,
+    BtcStart,
+    RandStart { directions: Vec<SwapDirection> },
 }
 
 #[derive(Debug, Clone)]
@@ -137,11 +151,22 @@ pub struct Config {
     pub interval: Duration,
     pub poll_interval: Duration,
     pub swap_timeout: Duration,
-    pub quote_request: QuoteRequest,
-    pub user_destination_address: String,
+    pub mode: SwapMode,
+    pub min_amount: U256,
+    pub max_amount: U256,
+    pub randomize_amounts: bool,
     pub user_evm_account_address: Address,
     pub bitcoin: Option<BitcoinWalletConfig>,
     pub evm: Option<EvmWalletConfig>,
+    pub dedicated_wallets: DedicatedWalletsConfig,
+    pub _bitcoin_wallet_db_dir: Arc<TempDir>
+}
+
+#[derive(Debug, Clone)]
+pub struct DedicatedWalletsConfig {
+    pub enabled: bool,
+    pub bitcoin_fee_reserve_sats: u64,
+    pub evm_fee_reserve_wei: U256,
 }
 
 #[derive(Debug, Clone)]
@@ -160,35 +185,6 @@ pub struct EvmWalletConfig {
     pub confirmations: u64,
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy)]
-pub enum QuoteModeArg {
-    ExactInput,
-    ExactOutput,
-}
-
-impl From<QuoteModeArg> for QuoteMode {
-    fn from(value: QuoteModeArg) -> Self {
-        match value {
-            QuoteModeArg::ExactInput => QuoteMode::ExactInput,
-            QuoteModeArg::ExactOutput => QuoteMode::ExactOutput,
-        }
-    }
-}
-
-#[derive(ValueEnum, Debug, Clone, Copy)]
-pub enum ChainArg {
-    Bitcoin,
-    Ethereum,
-}
-
-impl From<ChainArg> for ChainType {
-    fn from(value: ChainArg) -> Self {
-        match value {
-            ChainArg::Bitcoin => ChainType::Bitcoin,
-            ChainArg::Ethereum => ChainType::Ethereum,
-        }
-    }
-}
 
 impl Args {
     pub fn into_config(self) -> Result<Config> {
@@ -201,17 +197,11 @@ impl Args {
             interval,
             poll_interval,
             swap_timeout,
-            quote_mode,
-            from_chain,
-            from_token,
-            from_decimals,
-            to_chain,
-            to_token,
-            to_decimals,
-            amount,
-            user_destination_address,
+            mode,
+            min_amount,
+            max_amount,
+            randomize_amounts,
             user_evm_account_address,
-            bitcoin_wallet_db_path,
             bitcoin_wallet_descriptor,
             bitcoin_network,
             bitcoin_esplora_url,
@@ -219,6 +209,9 @@ impl Args {
             evm_rpc_ws_url,
             evm_debug_rpc_url,
             evm_confirmations,
+            dedicated_wallets,
+            dedicated_wallet_bitcoin_fee_reserve_sats,
+            dedicated_wallet_evm_fee_reserve_wei,
         } = self;
 
         if total_swaps == 0 {
@@ -227,32 +220,65 @@ impl Args {
         if swaps_per_interval == 0 {
             return Err(anyhow!("swaps_per_interval must be greater than zero"));
         }
+        if min_amount > max_amount {
+            return Err(anyhow!("min_amount must be less than or equal to max_amount"));
+        }
 
-        let quote_mode: QuoteMode = quote_mode.into();
-        let from_chain: ChainType = from_chain.into();
-        let to_chain: ChainType = to_chain.into();
-
-        let from_currency = Currency {
-            chain: from_chain,
-            token: parse_token_identifier(&from_token)?,
-            decimals: from_decimals,
+        // Define the two currency pairs
+        let cbbtc_currency = Currency {
+            chain: ChainType::Ethereum,
+            token: TokenIdentifier::Address(CBBTC_ADDRESS.to_string()),
+            decimals: 8,
         };
-        let to_currency = Currency {
-            chain: to_chain,
-            token: parse_token_identifier(&to_token)?,
-            decimals: to_decimals,
-        };
-
-        let quote_request = QuoteRequest {
-            mode: quote_mode,
-            from: from_currency,
-            to: to_currency,
-            amount,
+        let btc_currency = Currency {
+            chain: ChainType::Bitcoin,
+            token: TokenIdentifier::Native,
+            decimals: 8,
         };
 
-        let bitcoin = if from_chain == ChainType::Bitcoin {
+        // Build swap mode and determine required wallets
+        let (swap_mode, needs_bitcoin, needs_ethereum) = match mode {
+            ModeArg::EthStart => (SwapMode::EthStart, false, true),
+            ModeArg::BtcStart => (SwapMode::BtcStart, true, false),
+            ModeArg::RandStart => {
+                let mut rng = rand::thread_rng();
+                let mut directions = Vec::with_capacity(total_swaps);
+                let mut btc_count = 0;
+                let mut eth_count = 0;
+
+                for _ in 0..total_swaps {
+                    if rng.gen_bool(0.5) {
+                        // eth-start: send cbBTC, receive BTC
+                        directions.push(SwapDirection {
+                            from_currency: cbbtc_currency.clone(),
+                            to_currency: btc_currency.clone(),
+                            user_destination_address: DEFAULT_RECIPIENT_BITCOIN_ADDRESS.to_string(),
+                        });
+                        eth_count += 1;
+                    } else {
+                        // btc-start: send BTC, receive cbBTC
+                        directions.push(SwapDirection {
+                            from_currency: btc_currency.clone(),
+                            to_currency: cbbtc_currency.clone(),
+                            user_destination_address: DEFAULT_RECIPIENT_EVM_ADDRESS.to_string(),
+                        });
+                        btc_count += 1;
+                    }
+                }
+
+                (
+                    SwapMode::RandStart { directions },
+                    btc_count > 0,
+                    eth_count > 0,
+                )
+            }
+        };
+
+        let bitcoin_wallet_db_dir = tempfile::tempdir().unwrap();
+        let funding_bitcoin_wallet_db_path = bitcoin_wallet_db_dir.path().join("main_fund_wallet.sqlite");
+        let bitcoin = if needs_bitcoin {
             Some(BitcoinWalletConfig {
-                db_path: bitcoin_wallet_db_path,
+                db_path: funding_bitcoin_wallet_db_path.to_string_lossy().to_string(),
                 descriptor: bitcoin_wallet_descriptor,
                 network: bitcoin_network,
                 esplora_url: bitcoin_esplora_url,
@@ -261,7 +287,7 @@ impl Args {
             None
         };
 
-        let evm = if from_chain == ChainType::Ethereum {
+        let evm = if needs_ethereum {
             let debug_rpc_url = if evm_debug_rpc_url.is_empty() {
                 evm_rpc_ws_url.clone()
             } else {
@@ -278,6 +304,12 @@ impl Args {
             None
         };
 
+        let dedicated_wallets = DedicatedWalletsConfig {
+            enabled: dedicated_wallets,
+            bitcoin_fee_reserve_sats: dedicated_wallet_bitcoin_fee_reserve_sats,
+            evm_fee_reserve_wei: dedicated_wallet_evm_fee_reserve_wei,
+        };
+
         Ok(Config {
             log_level,
             otc_url,
@@ -287,11 +319,15 @@ impl Args {
             interval,
             poll_interval,
             swap_timeout,
-            quote_request,
-            user_destination_address,
+            mode: swap_mode,
+            min_amount,
+            max_amount,
+            randomize_amounts,
             user_evm_account_address,
             bitcoin,
             evm,
+            dedicated_wallets,
+            _bitcoin_wallet_db_dir: Arc::new(bitcoin_wallet_db_dir),
         })
     }
 }
@@ -323,16 +359,3 @@ fn parse_private_key(value: &str) -> Result<[u8; 32], String> {
     Ok(array)
 }
 
-fn parse_token_identifier(token: &str) -> Result<TokenIdentifier> {
-    if token.eq_ignore_ascii_case("native") {
-        Ok(TokenIdentifier::Native)
-    } else {
-        Ok(TokenIdentifier::Address(token.to_string()))
-    }
-}
-
-impl Config {
-    pub fn deposit_chain(&self) -> ChainType {
-        self.quote_request.from.chain
-    }
-}

@@ -9,7 +9,7 @@ use bdk_wallet::{
     CreateParams, PersistedWallet, Wallet,
 };
 use otc_chains::traits::MarketMakerPaymentValidation;
-use otc_models::{ChainType, Lot};
+use otc_models::ChainType;
 use snafu::ResultExt;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinSet;
@@ -138,10 +138,7 @@ async fn process_transaction(
                     payment.to_address, network
                 ),
             })?;
-        payment_tuple.push((
-            address,
-            Amount::from_sat(payment.lot.amount.to::<u64>()),
-        ));
+        payment_tuple.push((address, Amount::from_sat(payment.lot.amount.to::<u64>())));
     }
 
     // Sync wallet before building transaction
@@ -186,6 +183,8 @@ async fn process_transaction(
             )
             .context(AddForeignUtxoSnafu)?;
     }
+
+    tx_builder.nlocktime(crate::bitcoin::absolute::LockTime::ZERO);
 
     // Create and sign the transaction
     let build_start = Instant::now();
@@ -236,18 +235,39 @@ async fn process_transaction(
         let tx = psbt.extract_tx().context(ExtractTransactionSnafu)?;
         let txid = tx.compute_txid().to_string();
 
-        // Broadcast the transaction
+        // Broadcast the transaction with retry logic for mempool chain errors
         let broadcast_start = Instant::now();
-        if let Err(e) = esplora_client.broadcast(&tx).await {
-            // If broadcast fails, cancel the transaction to free UTXOs
-            let mut wallet_guard = wallet.lock().await;
-            wallet_guard.cancel_tx(&tx);
-            let mut conn = connection.lock().await;
-            wallet_guard
-                .persist(&mut conn)
-                .context(PersistWalletSnafu)?;
+        const MAX_MEMPOOL_RETRIES: u32 = 10;
+        let mut retry_count = 0;
+        
+        let broadcast_result = loop {
+            match esplora_client.broadcast(&tx).await {
+                Ok(_) => break Ok(()),
+                Err(e) => {
+                    if is_mempool_chain_error(&e) && retry_count < MAX_MEMPOOL_RETRIES {
+                        retry_count += 1;
+                        info!(
+                            "Mempool chain error detected (attempt {}/{MAX_MEMPOOL_RETRIES}): {:?}. Waiting for new block...",
+                            retry_count, e
+                        );
+                        wait_for_new_block(esplora_client).await?;
+                        continue;
+                    }
+                    break Err(e);
+                }
+            }
+        };
+        
+        if let Err(e) = broadcast_result {
+                let mut wallet_guard = wallet.lock().await;
+                wallet_guard.cancel_tx(&tx);
+                let mut conn = connection.lock().await;
+                wallet_guard
+                    .persist(&mut conn)
+                    .context(PersistWalletSnafu)?;
             return Err(BitcoinWalletError::BroadcastTransaction { source: e });
         }
+        
         info!("Transaction broadcast in {:?}", broadcast_start.elapsed());
 
         // Sync after broadcast to update wallet state
@@ -320,4 +340,61 @@ fn create_op_return_script(nonce: &[u8; 16]) -> ScriptBuf {
         .push_opcode(bitcoin::opcodes::all::OP_RETURN)
         .push_slice(nonce)
         .into_script()
+}
+
+/// Check if an esplora error is a mempool chain error (too many unconfirmed ancestors)
+fn is_mempool_chain_error(error: &bdk_esplora::esplora_client::Error) -> bool {
+    let error_str = format!("{:?}", error);
+    error_str.contains("too-long-mempool-chain") || error_str.contains("too many unconfirmed ancestors")
+}
+
+/// Wait for a new Bitcoin block to be mined
+async fn wait_for_new_block(
+    esplora_client: &Arc<esplora_client::AsyncClient>,
+) -> Result<(), BitcoinWalletError> {
+    const POLL_INTERVAL_SECS: u64 = 5;
+    const MAX_WAIT_MINUTES: u64 = 30;
+    
+    let initial_height = esplora_client
+        .get_height()
+        .await
+        .map_err(Box::new)
+        .context(SyncWalletSnafu)?;
+    
+    info!(
+        "Waiting for new block (current height: {})...",
+        initial_height
+    );
+    
+    let start = Instant::now();
+    let max_wait = std::time::Duration::from_secs(MAX_WAIT_MINUTES * 60);
+    
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(POLL_INTERVAL_SECS)).await;
+        
+        let current_height = esplora_client
+            .get_height()
+            .await
+            .map_err(Box::new)
+            .context(SyncWalletSnafu)?;
+        
+        if current_height > initial_height {
+            info!(
+                "New block mined! Height increased from {} to {} (waited {:?})",
+                initial_height,
+                current_height,
+                start.elapsed()
+            );
+            return Ok(());
+        }
+        
+        if start.elapsed() > max_wait {
+            error!(
+                "Timeout waiting for new block after {:?} (height still {})",
+                start.elapsed(),
+                current_height
+            );
+            return Ok(()); // Continue anyway after timeout
+        }
+    }
 }

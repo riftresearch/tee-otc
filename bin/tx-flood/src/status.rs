@@ -1,4 +1,6 @@
+use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
+use otc_models::ChainType;
 use uuid::Uuid;
 
 #[derive(Clone, Debug)]
@@ -11,6 +13,8 @@ pub enum UiEvent {
 pub struct SwapUpdate {
     pub index: usize,
     pub stage: SwapStage,
+    pub amount: Option<U256>,
+    pub deposit_chain: Option<ChainType>,
     pub timestamp: DateTime<Utc>,
 }
 
@@ -19,6 +23,23 @@ impl SwapUpdate {
         Self {
             index,
             stage,
+            amount: None,
+            deposit_chain: None,
+            timestamp: Utc::now(),
+        }
+    }
+
+    pub fn with_amount_and_chain(
+        index: usize,
+        stage: SwapStage,
+        amount: U256,
+        deposit_chain: ChainType,
+    ) -> Self {
+        Self {
+            index,
+            stage,
+            amount: Some(amount),
+            deposit_chain: Some(deposit_chain),
             timestamp: Utc::now(),
         }
     }
