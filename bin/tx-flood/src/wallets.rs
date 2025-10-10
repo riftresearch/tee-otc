@@ -689,7 +689,6 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
                 }
 
                 let btc_count = btc_wallet_index;
-                let eth_count = eth_wallet_index;
 
                 let bitcoin_dedicated = if btc_count > 0 {
                     create_bitcoin_dedicated_wallets_count(btc_cfg, btc_count)
@@ -698,11 +697,9 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
                     BitcoinDedicatedWallets::new(Vec::new(), Vec::new())
                 };
 
-                let ethereum_dedicated = if eth_count > 0 {
-                    create_evm_dedicated_wallets_count(evm_cfg, eth_count).await?
-                } else {
-                    EvmDedicatedWallets::new(Vec::new())
-                };
+                // Create EVM wallets for ALL swaps (not just Ethereum swaps)
+                // This allows Bitcoin swaps to use the EVM wallet at their corresponding index
+                let ethereum_dedicated = create_evm_dedicated_wallets_count(evm_cfg, config.total_swaps).await?;
 
                 // Fund the dedicated wallets
                 if btc_count > 0 {
@@ -710,15 +707,14 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
                         .await?;
                 }
 
-                if eth_count > 0 {
-                    fund_evm_wallets_dedicated(
-                        &evm_broadcaster,
-                        evm_provider.clone(),
-                        config,
-                        &ethereum_dedicated,
-                    )
-                    .await?;
-                }
+                // Always fund EVM wallets since we create them for all swaps
+                fund_evm_wallets_dedicated(
+                    &evm_broadcaster,
+                    evm_provider.clone(),
+                    config,
+                    &ethereum_dedicated,
+                )
+                .await?;
 
                 info!("dedicated dual-chain wallets enabled");
                 PaymentWallets::dual_dedicated(bitcoin_dedicated, ethereum_dedicated, index_mapping)
