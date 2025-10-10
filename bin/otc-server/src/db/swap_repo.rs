@@ -303,7 +303,7 @@ impl SwapRepository {
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
             WHERE s.status NOT IN ('settled', 'failed')
-              AND NOT (s.created_at < $1 AND s.user_deposit_status IS NULL)
+              AND NOT (s.updated_at < $1)
             ORDER BY s.created_at DESC
             ",
         )

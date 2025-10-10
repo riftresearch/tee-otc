@@ -1,4 +1,95 @@
 configs:
+  postgres-conf:
+    content: |
+      # PostgreSQL primary config (replication-ready)
+      listen_addresses = '*'
+      password_encryption = 'scram-sha-256'
+      wal_level = logical
+      max_wal_senders = 10
+      max_replication_slots = 10
+      max_logical_replication_workers = 4
+      max_sync_workers_per_subscription = 2
+      hot_standby = on
+      shared_buffers = 256MB
+      work_mem = 16MB
+      maintenance_work_mem = 128MB
+      log_connections = on
+      log_disconnections = on
+      log_statement = 'none'
+
+  postgres-hba:
+    content: |
+      # TYPE  DATABASE        USER            ADDRESS                 METHOD
+      local   all             all                                     scram-sha-256
+      host    all             all             127.0.0.1/32            scram-sha-256
+      host    all             all             ::1/128                 scram-sha-256
+
+      # Allow app traffic from the docker bridge (tee-network only)
+      # Note: otc_app is the superuser and the application user
+      host    all             otc_app         172.20.0.0/16           scram-sha-256
+
+      # Replication user access
+      host    replication     replicator      0.0.0.0/0               scram-sha-256
+      host    replication     replicator      ::0/0                   scram-sha-256
+
+  postgres-init.sh:
+    content: |
+      #!/usr/bin/env bash
+      set -euo pipefail
+
+      # Replica creds from env (must be set in the postgres service)
+      : "$${REPLICA_USER:?REPLICA_USER must be set}"
+      : "$${REPLICA_PASSWORD:?REPLICA_PASSWORD must be set}"
+
+      echo "Creating replication role: '$${REPLICA_USER}'"
+
+      # Note: POSTGRES_USER (otc_app) is already created as superuser by the postgres image
+      # using the sidecar-generated password via POSTGRES_PASSWORD_FILE
+      psql -v ON_ERROR_STOP=1 --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB" <<-SQL
+        DO \$\$
+        BEGIN
+          IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '$${REPLICA_USER}') THEN
+            CREATE ROLE $${REPLICA_USER} LOGIN REPLICATION PASSWORD '$${REPLICA_PASSWORD}';
+          ELSE
+            ALTER ROLE $${REPLICA_USER} WITH LOGIN REPLICATION PASSWORD '$${REPLICA_PASSWORD}';
+          END IF;
+        END
+        \$\$;
+      SQL
+
+      # Ensure public schema is set up properly
+      psql -v ON_ERROR_STOP=1 --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB" <<-SQL
+        CREATE SCHEMA IF NOT EXISTS public;
+
+        -- Future tables: superuser will own what it creates
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO $$POSTGRES_USER;
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO $$POSTGRES_USER;
+      SQL
+
+      echo "Init complete. Superuser: $$POSTGRES_USER, Replica user: $$REPLICA_USER"
+
+  otc-server-entrypoint:
+    content: |
+      #!/bin/sh
+      set -e
+      
+      # Read database credentials from sidecar-generated secrets
+      if [ ! -f /run/postgres-secrets/app_user.txt ] || [ ! -f /run/postgres-secrets/app_password.txt ]; then
+        echo "ERROR: Database credentials not found in /run/postgres-secrets"
+        exit 1
+      fi
+      
+      DB_USER=$$(cat /run/postgres-secrets/app_user.txt | tr -d '\n\r')
+      DB_PASS=$$(cat /run/postgres-secrets/app_password.txt | tr -d '\n\r')
+      
+      # Construct DATABASE_URL using the generated credentials
+      export DATABASE_URL="postgres://$${DB_USER}:$${DB_PASS}@postgres:5432/otc_db"
+      
+      echo "Starting otc-server with database user: $${DB_USER}"
+      
+      # Execute the original entrypoint/command
+      exec "$@"
+
   dozzle_users:
     content: |
       users:
@@ -1098,21 +1189,73 @@ services:
     restart: "no"
     networks:
       - tee-network
+  
+  pg-secret-generator:
+    container_name: tee-pg-secret-generator
+    image: alpine:3.22.1
+    command: >
+      sh -c "
+        set -e;
+        mkdir -p /secrets;
+        # only generate once; idempotent across restarts
+        if [ ! -f /secrets/app_user.txt ]; then
+          echo 'otc_app' > /secrets/app_user.txt;
+        fi;
+        if [ ! -f /secrets/app_password.txt ]; then
+          apk add --no-cache openssl >/dev/null;
+          openssl rand -base64 24 | tr -d '\n' > /secrets/app_password.txt;
+          echo 'Generated new app DB password';
+        else
+          echo 'App DB password already exists, skipping';
+        fi
+      "
+    volumes:
+      - pg_secrets:/secrets
+    restart: "no"
+    networks:
+      - tee-network
 
   postgres:
     image: postgres:16-alpine
     container_name: tee-otc-postgres
     environment:
-      POSTGRES_USER: otc_user
-      POSTGRES_PASSWORD: otc_password
+      # Superuser (also used by the application)
+      POSTGRES_USER: otc_app
+      POSTGRES_PASSWORD_FILE: /run/postgres-secrets/app_password.txt
       POSTGRES_DB: otc_db
+
+      # Replication user credentials
+      REPLICA_USER: replicator
+      REPLICA_PASSWORD: ${POSTGRES_REPLICA_PASSWORD:?set POSTGRES_REPLICA_PASSWORD}
+
+      POSTGRES_INITDB_ARGS: "--data-checksums"
     volumes:
       - otc_postgres_data:/var/lib/postgresql/data
+      - pg_secrets:/run/postgres-secrets:ro
+    configs:
+      - source: postgres-conf
+        target: /etc/postgresql/postgresql.conf
+      - source: postgres-hba
+        target: /etc/postgresql/pg_hba.conf
+      - source: postgres-init.sh
+        target: /docker-entrypoint-initdb.d/00-init.sh
+        mode: 0755
+    command:
+      - "-c"
+      - "config_file=/etc/postgresql/postgresql.conf"
+      - "-c"
+      - "hba_file=/etc/postgresql/pg_hba.conf"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U otc_user -d otc_db"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 20s
+    ports:
+      - "5432:5432"
+    depends_on:
+      pg-secret-generator:
+        condition: service_completed_successfully
     networks:
       - tee-network
   
@@ -1198,13 +1341,17 @@ services:
     restart: unless-stopped
     container_name: tee-otc-server
     depends_on:
+      pg-secret-generator:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       bitcoin-core:
         condition: service_started
+    entrypoint: ["/usr/local/bin/otc-server-entrypoint.sh"]
+    command: ["/usr/bin/otc-server"]
     environment:
       GRANT_SUDO: yes
-      DATABASE_URL: postgres://otc_user:otc_password@postgres:5432/otc_db
+      # DATABASE_URL is constructed dynamically in the entrypoint from sidecar-generated secrets
       RUST_LOG: info 
       EVM_RPC_URL: http://reth:8545
       UNTRUSTED_EVM_TOKEN_INDEXER_URL: ${UNTRUSTED_EVM_TOKEN_INDEXER_URL}
@@ -1226,6 +1373,11 @@ services:
     volumes:
       - ${DSTACK_SOCK_PATH:-/var/run/dstack.sock}:/var/run/dstack.sock
       - otc_server_config_data:/app/config
+      - pg_secrets:/run/postgres-secrets:ro
+    configs:
+      - source: otc-server-entrypoint
+        target: /usr/local/bin/otc-server-entrypoint.sh
+        mode: 0755
     platform: linux/amd64
     user: root
 
@@ -1399,6 +1551,9 @@ services:
 networks:
   tee-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
 
 volumes:
   otc_postgres_data:
@@ -1409,3 +1564,4 @@ volumes:
   eth_jwt_data:
   lighthouse_data:
   reth_mainnet_data:
+  pg_secrets:

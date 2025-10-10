@@ -103,11 +103,16 @@ services:
         CMD ["./otc-server", "--host", "0.0.0.0", "--port", "4422"]
 
     depends_on: !override
+      pg-secret-generator:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
       devnet:
         condition: service_healthy
+    command: ["/app/otc-server", "--host", "0.0.0.0", "--port", "4422"]
     environment:
       GRANT_SUDO: yes
-      DATABASE_URL: postgres://otc_user:otc_password@postgres:5432/otc_db
+      # DATABASE_URL is constructed dynamically in the entrypoint from sidecar-generated secrets
       RUST_LOG: info 
       EVM_RPC_URL: http://devnet:50101
       UNTRUSTED_EVM_TOKEN_INDEXER_URL: http://devnet:50104
@@ -120,7 +125,12 @@ services:
       CONFIG_DIR: /app/config
       DSTACK_SOCK_PATH: /var/run/dstack.sock
       BITCOIN_NETWORK: regtest
-    volumes: []
+      METRICS_LISTEN_ADDR: 0.0.0.0:9000
+    volumes: !override
+      # Keep all essential volumes from base
+      - ${DSTACK_SOCK_PATH:-/var/run/dstack.sock}:/var/run/dstack.sock
+      - otc_server_config_data:/app/config
+      - pg_secrets:/run/postgres-secrets:ro
   
   rfq-server:
     build:
@@ -173,10 +183,15 @@ services:
   eth-jwt-generator: !reset null
 
   postgres:
-    ports:
-      - "5432:5432"
+    environment:
+      # Provide replica password for testing (required by base config)
+      POSTGRES_REPLICA_PASSWORD: test_replica_password_override
+    # Keep all configs, command, and depends_on from base (pg-secret-generator, custom postgres.conf, etc.)
+    volumes: !override
+      # Keep pg_secrets for secret management, but use ephemeral data storage
+      - pg_secrets:/run/postgres-secrets:ro
     networks:
-    volumes: [] 
+      - tee-network 
 
   prometheus:
     networks:
