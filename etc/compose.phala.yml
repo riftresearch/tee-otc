@@ -24,13 +24,17 @@ configs:
       host    all             all             127.0.0.1/32            scram-sha-256
       host    all             all             ::1/128                 scram-sha-256
 
-      # Allow app traffic from the docker bridge (tee-network only)
+      # Allow app traffic from the docker bridge (local docker network only)
       # Note: otc_app is the superuser and the application user
       host    all             otc_app         172.20.0.0/16           scram-sha-256
 
       # Replication user access
+      # For logical replication, replicator needs both replication protocol access
+      # and database access for initial table sync and publication queries
       host    replication     replicator      0.0.0.0/0               scram-sha-256
       host    replication     replicator      ::0/0                   scram-sha-256
+      host    otc_db          replicator      0.0.0.0/0               scram-sha-256
+      host    otc_db          replicator      ::0/0                   scram-sha-256
 
   postgres-init.sh:
     content: |
@@ -66,7 +70,39 @@ configs:
         ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO $$POSTGRES_USER;
       SQL
 
-      echo "Init complete. Superuser: $$POSTGRES_USER, Replica user: $$REPLICA_USER"
+      # Create publication for logical replication
+      echo "Creating publication for logical replication..."
+      psql -v ON_ERROR_STOP=1 --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB" <<-SQL
+        DO \$\$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'otc_all_tables') THEN
+            CREATE PUBLICATION otc_all_tables FOR ALL TABLES;
+            RAISE NOTICE 'Created publication: otc_all_tables';
+          ELSE
+            RAISE NOTICE 'Publication otc_all_tables already exists';
+          END IF;
+        END
+        \$\$;
+      SQL
+
+      # Grant read-only access to replicator for logical replication
+      echo "Granting read-only access to replication user..."
+      psql -v ON_ERROR_STOP=1 --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB" <<-SQL
+        -- Allow replicator to use the public schema
+        GRANT USAGE ON SCHEMA public TO $${REPLICA_USER};
+        
+        -- Grant SELECT on all existing tables (read-only)
+        GRANT SELECT ON ALL TABLES IN SCHEMA public TO $${REPLICA_USER};
+        
+        -- Grant SELECT on all future tables (read-only)
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO $${REPLICA_USER};
+        
+        -- Grant USAGE on sequences (needed for reading sequence values during replication)
+        GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO $${REPLICA_USER};
+        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO $${REPLICA_USER};
+      SQL
+
+      echo "Init complete. Superuser: $$POSTGRES_USER, Replica user: $$REPLICA_USER (read-only)"
 
   otc-server-entrypoint:
     content: |
@@ -83,6 +119,7 @@ configs:
       DB_PASS=$$(cat /run/postgres-secrets/app_password.txt | tr -d '\n\r')
       
       # Construct DATABASE_URL using the generated credentials
+      # Note: password is hex-only so no URL encoding needed
       export DATABASE_URL="postgres://$${DB_USER}:$${DB_PASS}@postgres:5432/otc_db"
       
       echo "Starting otc-server with database user: $${DB_USER}"
@@ -99,6 +136,7 @@ configs:
             password: $$2a$$11$$KETX/yx/Y9EzmTvXGJGJxu5jZqR.nvyS3HbdV510Fc4I/KhUnT.EO
             filter: ""
             roles: ""
+
   bitcoin-entrypoint:
     content: |
       #!/bin/bash
@@ -1203,7 +1241,7 @@ services:
         fi;
         if [ ! -f /secrets/app_password.txt ]; then
           apk add --no-cache openssl >/dev/null;
-          openssl rand -base64 24 | tr -d '\n' > /secrets/app_password.txt;
+          openssl rand -hex 32 | tr -d '\n' > /secrets/app_password.txt;
           echo 'Generated new app DB password';
         else
           echo 'App DB password already exists, skipping';

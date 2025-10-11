@@ -96,12 +96,12 @@ services:
         FROM debian:trixie-slim
         RUN apt-get update && apt-get install -y \
             ca-certificates \
+            curl \
             && rm -rf /var/lib/apt/lists/*
         WORKDIR /app
         COPY --from=builder /app/target/release/otc-server /app/
         EXPOSE 4422
         CMD ["./otc-server", "--host", "0.0.0.0", "--port", "4422"]
-
     depends_on: !override
       pg-secret-generator:
         condition: service_completed_successfully
@@ -109,7 +109,12 @@ services:
         condition: service_healthy
       devnet:
         condition: service_healthy
+    entrypoint: ["/usr/local/bin/otc-server-entrypoint.sh"]
     command: ["/app/otc-server", "--host", "0.0.0.0", "--port", "4422"]
+    configs:
+      - source: otc-server-entrypoint
+        target: /usr/local/bin/otc-server-entrypoint.sh
+        mode: 0755
     environment:
       GRANT_SUDO: yes
       # DATABASE_URL is constructed dynamically in the entrypoint from sidecar-generated secrets
@@ -131,6 +136,12 @@ services:
       - ${DSTACK_SOCK_PATH:-/var/run/dstack.sock}:/var/run/dstack.sock
       - otc_server_config_data:/app/config
       - pg_secrets:/run/postgres-secrets:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://0.0.0.0:4422/status || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
   
   rfq-server:
     build:
@@ -253,3 +264,20 @@ services:
   
   mm-grafana:
     volumes: []
+  
+  replica-setup:
+    depends_on:
+      postgres-replica:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      otc-server:
+        condition: service_healthy
+    networks:
+      - tee-network
+  
+  postgres-replica:
+    volumes: []
+    networks:
+      - tee-network 
+  

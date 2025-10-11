@@ -74,7 +74,7 @@ phala-deploy:
 # Docker compose command with all config files - passes through any arguments
 # DOCKER_DEFAULT_PLATFORM=linux/amd64  
 dc +args:
-    POSTGRES_REPLICA_PASSWORD=replica_password {{dc_files}} {{args}}
+    PRIMARY_DB_PASSWORD=replica_password REPLICA_DB_PASSWORD=actual_replica_password POSTGRES_REPLICA_PASSWORD=replica_password {{dc_files}} {{args}}
 
 # Run clippy
 clippy:
