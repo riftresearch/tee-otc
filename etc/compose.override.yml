@@ -193,6 +193,8 @@ services:
 
   eth-jwt-generator: !reset null
 
+  stunnel: !reset null
+
   postgres:
     environment:
       # Provide replica password for testing (required by base config)
@@ -275,6 +277,20 @@ services:
         condition: service_healthy
     networks:
       - main-network
+    environment:
+      # Primary database connection
+      PRIMARY_DB_HOST: postgres
+      PRIMARY_DB_PORT: ${PRIMARY_DB_PORT:-5432}
+      PRIMARY_DB_NAME: ${PRIMARY_DB_NAME:-otc_db}
+      PRIMARY_DB_USER: ${PRIMARY_DB_USER:-replicator}
+      PRIMARY_DB_PASSWORD: ${PRIMARY_DB_PASSWORD:?PRIMARY_DB_PASSWORD must be set}
+      
+      # Replica database connection
+      REPLICA_DB_HOST: postgres-replica
+      REPLICA_DB_PORT: 5432
+      REPLICA_DB_NAME: ${REPLICA_DB_NAME:-otc_db}
+      REPLICA_DB_USER: ${REPLICA_DB_USER:-postgres}
+      REPLICA_DB_PASSWORD: ${REPLICA_DB_PASSWORD:?REPLICA_DB_PASSWORD must be set}
   
   postgres-replica:
     volumes: []

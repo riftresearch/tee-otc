@@ -1,4 +1,16 @@
 configs:
+  stunnel-conf:
+    content: |
+      foreground = yes
+      debug = 5
+      
+      [phala-postgres]
+      client = yes
+      accept = 0.0.0.0:5432
+      connect = $${PHALA_DB_SNI}:443
+      sni = $${PHALA_DB_SNI}
+      verifyChain = no
+
   replica-setup:
     content: |
       #!/usr/bin/env bash
@@ -127,6 +139,29 @@ configs:
       echo "Replica: $${REPLICA_HOST}:$${REPLICA_PORT}/$${REPLICA_DB}"
 
 services:
+  stunnel:
+    image: debian:bookworm-slim
+    container_name: tee-otc-stunnel
+    environment:
+      PHALA_DB_SNI: ${PHALA_DB_SNI:?PHALA_DB_SNI must be set}
+    command: >
+      bash -c "apt-get update -qq && 
+      apt-get install -y -qq stunnel4 gettext-base netcat-openbsd &&
+      envsubst < /etc/stunnel/stunnel.conf.template > /etc/stunnel/stunnel.conf &&
+      cat /etc/stunnel/stunnel.conf &&
+      exec stunnel /etc/stunnel/stunnel.conf"
+    configs:
+      - source: stunnel-conf
+        target: /etc/stunnel/stunnel.conf.template
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 5432 || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - replica-network
+
   postgres-replica:
     image: postgres:16-alpine
     container_name: tee-otc-postgres-replica
@@ -155,12 +190,11 @@ services:
         condition: service_healthy
     environment:
       # Primary database connection
-      PRIMARY_DB_HOST: ${PRIMARY_DB_HOST:-tee-otc-postgres}
+      PRIMARY_DB_HOST: stunnel
       PRIMARY_DB_PORT: ${PRIMARY_DB_PORT:-5432}
       PRIMARY_DB_NAME: ${PRIMARY_DB_NAME:-otc_db}
       PRIMARY_DB_USER: ${PRIMARY_DB_USER:-replicator}
       PRIMARY_DB_PASSWORD: ${PRIMARY_DB_PASSWORD:?PRIMARY_DB_PASSWORD must be set}
-      PRIMARY_DB_SSLMODE: ${PRIMARY_DB_SSLMODE:-prefer}
       
       # Replica database connection
       REPLICA_DB_HOST: postgres-replica
@@ -168,7 +202,6 @@ services:
       REPLICA_DB_NAME: ${REPLICA_DB_NAME:-otc_db}
       REPLICA_DB_USER: ${REPLICA_DB_USER:-postgres}
       REPLICA_DB_PASSWORD: ${REPLICA_DB_PASSWORD:?REPLICA_DB_PASSWORD must be set}
-      REPLICA_DB_SSLMODE: ${REPLICA_DB_SSLMODE:-prefer}
     configs:
       - source: replica-setup
         target: /setup.sh
