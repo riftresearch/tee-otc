@@ -13,28 +13,34 @@ configs:
       PRIMARY_DB="$${PRIMARY_DB_NAME:-otc_db}"
       PRIMARY_USER="$${PRIMARY_DB_USER:-replicator}"
       PRIMARY_PASS="$${PRIMARY_DB_PASSWORD:?PRIMARY_DB_PASSWORD must be set}"
+      PRIMARY_SSLMODE="$${PRIMARY_DB_SSLMODE:-prefer}"
 
       REPLICA_HOST="$${REPLICA_DB_HOST:-postgres-replica}"
       REPLICA_PORT="$${REPLICA_DB_PORT:-5432}"
       REPLICA_DB="$${REPLICA_DB_NAME:-otc_db}"
       REPLICA_USER="$${REPLICA_DB_USER:-postgres}"
       REPLICA_PASS="$${REPLICA_DB_PASSWORD:?REPLICA_DB_PASSWORD must be set}"
+      REPLICA_SSLMODE="$${REPLICA_DB_SSLMODE:-prefer}"
+
+      # Build connection strings
+      PRIMARY_CONN="postgresql://$${PRIMARY_USER}:$${PRIMARY_PASS}@$${PRIMARY_HOST}:$${PRIMARY_PORT}/$${PRIMARY_DB}?sslmode=$${PRIMARY_SSLMODE}"
+      REPLICA_CONN="postgresql://$${REPLICA_USER}:$${REPLICA_PASS}@$${REPLICA_HOST}:$${REPLICA_PORT}/postgres?sslmode=$${REPLICA_SSLMODE}"
 
       # Wait for primary to be ready
       echo "Checking primary database connection..."
-      echo "Attempting to connect as: $${PRIMARY_USER}@$${PRIMARY_HOST}:$${PRIMARY_PORT}/$${PRIMARY_DB}"
+      echo "Attempting to connect to: $${PRIMARY_HOST}:$${PRIMARY_PORT}/$${PRIMARY_DB} (sslmode=$${PRIMARY_SSLMODE})"
       RETRY_COUNT=0
-      until PGPASSWORD="$${PRIMARY_PASS}" psql -h "$${PRIMARY_HOST}" -p "$${PRIMARY_PORT}" -U "$${PRIMARY_USER}" -d "$${PRIMARY_DB}" -c '\q'; do
+      until psql "$${PRIMARY_CONN}" -c '\q' 2>/dev/null; do
         RETRY_COUNT=$$((RETRY_COUNT + 1))
-        echo "[$${RETRY_COUNT}] Connection failed (error shown above). Retrying in 2s..."
+        echo "[$${RETRY_COUNT}] Connection failed. Retrying in 2s..."
         sleep 2
       done
       echo "✓ Primary database is ready"
 
       # Wait for replica to be ready
       echo "Checking replica database connection..."
-      echo "Attempting to connect as: $${REPLICA_USER}@$${REPLICA_HOST}:$${REPLICA_PORT}/postgres"
-      until PGPASSWORD="$${REPLICA_PASS}" psql -h "$${REPLICA_HOST}" -p "$${REPLICA_PORT}" -U "$${REPLICA_USER}" -d postgres -c '\q' 2>/dev/null; do
+      echo "Attempting to connect to: $${REPLICA_HOST}:$${REPLICA_PORT}/postgres (sslmode=$${REPLICA_SSLMODE})"
+      until psql "$${REPLICA_CONN}" -c '\q' 2>/dev/null; do
         echo "Waiting for replica database at $${REPLICA_HOST}:$${REPLICA_PORT}..."
         sleep 2
       done
@@ -42,7 +48,7 @@ configs:
 
       # Create database on replica if it doesn't exist
       echo "Creating database on replica..."
-      PGPASSWORD="$${REPLICA_PASS}" psql -h "$${REPLICA_HOST}" -p "$${REPLICA_PORT}" -U "$${REPLICA_USER}" -d postgres <<-SQL
+      psql "$${REPLICA_CONN}" <<-SQL
         SELECT 'CREATE DATABASE $${REPLICA_DB}'
         WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = '$${REPLICA_DB}')\gexec
       SQL
@@ -50,7 +56,7 @@ configs:
 
       # Verify publication exists on primary (created by primary's init script)
       echo "Checking publication on primary..."
-      PUB_EXISTS=$$(PGPASSWORD="$${PRIMARY_PASS}" psql -h "$${PRIMARY_HOST}" -p "$${PRIMARY_PORT}" -U "$${PRIMARY_USER}" -d "$${PRIMARY_DB}" -tAc "SELECT COUNT(*) FROM pg_publication WHERE pubname = 'otc_all_tables';")
+      PUB_EXISTS=$$(psql "$${PRIMARY_CONN}" -tAc "SELECT COUNT(*) FROM pg_publication WHERE pubname = 'otc_all_tables';")
       
       if [ "$${PUB_EXISTS}" -eq "1" ]; then
         echo "✓ Publication 'otc_all_tables' exists on primary"
@@ -64,33 +70,36 @@ configs:
       # Copy schema from primary to replica
       echo "Copying schema from primary to replica..."
       
+      # Build replica DB connection string (not just postgres)
+      REPLICA_DB_CONN="postgresql://$${REPLICA_USER}:$${REPLICA_PASS}@$${REPLICA_HOST}:$${REPLICA_PORT}/$${REPLICA_DB}?sslmode=$${REPLICA_SSLMODE}"
+      
       # Check if schema already exists (idempotent)
-      TABLES_EXIST=$$(PGPASSWORD="$${REPLICA_PASS}" psql -h "$${REPLICA_HOST}" -p "$${REPLICA_PORT}" -U "$${REPLICA_USER}" -d "$${REPLICA_DB}" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('swaps', 'quotes');")
+      TABLES_EXIST=$$(psql "$${REPLICA_DB_CONN}" -tAc "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('swaps', 'quotes');")
 
       if [ "$${TABLES_EXIST}" -eq "2" ]; then
         echo "✓ Core tables exist on replica"
         # Sync any missing tables from primary (e.g., _sqlx_migrations)
         echo "Ensuring all tables from primary exist on replica..."
-        PGPASSWORD="$${PRIMARY_PASS}" pg_dump -h "$${PRIMARY_HOST}" -p "$${PRIMARY_PORT}" -U "$${PRIMARY_USER}" -d "$${PRIMARY_DB}" --schema-only --no-owner --no-privileges | \
-          PGPASSWORD="$${REPLICA_PASS}" psql -h "$${REPLICA_HOST}" -p "$${REPLICA_PORT}" -U "$${REPLICA_USER}" -d "$${REPLICA_DB}" 2>&1 | grep -v "already exists" || true
+        pg_dump "$${PRIMARY_CONN}" --schema-only --no-owner --no-privileges | \
+          psql "$${REPLICA_DB_CONN}" 2>&1 | grep -v "already exists" || true
         echo "✓ Schema synchronized"
       else
         echo "Copying full schema from primary..."
-        PGPASSWORD="$${PRIMARY_PASS}" pg_dump -h "$${PRIMARY_HOST}" -p "$${PRIMARY_PORT}" -U "$${PRIMARY_USER}" -d "$${PRIMARY_DB}" --schema-only --no-owner --no-privileges | \
-          PGPASSWORD="$${REPLICA_PASS}" psql -h "$${REPLICA_HOST}" -p "$${REPLICA_PORT}" -U "$${REPLICA_USER}" -d "$${REPLICA_DB}"
+        pg_dump "$${PRIMARY_CONN}" --schema-only --no-owner --no-privileges | \
+          psql "$${REPLICA_DB_CONN}"
         echo "✓ Schema copied from primary"
       fi
 
       # Create subscription on replica (idempotent)
       echo "Creating subscription on replica..."
-      CONNECTION_STRING="host=$${PRIMARY_HOST} port=$${PRIMARY_PORT} dbname=$${PRIMARY_DB} user=$${PRIMARY_USER} password=$${PRIMARY_PASS}"
+      CONNECTION_STRING="host=$${PRIMARY_HOST} port=$${PRIMARY_PORT} dbname=$${PRIMARY_DB} user=$${PRIMARY_USER} password=$${PRIMARY_PASS} sslmode=$${PRIMARY_SSLMODE}"
 
       # Check if subscription already exists
-      SUB_EXISTS=$$(PGPASSWORD="$${REPLICA_PASS}" psql -h "$${REPLICA_HOST}" -p "$${REPLICA_PORT}" -U "$${REPLICA_USER}" -d "$${REPLICA_DB}" -tAc "SELECT COUNT(*) FROM pg_subscription WHERE subname = 'otc_subscription';")
+      SUB_EXISTS=$$(psql "$${REPLICA_DB_CONN}" -tAc "SELECT COUNT(*) FROM pg_subscription WHERE subname = 'otc_subscription';")
 
       if [ "$${SUB_EXISTS}" -eq "0" ]; then
         echo "Creating new subscription..."
-        PGPASSWORD="$${REPLICA_PASS}" psql -h "$${REPLICA_HOST}" -p "$${REPLICA_PORT}" -U "$${REPLICA_USER}" -d "$${REPLICA_DB}" <<-SQL
+        psql "$${REPLICA_DB_CONN}" <<-SQL
           CREATE SUBSCRIPTION otc_subscription
             CONNECTION '$${CONNECTION_STRING}'
             PUBLICATION otc_all_tables
@@ -105,11 +114,11 @@ configs:
       echo ""
       echo "=== Replication Status ==="
       echo "Primary publication:"
-      PGPASSWORD="$${PRIMARY_PASS}" psql -h "$${PRIMARY_HOST}" -p "$${PRIMARY_PORT}" -U "$${PRIMARY_USER}" -d "$${PRIMARY_DB}" -c "SELECT * FROM pg_publication WHERE pubname = 'otc_all_tables';"
+      psql "$${PRIMARY_CONN}" -c "SELECT * FROM pg_publication WHERE pubname = 'otc_all_tables';"
 
       echo ""
       echo "Replica subscription:"
-      PGPASSWORD="$${REPLICA_PASS}" psql -h "$${REPLICA_HOST}" -p "$${REPLICA_PORT}" -U "$${REPLICA_USER}" -d "$${REPLICA_DB}" -c "SELECT subname, subenabled, subslotname FROM pg_subscription WHERE subname = 'otc_subscription';"
+      psql "$${REPLICA_DB_CONN}" -c "SELECT subname, subenabled, subslotname FROM pg_subscription WHERE subname = 'otc_subscription';"
 
       echo ""
       echo "=== Setup Complete ==="
@@ -151,6 +160,7 @@ services:
       PRIMARY_DB_NAME: ${PRIMARY_DB_NAME:-otc_db}
       PRIMARY_DB_USER: ${PRIMARY_DB_USER:-replicator}
       PRIMARY_DB_PASSWORD: ${PRIMARY_DB_PASSWORD:?PRIMARY_DB_PASSWORD must be set}
+      PRIMARY_DB_SSLMODE: ${PRIMARY_DB_SSLMODE:-prefer}
       
       # Replica database connection
       REPLICA_DB_HOST: postgres-replica
@@ -158,6 +168,7 @@ services:
       REPLICA_DB_NAME: ${REPLICA_DB_NAME:-otc_db}
       REPLICA_DB_USER: ${REPLICA_DB_USER:-postgres}
       REPLICA_DB_PASSWORD: ${REPLICA_DB_PASSWORD:?REPLICA_DB_PASSWORD must be set}
+      REPLICA_DB_SSLMODE: ${REPLICA_DB_SSLMODE:-prefer}
     configs:
       - source: replica-setup
         target: /setup.sh
