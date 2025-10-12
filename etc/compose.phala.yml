@@ -1226,7 +1226,7 @@ services:
       - eth_jwt_data:/jwt
     restart: "no"
     networks:
-      - tee-network
+      - main-network
   
   pg-secret-generator:
     container_name: tee-pg-secret-generator
@@ -1251,7 +1251,7 @@ services:
       - pg_secrets:/secrets
     restart: "no"
     networks:
-      - tee-network
+      - main-network
 
   postgres:
     image: postgres:16-alpine
@@ -1264,11 +1264,12 @@ services:
 
       # Replication user credentials
       REPLICA_USER: replicator
-      REPLICA_PASSWORD: ${POSTGRES_REPLICA_PASSWORD:?set POSTGRES_REPLICA_PASSWORD}
+      # REPLICA_PASSWORD: ${POSTGRES_REPLICA_PASSWORD:?set POSTGRES_REPLICA_PASSWORD}
+      REPLICA_PASSWORD: temp_replica_user_password
 
       POSTGRES_INITDB_ARGS: "--data-checksums"
     volumes:
-      - otc_postgres_data:/var/lib/postgresql/data
+      - otc_postgres_data_2:/var/lib/postgresql/data
       - pg_secrets:/run/postgres-secrets:ro
     configs:
       - source: postgres-conf
@@ -1295,7 +1296,7 @@ services:
       pg-secret-generator:
         condition: service_completed_successfully
     networks:
-      - tee-network
+      - main-network
   
   dozzle:
     container_name: tee-dozzle
@@ -1371,11 +1372,11 @@ services:
       retries: 10
       start_period: 30s
     networks:
-      - tee-network
+      - main-network
     platform: linux/amd64
 
   otc-server:
-    image: riftresearch/otc-server:main-37c3c8f
+    image: riftresearch/otc-server:main-e4f0a0f
     restart: unless-stopped
     container_name: tee-otc-server
     depends_on:
@@ -1386,7 +1387,7 @@ services:
       bitcoin-core:
         condition: service_started
     entrypoint: ["/usr/local/bin/otc-server-entrypoint.sh"]
-    command: ["/usr/bin/otc-server"]
+    command: ["/app/otc-server"]
     environment:
       GRANT_SUDO: yes
       # DATABASE_URL is constructed dynamically in the entrypoint from sidecar-generated secrets
@@ -1407,7 +1408,7 @@ services:
     expose:
       - "9000"
     networks:
-      - tee-network
+      - main-network
     volumes:
       - ${DSTACK_SOCK_PATH:-/var/run/dstack.sock}:/var/run/dstack.sock
       - otc_server_config_data:/app/config
@@ -1472,7 +1473,7 @@ services:
       --http --http.addr 0.0.0.0 --http.port 8545
       --http.api "eth,net,web3"
     networks:
-      - tee-network
+      - main-network
     
   lighthouse:
     restart: unless-stopped
@@ -1502,7 +1503,7 @@ services:
       --checkpoint-sync-url https://sync-mainnet.beaconcha.in
       --checkpoint-sync-url-timeout=300
     networks:
-      - tee-network
+      - main-network
 
   node-exporter:
     image: prom/node-exporter:v1.8.2
@@ -1522,7 +1523,7 @@ services:
     # ports:
       # - "9100:9100"
     networks:
-      - tee-network
+      - main-network
 
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
@@ -1537,7 +1538,7 @@ services:
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
     networks:
-      - tee-network
+      - main-network
 
   prometheus:
     image: prom/prometheus:v2.54.1
@@ -1560,7 +1561,7 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--web.enable-lifecycle"
     networks:
-      - tee-network
+      - main-network
 
   grafana:
     image: grafana/grafana:10.4.2
@@ -1582,19 +1583,19 @@ services:
       - source: grafana-node-dashboard
         target: /etc/grafana/provisioning/dashboards/tee-monitoring.json
     networks:
-      - tee-network
+      - main-network
 
 
 
 networks:
-  tee-network:
+  main-network:
     driver: bridge
     ipam:
       config:
         - subnet: 172.20.0.0/16
 
 volumes:
-  otc_postgres_data:
+  otc_postgres_data_2:
   bitcoin_data:
   otc_server_config_data:
   prometheus_data:

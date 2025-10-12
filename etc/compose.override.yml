@@ -13,7 +13,7 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - tee-network
+      - main-network
 
   devnet: 
     container_name: devnet
@@ -60,7 +60,7 @@ services:
     environment:
       TOKEN_INDEXER_DATABASE_URL: postgres://token_indexer_user:token_indexer_password@token-indexer-postgres:5432/token_indexer_db
     networks:
-      - tee-network
+      - main-network
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://devnet:50104/health || exit 1"]
       interval: 10s
@@ -180,7 +180,7 @@ services:
       CHAINALYSIS_HOST: ~
       CHAINALYSIS_TOKEN: ~
     networks:
-      - tee-network
+      - main-network
     ports:
       - "3001:3001"
     volumes: []
@@ -202,7 +202,7 @@ services:
       # Keep pg_secrets for secret management, but use ephemeral data storage
       - pg_secrets:/run/postgres-secrets:ro
     networks:
-      - tee-network 
+      - main-network 
 
   prometheus:
     networks:
@@ -253,7 +253,7 @@ services:
       AUTO_MANAGE_INVENTORY: false
     volumes: []
     networks:
-      - tee-network
+      - main-network
       - mm-network
   
   mm-node-exporter:
@@ -274,10 +274,10 @@ services:
       otc-server:
         condition: service_healthy
     networks:
-      - tee-network
+      - main-network
   
   postgres-replica:
     volumes: []
     networks:
-      - tee-network 
+      - main-network 
   
