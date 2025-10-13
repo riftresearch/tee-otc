@@ -71,7 +71,7 @@ pub struct OtcServerArgs {
     pub host: IpAddr,
 
     /// Port to bind to
-    #[arg(short, long, default_value = "3000")]
+    #[arg(short, long, default_value = "4422")]
     pub port: u16,
 
     /// Address for the Prometheus metrics exporter
