@@ -1387,7 +1387,7 @@ services:
       bitcoin-core:
         condition: service_started
     entrypoint: ["/usr/local/bin/otc-server-entrypoint.sh"]
-    command: ["/app/otc-server"]
+    command: ["/app/otc-server", "--host", "0.0.0.0", "--port", "4422"]
     environment:
       GRANT_SUDO: yes
       # DATABASE_URL is constructed dynamically in the entrypoint from sidecar-generated secrets
