@@ -41,7 +41,7 @@ services:
         COPY . .
         RUN cargo build --release --bin devnet --exclude integration-tests --workspace
 
-        FROM --platform=linux/amd64 debian:trixie-slim
+        FROM --platform=linux/amd64 debian:trixie
         RUN apt-get update && apt-get install -y \
             ca-certificates \
             curl \
@@ -93,7 +93,7 @@ services:
         COPY . .
         RUN cargo build --release --bin otc-server --features integration-test --exclude integration-tests --workspace
 
-        FROM debian:trixie-slim
+        FROM debian:trixie
         RUN apt-get update && apt-get install -y \
             ca-certificates \
             curl \
@@ -162,7 +162,7 @@ services:
         COPY . .
         RUN cargo build --release --bin rfq-server --features integration-test --exclude integration-tests --workspace
 
-        FROM debian:trixie-slim
+        FROM debian:trixie
         RUN apt-get update && apt-get install -y \
             ca-certificates \
             && rm -rf /var/lib/apt/lists/*

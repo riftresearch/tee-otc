@@ -1021,7 +1021,7 @@ services:
         COPY . .
         RUN cargo build --release --bin market-maker --exclude integration-tests --workspace
 
-        FROM debian:trixie-slim AS runtime
+        FROM debian:trixie AS runtime
         RUN apt-get update && apt-get install -y \
             ca-certificates \
             && rm -rf /var/lib/apt/lists/*
