@@ -1264,8 +1264,8 @@ services:
 
       # Replication user credentials
       REPLICA_USER: replicator
-      # REPLICA_PASSWORD: ${POSTGRES_REPLICA_PASSWORD:?set POSTGRES_REPLICA_PASSWORD}
-      REPLICA_PASSWORD: temp_replica_user_password
+      REPLICA_PASSWORD: ${POSTGRES_REPLICA_PASSWORD:?set POSTGRES_REPLICA_PASSWORD}
+      # REPLICA_PASSWORD: temp_replica_user_password
 
       POSTGRES_INITDB_ARGS: "--data-checksums"
     volumes:
