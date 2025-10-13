@@ -1376,7 +1376,7 @@ services:
     platform: linux/amd64
 
   otc-server:
-    image: riftresearch/otc-server:main-79a3901
+    image: riftresearch/otc-server:main-74e5520
     restart: unless-stopped
     container_name: tee-otc-server
     depends_on:
