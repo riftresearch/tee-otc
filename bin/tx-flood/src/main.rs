@@ -24,6 +24,19 @@ use tracing_subscriber::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Parse args once to get the env_file path if specified
+    let args = Args::parse();
+    
+    // Load environment variables from the specified file or default .env
+    if let Some(env_file) = &args.env_file {
+        dotenvy::from_path(env_file)
+            .with_context(|| format!("Failed to load env file: {}", env_file.display()))?;
+    } else {
+        // Attempt to load default .env file, ignore if not present
+        let _ = dotenvy::dotenv();
+    }
+    
+    // Re-parse args to pick up environment variables from the loaded file
     let args = Args::parse();
     let config = Arc::new(args.into_config()?);
 

@@ -6962,6 +6962,7 @@ dependencies = [
  "chrono",
  "clap",
  "crossterm 0.27.0",
+ "dotenvy",
  "eip3009-erc20-contract",
  "eip7702-delegator-contract",
  "futures-util",

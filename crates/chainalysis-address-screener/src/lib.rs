@@ -46,7 +46,6 @@ impl ChainalysisAddressScreener {
 
         let http = Client::builder()
             .default_headers(headers)
-            .use_rustls_tls()
             .build()
             .context(BuildClientSnafu)?;
 

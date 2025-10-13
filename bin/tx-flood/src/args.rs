@@ -41,92 +41,96 @@ pub struct SwapDirection {
 #[command(name = "tx-flood")]
 #[command(about = "Swap load testing tool for the OTC server")]
 pub struct Args {
+    /// Path to .env file to load environment variables from
+    #[arg(long, env = "ENV_FILE")]
+    pub env_file: Option<std::path::PathBuf>,
+
     /// Global log level (e.g. trace, debug, info)
     #[arg(long, env = "RUST_LOG", default_value = "info")]
     pub log_level: String,
 
     /// Base URL for the OTC server (e.g. https://otc.example.com)
-    #[arg(long, default_value = "http://0.0.0.0:4422")]
+    #[arg(long, env = "OTC_URL", default_value = "http://0.0.0.0:4422")]
     pub otc_url: Url,
 
     /// Override URL for the quote endpoint (defaults to <otc_url>/api/v1/quotes/request)
-    #[arg(long, default_value = "http://0.0.0.0:3001/api/v1/quotes/request")]
+    #[arg(long, env = "QUOTE_URL", default_value = "http://0.0.0.0:3001/api/v1/quotes/request")]
     pub quote_url: Url,
 
     /// Total number of swaps to execute
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, env = "TOTAL_SWAPS", default_value_t = 1)]
     pub total_swaps: usize,
 
     /// Number of swaps to start in each interval window
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, env = "SWAPS_PER_INTERVAL", default_value_t = 1)]
     pub swaps_per_interval: usize,
 
     /// Interval between batches, expressed with humantime syntax (e.g. "5s", "1m")
-    #[arg(long, default_value = "5s", value_parser = parse_duration)]
+    #[arg(long, env = "INTERVAL", default_value = "5s", value_parser = parse_duration)]
     pub interval: Duration,
 
     /// Polling cadence for swap status checks
-    #[arg(long, default_value = "2s", value_parser = parse_duration)]
+    #[arg(long, env = "POLL_INTERVAL", default_value = "2s", value_parser = parse_duration)]
     pub poll_interval: Duration,
 
     /// Maximum time to wait for a swap to settle before marking it failed
-    #[arg(long, default_value = "10m", value_parser = parse_duration)]
+    #[arg(long, env = "SWAP_TIMEOUT", default_value = "10m", value_parser = parse_duration)]
     pub swap_timeout: Duration,
 
     /// Swap mode: eth-start (send cbBTC), btc-start (send BTC), or rand-start (random)
-    #[arg(long, value_enum, default_value_t = ModeArg::EthStart)]
+    #[arg(long, env = "MODE", value_enum, default_value_t = ModeArg::EthStart)]
     pub mode: ModeArg,
 
     /// Minimum amount for quote requests (decimal or hex string, e.g. "5000" or "0x1388")
-    #[arg(long, default_value = "5000", value_parser = parse_u256)]
+    #[arg(long, env = "MIN_AMOUNT", default_value = "5000", value_parser = parse_u256)]
     pub min_amount: U256,
 
     /// Maximum amount for quote requests (decimal or hex string, e.g. "100000" or "0x186a0")
-    #[arg(long, default_value = "100000", value_parser = parse_u256)]
+    #[arg(long, env = "MAX_AMOUNT", default_value = "100000", value_parser = parse_u256)]
     pub max_amount: U256,
 
     /// Enable randomized amounts between min_amount and max_amount for each swap
-    #[arg(long, default_value_t = true)]
+    #[arg(long, env = "RANDOMIZE_AMOUNTS", default_value_t = true)]
     pub randomize_amounts: bool,
 
     /// Bitcoin descriptor representing the funded wallet (wpkh(desc)...)
-    #[arg(long, default_value = DEFAULT_BITCOIN_DESCRIPTOR)]
+    #[arg(long, env = "BITCOIN_WALLET_DESCRIPTOR", default_value = DEFAULT_BITCOIN_DESCRIPTOR)]
     pub bitcoin_wallet_descriptor: String,
 
     /// Bitcoin network for the wallet (bitcoin, testnet, signet, regtest)
-    #[arg(long, default_value_t = Network::Regtest)]
+    #[arg(long, env = "BITCOIN_WALLET_NETWORK", default_value_t = Network::Regtest)]
     pub bitcoin_network: Network,
 
     /// Esplora HTTP URL for the Bitcoin chain
-    #[arg(long, default_value = DEFAULT_ESPLORA_URL)]
+    #[arg(long, env = "BITCOIN_WALLET_ESPLORA_URL", default_value = DEFAULT_ESPLORA_URL)]
     pub bitcoin_esplora_url: String,
 
     /// Private key for the EVM wallet (32-byte hex string)
-    #[arg(long, value_parser = parse_private_key, default_value = DEFAULT_EVM_PRIVATE_KEY)]
+    #[arg(long, env = "ETHEREUM_WALLET_PRIVATE_KEY", value_parser = parse_private_key, default_value = DEFAULT_EVM_PRIVATE_KEY)]
     pub evm_private_key: [u8; 32],
 
     /// Ethereum RPC websocket URL used for signing and broadcasting
-    #[arg(long, default_value = DEFAULT_EVM_WS_URL)]
+    #[arg(long, env = "ETHEREUM_RPC_WS_URL", default_value = DEFAULT_EVM_WS_URL)]
     pub evm_rpc_ws_url: String,
 
     /// Optional HTTP RPC URL for debugging (defaults to the websocket URL)
-    #[arg(long, default_value = DEFAULT_EVM_HTTP_URL)]
+    #[arg(long, env = "ETHEREUM_RPC_HTTP_URL", default_value = DEFAULT_EVM_HTTP_URL)]
     pub evm_debug_rpc_url: String,
 
     /// Number of confirmations required before the wallet considers a tx final
-    #[arg(long, default_value_t = 1)]
+    #[arg(long, env = "ETHEREUM_CONFIRMATIONS", default_value_t = 1)]
     pub evm_confirmations: u64,
 
     /// Enable dedicated per-swap wallets funded up-front from the master wallet
-    #[arg(long, default_value_t = false)]
+    #[arg(long, env = "DEDICATED_WALLETS", default_value_t = false)]
     pub dedicated_wallets: bool,
 
     /// Additional sats to allocate to each dedicated Bitcoin wallet for miner fees
-    #[arg(long, default_value_t = 5_000)]
+    #[arg(long, env = "DEDICATED_WALLET_BITCOIN_FEE_RESERVE_SATS", default_value_t = 5_000)]
     pub dedicated_wallet_bitcoin_fee_reserve_sats: u64,
 
     /// Additional wei to allocate to each dedicated EVM wallet for gas fees
-    #[arg(long, default_value = "0x2386f26fc10000", value_parser = parse_u256)]
+    #[arg(long, env = "DEDICATED_WALLET_EVM_FEE_RESERVE_WEI", default_value = "0x2386f26fc10000", value_parser = parse_u256)]
     pub dedicated_wallet_evm_fee_reserve_wei: U256,
 }
 
@@ -184,6 +188,7 @@ pub struct EvmWalletConfig {
 impl Args {
     pub fn into_config(self) -> Result<Config> {
         let Args {
+            env_file: _,
             log_level,
             otc_url,
             quote_url,

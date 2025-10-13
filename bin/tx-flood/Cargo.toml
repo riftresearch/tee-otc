@@ -12,6 +12,7 @@ bitcoin = { workspace = true }
 blockchain-utils = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 crossterm = "0.27"
+dotenvy = "0.15"
 futures-util = { workspace = true }
 humantime = "2.1"
 market-maker = { workspace = true }
