@@ -2,7 +2,9 @@
 database_url := "postgres://postgres:password@localhost:5433/otc_dev"
 
 # Docker compose files for main deployment
-dc_files := "docker compose -f etc/compose.devnet.yml -f etc/compose.override.yml"
+dc_files := "COMPOSE_BAKE=true docker compose -f etc/compose.devnet.yml -f etc/compose.override.yml"
+
+dc_mm_files := "COMPOSE_BAKE=true docker compose --env-file .env.mm -f etc/compose.mm.yml"
 
 # Docker compose for test database
 test_db := "docker compose -f etc/compose.test-db.yml"
@@ -75,6 +77,10 @@ phala-deploy:
 # DOCKER_DEFAULT_PLATFORM=linux/amd64  
 dc +args:
     PHALA_DB_SNI=mock PRIMARY_DB_PASSWORD=replica_password REPLICA_DB_PASSWORD=actual_replica_password POSTGRES_REPLICA_PASSWORD=replica_password {{dc_files}} {{args}}
+
+# Docker compose command for market maker with all config files - passes through any arguments
+mm +args:
+    {{dc_mm_files}} {{args}}
 
 # Run clippy
 clippy:
