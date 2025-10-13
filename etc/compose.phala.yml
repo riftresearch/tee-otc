@@ -26,7 +26,7 @@ configs:
 
       # Allow app traffic from the docker bridge (local docker network only)
       # Note: otc_app is the superuser and the application user
-      host    all             otc_app         172.20.0.0/16           scram-sha-256
+      host    all             otc_app         172.21.0.0/16           scram-sha-256
 
       # Replication user access
       # For logical replication, replicator needs both replication protocol access
@@ -1226,7 +1226,7 @@ services:
       - eth_jwt_data:/jwt
     restart: "no"
     networks:
-      - main-network
+      - rift-network
   
   pg-secret-generator:
     container_name: tee-pg-secret-generator
@@ -1251,7 +1251,7 @@ services:
       - pg_secrets:/secrets
     restart: "no"
     networks:
-      - main-network
+      - rift-network
 
   postgres:
     image: postgres:16-alpine
@@ -1296,7 +1296,7 @@ services:
       pg-secret-generator:
         condition: service_completed_successfully
     networks:
-      - main-network
+      - rift-network
   
   dozzle:
     container_name: tee-dozzle
@@ -1372,7 +1372,7 @@ services:
       retries: 10
       start_period: 30s
     networks:
-      - main-network
+      - rift-network
     platform: linux/amd64
 
   otc-server:
@@ -1408,7 +1408,7 @@ services:
     expose:
       - "9000"
     networks:
-      - main-network
+      - rift-network
     volumes:
       - ${DSTACK_SOCK_PATH:-/var/run/dstack.sock}:/var/run/dstack.sock
       - otc_server_config_data:/app/config
@@ -1473,7 +1473,7 @@ services:
       --http --http.addr 0.0.0.0 --http.port 8545
       --http.api "eth,net,web3"
     networks:
-      - main-network
+      - rift-network
     
   lighthouse:
     restart: unless-stopped
@@ -1503,7 +1503,7 @@ services:
       --checkpoint-sync-url https://sync-mainnet.beaconcha.in
       --checkpoint-sync-url-timeout=300
     networks:
-      - main-network
+      - rift-network
 
   node-exporter:
     image: prom/node-exporter:v1.8.2
@@ -1523,7 +1523,7 @@ services:
     # ports:
       # - "9100:9100"
     networks:
-      - main-network
+      - rift-network
 
   cadvisor:
     image: gcr.io/cadvisor/cadvisor:v0.49.1
@@ -1538,7 +1538,7 @@ services:
       - /sys:/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
     networks:
-      - main-network
+      - rift-network
 
   prometheus:
     image: prom/prometheus:v2.54.1
@@ -1561,7 +1561,7 @@ services:
       - "--storage.tsdb.path=/prometheus"
       - "--web.enable-lifecycle"
     networks:
-      - main-network
+      - rift-network
 
   grafana:
     image: grafana/grafana:10.4.2
@@ -1583,16 +1583,16 @@ services:
       - source: grafana-node-dashboard
         target: /etc/grafana/provisioning/dashboards/tee-monitoring.json
     networks:
-      - main-network
+      - rift-network
 
 
 
 networks:
-  main-network:
+  rift-network:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/16
+        - subnet: 172.21.0.0/16
 
 volumes:
   otc_postgres_data_2:
