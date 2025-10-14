@@ -25,7 +25,7 @@ pub enum ConversionError {
     #[snafu(display("Invalid JSON response: {source}"))]
     JsonDecode { source: serde_json::Error },
 
-    #[snafu(display("Invalid request: {reason}"))]
+    #[snafu(display("Invalid request: {reason} at {loc}"))]
     InvalidRequest {
         reason: String,
         #[snafu(implicit)]
@@ -165,11 +165,10 @@ impl CoinbaseClient {
             .context(HttpRequestSnafu)?;
 
         let text = response.text().await.context(HttpRequestSnafu)?;
-        tracing::debug!("response: {text}");
         let wallets: serde_json::Value = serde_json::from_str(&text).context(JsonDecodeSnafu)?;
 
         let wallets_array = wallets.as_array().context(InvalidRequestSnafu {
-            reason: "Response is not an array",
+            reason: "Response is not an array | Actual response: {text}",
         })?;
 
         let btc_wallet = wallets_array
