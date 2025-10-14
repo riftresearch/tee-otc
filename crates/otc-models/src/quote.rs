@@ -113,6 +113,20 @@ fn normalize_value(v: Value) -> Value {
 
 impl Quote {
     pub fn hash(&self) -> [u8; 32] {
-        keccak256(to_canonical_json(self).unwrap().as_bytes()).into()
+        // Create a normalized version of the quote with microsecond-precision timestamps
+        // to ensure consistent hashing across database round-trips (PostgreSQL uses microseconds)
+        let normalized = Quote {
+            expires_at: normalize_datetime_to_micros(self.expires_at),
+            created_at: normalize_datetime_to_micros(self.created_at),
+            ..self.clone()
+        };
+        keccak256(to_canonical_json(&normalized).unwrap().as_bytes()).into()
     }
+}
+
+/// Normalize a DateTime to microsecond precision to match PostgreSQL TIMESTAMPTZ precision.
+/// This ensures consistent hashing across database round-trips.
+fn normalize_datetime_to_micros(dt: DateTime<Utc>) -> DateTime<Utc> {
+    DateTime::from_timestamp_micros(dt.timestamp_micros())
+        .expect("timestamp should be in valid range")
 }

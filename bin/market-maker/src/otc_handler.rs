@@ -44,17 +44,18 @@ impl OTCMessageHandler {
                 // Verify the quote exists in our database
                 let quote_exists = match self.quote_storage.get_quote(*quote_id).await {
                     Ok(quote) => {
+                        let stored_hash = quote.hash();
                         info!(
                             "Found quote {} in database, hash: {:?}",
                             quote_id,
-                            quote.hash()
+                            stored_hash
                         );
                         // Verify the hash matches
-                        if quote.hash() != *quote_hash {
+                        if stored_hash != *quote_hash {
                             warn!(
                                 "Quote {} hash mismatch! Expected: {:?}, Got: {:?}",
                                 quote_id,
-                                quote.hash(),
+                                stored_hash,
                                 quote_hash
                             );
                         }
