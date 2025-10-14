@@ -165,6 +165,7 @@ impl CoinbaseClient {
             .context(HttpRequestSnafu)?;
 
         let text = response.text().await.context(HttpRequestSnafu)?;
+        tracing::debug!("response: {text}");
         let wallets: serde_json::Value = serde_json::from_str(&text).context(JsonDecodeSnafu)?;
 
         let wallets_array = wallets.as_array().context(InvalidRequestSnafu {
