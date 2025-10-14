@@ -165,9 +165,9 @@ pub async fn run_rebalancer(
         gauge!("mm_inventory_ratio_bps").set(r_bps as f64);
 
         let side = if r_bps < lo {
-            Some(Side::BtcToCbbtc) // below lower band → need more cBBTC
+            Some(Side::CbbtcToBtc) // below lower band → BTC ratio too low, need more BTC
         } else if r_bps > hi {
-            Some(Side::CbbtcToBtc) // above upper band → need more BTC
+            Some(Side::BtcToCbbtc) // above upper band → BTC ratio too high, need more cBBTC
         } else {
             None
         };
