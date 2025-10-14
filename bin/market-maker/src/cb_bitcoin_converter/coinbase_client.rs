@@ -345,7 +345,7 @@ impl CoinbaseClient {
         let withdrawal_data: serde_json::Value =
             serde_json::from_str(&text).context(JsonDecodeSnafu)?;
 
-        if withdrawal_data["cancelled"].is_null() {
+        if !withdrawal_data["cancelled"].is_null() {
             Ok(WithdrawalStatus::Cancelled)
         } else if withdrawal_data["completed_at"].is_null() {
             Ok(WithdrawalStatus::Pending)
