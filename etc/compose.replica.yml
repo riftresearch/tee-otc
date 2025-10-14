@@ -125,17 +125,17 @@ configs:
         fi
         
         # Now create subscription with slot
-        psql "$${REPLICA_DB_CONN}" <<-SQL || {
-          echo "ERROR: Failed to create subscription"
-          echo "If you see 'slot already exists', manually drop it on primary:"
-          echo "  SELECT pg_drop_replication_slot('otc_subscription');"
-          exit 1
-        }
+        if ! psql "$${REPLICA_DB_CONN}" <<-SQL; then
           CREATE SUBSCRIPTION otc_subscription
             CONNECTION '$${CONNECTION_STRING}'
             PUBLICATION otc_all_tables
             WITH (copy_data = true, create_slot = true);
       SQL
+          echo "ERROR: Failed to create subscription"
+          echo "If you see 'slot already exists', manually drop it on primary:"
+          echo "  SELECT pg_drop_replication_slot('otc_subscription');"
+          exit 1
+        fi
         echo "✓ Subscription created"
       else
         echo "✓ Subscription 'otc_subscription' already exists"
