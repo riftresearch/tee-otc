@@ -168,7 +168,7 @@ impl CoinbaseClient {
         let wallets: serde_json::Value = serde_json::from_str(&text).context(JsonDecodeSnafu)?;
 
         let wallets_array = wallets.as_array().context(InvalidRequestSnafu {
-            reason: "Response is not an array | Actual response: {text}",
+            reason: format!("Response is not an array | Actual response: {text}"),
         })?;
 
         let btc_wallet = wallets_array
