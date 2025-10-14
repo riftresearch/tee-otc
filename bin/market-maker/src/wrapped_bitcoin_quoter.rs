@@ -11,7 +11,7 @@ use alloy::{primitives::U256, providers::Provider};
 use blockchain_utils::{compute_protocol_fee_sats, inverse_compute_protocol_fee};
 use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::{FeeSchedule, RFQResult};
-use snafu::Snafu;
+use snafu::{Location, ResultExt, Snafu};
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
@@ -23,17 +23,15 @@ const BALANCE_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Snafu)]
 pub enum WrappedBitcoinQuoterError {
-    #[snafu(display("Failed to get fee rate from esplora: {}", source))]
-    Esplora { source: esplora_client::Error },
+    #[snafu(display("Failed to get fee rate from esplora: {}, at {}", source, loc))]
+    Esplora {
+        source: esplora_client::Error,
+        #[snafu(implicit)]
+        loc: Location,
+    },
 
     #[snafu(display("Fee update timeout"))]
     FeeUpdateTimeout,
-}
-
-impl From<esplora_client::Error> for WrappedBitcoinQuoterError {
-    fn from(error: esplora_client::Error) -> Self {
-        WrappedBitcoinQuoterError::Esplora { source: error }
-    }
 }
 
 type Result<T, E = WrappedBitcoinQuoterError> = std::result::Result<T, E>;
@@ -116,7 +114,7 @@ impl WrappedBitcoinQuoter {
     ) -> Result<()> {
         loop {
             let send_fee_sats_on_btc = {
-                let sats_per_vbyte_by_confirmations = esplora_client.get_fee_estimates().await?;
+                let sats_per_vbyte_by_confirmations = esplora_client.get_fee_estimates().await.context(EsploraSnafu)?;
                 let sats_per_vbyte = sats_per_vbyte_by_confirmations.get(&1).unwrap_or(&1.5);
                 let sats_per_vbyte = sats_per_vbyte * fee_safety_multiplier;
 

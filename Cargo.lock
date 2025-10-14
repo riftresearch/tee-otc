@@ -2863,7 +2863,7 @@ dependencies = [
 [[package]]
 name = "esplora-client"
 version = "0.12.0"
-source = "git+https://github.com/riftresearch/rust-esplora-client?rev=a571328ff799993f877d87db8dad6e4c6b313225#a571328ff799993f877d87db8dad6e4c6b313225"
+source = "git+https://github.com/riftresearch/rust-esplora-client?rev=5400c6fef216e731a3ed9f360b14f81a6b601a86#5400c6fef216e731a3ed9f360b14f81a6b601a86"
 dependencies = [
  "bitcoin",
  "hex-conservative 0.2.1",

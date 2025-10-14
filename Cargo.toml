@@ -35,7 +35,7 @@ bitcoin = { version = "0.32.0", default-features = false, features = ["serde", "
 bitcoincore-rpc-async = { git = "https://github.com/riftresearch/rust-bitcoincore-rpc-async", rev = "c50734a50f2af2f8a9be3f03b98832dd04e788b1" }
 corepc-node = { version = "0.8.0", features = ["29_0", "download"] }
 electrsd = { git = "https://github.com/RCasatta/electrsd", rev = "bdc97e879bad82e13e69c74d898271db12224f44", features = ["corepc-node_29_0", "esplora_a33e97e1", "legacy"] }
-esplora-client = {git = "https://github.com/riftresearch/rust-esplora-client" , rev = "a571328ff799993f877d87db8dad6e4c6b313225", features = ["async", "tokio"]}
+esplora-client = {git = "https://github.com/riftresearch/rust-esplora-client" , rev = "5400c6fef216e731a3ed9f360b14f81a6b601a86", features = ["async", "tokio"]}
 
 
 alloy = { version = "1.0.23", features = ["full", "node-bindings", "json-rpc"] }
