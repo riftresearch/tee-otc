@@ -130,11 +130,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
                 token: TokenIdentifier::Native,
                 decimals: 8,
             };
-            (
-                cbbtc,
-                btc,
-                "bcrt1qs758ursh4q9z627kt3pp5yysm78ddny6txaqgw".to_string(),
-            )
+            (cbbtc, btc, config.recipient_bitcoin_address.clone())
         }
         SwapMode::BtcStart => {
             let btc = Currency {
@@ -149,11 +145,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
                 ),
                 decimals: 8,
             };
-            (
-                btc,
-                cbbtc,
-                "0x61f11ac1218cb522347f6D430202d8290DA1a28f".to_string(),
-            )
+            (btc, cbbtc, config.recipient_evm_address.clone())
         }
         SwapMode::RandStart { directions } => {
             let direction = directions

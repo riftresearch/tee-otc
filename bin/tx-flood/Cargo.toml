@@ -19,6 +19,7 @@ market-maker = { workspace = true }
 otc-models = { workspace = true }
 otc-protocols = { workspace = true }
 otc-server = { workspace = true }
+rustls = {workspace=true}
 reqwest = { workspace = true, features = ["json"] }
 rfq-server = { workspace = true }
 ratatui = "0.28"

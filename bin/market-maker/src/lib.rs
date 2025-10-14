@@ -203,8 +203,10 @@ pub struct MarketMakerArgs {
     #[arg(long, env = "ETHEREUM_WALLET_PRIVATE_KEY", value_parser = parse_hex_string)]
     pub ethereum_wallet_private_key: [u8; 32],
 
-    /// Ethereum confirmations necessary for a transaction to be considered confirmed (for the wallet to be allowed to send a new transaction)
-    #[arg(long, env = "ETHEREUM_CONFIRMATIONS", default_value = "1")]
+    /// Number of confirmations required before broadcasting the next transaction. Defaults to 2 as empirically this
+    /// seems to be enough to ensure EIP-7702 delegated accounts never exceed their in-flight transaction limit (of 1 in most cases),
+    /// which would cause mempool rejections. Annoyingly, setting to this 1 will lead to transient EIP-7702 broadcast errors.
+    #[arg(long, env = "ETHEREUM_CONFIRMATIONS", default_value = "2")]
     pub ethereum_confirmations: u64,
 
     /// Ethereum RPC URL

@@ -24,6 +24,8 @@ use tracing_subscriber::{
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    rustls::crypto::ring::default_provider().install_default().expect("Failed to install rustls crypto provider");
+
     // Parse args once to get the env_file path if specified
     let args = Args::parse();
     

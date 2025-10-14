@@ -132,6 +132,14 @@ pub struct Args {
     /// Additional wei to allocate to each dedicated EVM wallet for gas fees
     #[arg(long, env = "DEDICATED_WALLET_EVM_FEE_RESERVE_WEI", default_value = "0x2386f26fc10000", value_parser = parse_u256)]
     pub dedicated_wallet_evm_fee_reserve_wei: U256,
+
+    /// Recipient Bitcoin address for receiving swaps
+    #[arg(long, env = "RECIPIENT_BITCOIN_ADDRESS", default_value = DEFAULT_RECIPIENT_BITCOIN_ADDRESS)]
+    pub recipient_bitcoin_address: String,
+
+    /// Recipient EVM address for receiving swaps
+    #[arg(long, env = "RECIPIENT_EVM_ADDRESS", default_value = DEFAULT_RECIPIENT_EVM_ADDRESS)]
+    pub recipient_evm_address: String,
 }
 
 #[derive(Debug, Clone)]
@@ -158,7 +166,9 @@ pub struct Config {
     pub bitcoin: Option<BitcoinWalletConfig>,
     pub evm: Option<EvmWalletConfig>,
     pub dedicated_wallets: DedicatedWalletsConfig,
-    pub _bitcoin_wallet_db_dir: Arc<TempDir>
+    pub recipient_bitcoin_address: String,
+    pub recipient_evm_address: String,
+    pub _bitcoin_wallet_db_dir: Arc<TempDir>,
 }
 
 #[derive(Debug, Clone)]
@@ -211,6 +221,8 @@ impl Args {
             dedicated_wallets,
             dedicated_wallet_bitcoin_fee_reserve_sats,
             dedicated_wallet_evm_fee_reserve_wei,
+            recipient_bitcoin_address,
+            recipient_evm_address,
         } = self;
 
         if total_swaps == 0 {
@@ -251,7 +263,7 @@ impl Args {
                         directions.push(SwapDirection {
                             from_currency: cbbtc_currency.clone(),
                             to_currency: btc_currency.clone(),
-                            user_destination_address: DEFAULT_RECIPIENT_BITCOIN_ADDRESS.to_string(),
+                            user_destination_address: recipient_bitcoin_address.clone(),
                         });
                         eth_count += 1;
                     } else {
@@ -259,7 +271,7 @@ impl Args {
                         directions.push(SwapDirection {
                             from_currency: btc_currency.clone(),
                             to_currency: cbbtc_currency.clone(),
-                            user_destination_address: DEFAULT_RECIPIENT_EVM_ADDRESS.to_string(),
+                            user_destination_address: recipient_evm_address.clone(),
                         });
                         btc_count += 1;
                     }
@@ -325,6 +337,8 @@ impl Args {
             bitcoin,
             evm,
             dedicated_wallets,
+            recipient_bitcoin_address,
+            recipient_evm_address,
             _bitcoin_wallet_db_dir: Arc::new(bitcoin_wallet_db_dir),
         })
     }
