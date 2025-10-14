@@ -111,7 +111,26 @@ configs:
 
       if [ "$${SUB_EXISTS}" -eq "0" ]; then
         echo "Creating new subscription..."
-        psql "$${REPLICA_DB_CONN}" <<-SQL
+        
+        # Check if slot already exists on primary from a previous failed attempt
+        SLOT_EXISTS=$$(psql "$${PRIMARY_CONN}" -tAc "SELECT COUNT(*) FROM pg_replication_slots WHERE slot_name = 'otc_subscription';")
+        
+        if [ "$${SLOT_EXISTS}" -eq "1" ]; then
+          echo "⚠ Orphaned replication slot detected on primary, cleaning up..."
+          psql "$${PRIMARY_CONN}" -c "SELECT pg_drop_replication_slot('otc_subscription');" || {
+            echo "ERROR: Failed to drop orphaned slot. It may be active. Check primary replication status."
+            exit 1
+          }
+          echo "✓ Orphaned slot removed"
+        fi
+        
+        # Now create subscription with slot
+        psql "$${REPLICA_DB_CONN}" <<-SQL || {
+          echo "ERROR: Failed to create subscription"
+          echo "If you see 'slot already exists', manually drop it on primary:"
+          echo "  SELECT pg_drop_replication_slot('otc_subscription');"
+          exit 1
+        }
           CREATE SUBSCRIPTION otc_subscription
             CONNECTION '$${CONNECTION_STRING}'
             PUBLICATION otc_all_tables
@@ -120,6 +139,14 @@ configs:
         echo "✓ Subscription created"
       else
         echo "✓ Subscription 'otc_subscription' already exists"
+        
+        # Verify subscription is enabled and healthy
+        SUB_ENABLED=$$(psql "$${REPLICA_DB_CONN}" -tAc "SELECT subenabled FROM pg_subscription WHERE subname = 'otc_subscription';")
+        if [ "$${SUB_ENABLED}" = "t" ]; then
+          echo "✓ Subscription is enabled and active"
+        else
+          echo "⚠ WARNING: Subscription exists but is disabled"
+        fi
       fi
 
       # Verify replication status
