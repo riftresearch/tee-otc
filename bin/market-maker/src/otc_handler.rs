@@ -42,36 +42,44 @@ impl OTCMessageHandler {
                 );
 
                 // Verify the quote exists in our database
-                let quote_exists = match self.quote_storage.get_quote(*quote_id).await {
+                let (accepted, rejection_reason) = match self.quote_storage.get_quote(*quote_id).await {
                     Ok(quote) => {
                         let stored_hash = quote.hash();
                         info!(
-                            "Found quote {} in database, hash: {:?}",
+                            "Found quote {} in database, hash: {}",
                             quote_id,
-                            stored_hash
+                            alloy::hex::encode(stored_hash)
                         );
                         // Verify the hash matches
                         if stored_hash != *quote_hash {
-                            warn!(
-                                "Quote {} hash mismatch! Expected: {:?}, Got: {:?}",
+                            let rejection_reason = format!(
+                                "Quote {} hash mismatch! Expected: {}, Got: {}",
                                 quote_id,
-                                stored_hash,
-                                quote_hash
+                                alloy::hex::encode(stored_hash),
+                                alloy::hex::encode(quote_hash),
                             );
+                            warn!(rejection_reason);
+                            (false, Some(rejection_reason))
+                        } else {
+                            // Make sure the quote is not expired
+                            let current_time = utc::now();
+                            let quote_expiration = quote.expires_at;
+                            if current_time > quote_expiration {
+                                let rejection_reason = format!(
+                                    "Swap was requested with quote {} that is expired!",
+                                    quote_id
+                                );
+                                warn!(rejection_reason);
+                                (false, Some(rejection_reason))
+                            } else {
+                                (true, None)
+                            }
                         }
-                        true
                     }
                     Err(e) => {
                         error!("Failed to retrieve quote {} from database: {}", quote_id, e);
-                        false
+                        (false, Some("Quote not found in database".to_string()))
                     }
-                };
-
-                let (accepted, rejection_reason) = if quote_exists {
-                    // TODO: Ensure quote is valid (not timed out) here
-                    (true, Some("Blindly accepting known quote".to_string()))
-                } else {
-                    (false, Some("Quote not found in database".to_string()))
                 };
 
                 info!(
