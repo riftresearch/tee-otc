@@ -6,6 +6,8 @@ dc_files := "COMPOSE_BAKE=true docker compose -f etc/compose.devnet.yml -f etc/c
 
 dc_mm_files := "COMPOSE_BAKE=true docker compose --env-file .env.mm -f etc/compose.mm.yml"
 
+dc_replica_files := "COMPOSE_BAKE=true docker compose --env-file .env.replica -f etc/compose.replica.yml"
+
 # Docker compose for test database
 test_db := "docker compose -f etc/compose.test-db.yml"
 
@@ -73,14 +75,18 @@ docker-release:
 phala-deploy:
     phala deploy --uuid 1c11019a-3dc1-440d-8a52-2147dcf608da -c etc/compose.phala.yml -e .env.otc
 
-# Docker compose command with all config files - passes through any arguments
+# Docker compose prefix command for local integration testing 
 # DOCKER_DEFAULT_PLATFORM=linux/amd64  
 dc +args:
     PHALA_DB_SNI=mock PRIMARY_DB_PASSWORD=replica_password REPLICA_DB_PASSWORD=actual_replica_password POSTGRES_REPLICA_PASSWORD=replica_password {{dc_files}} {{args}}
 
-# Docker compose command for market maker with all config files - passes through any arguments
+# Docker compose prefix command for market maker with all config files - passes through any arguments
 mm +args:
     {{dc_mm_files}} {{args}}
+
+# Docker compose prefix command for read replica
+replica +args:
+    {{dc_replica_files}} {{args}}
 
 # Run clippy
 clippy:
