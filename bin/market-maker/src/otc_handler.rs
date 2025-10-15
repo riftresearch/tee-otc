@@ -5,6 +5,7 @@ use otc_protocols::mm::{MMRequest, MMResponse, MMStatus, ProtocolMessage};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
+#[derive(Clone)]
 pub struct OTCMessageHandler {
     quote_storage: Arc<QuoteStorage>,
     deposit_key_storage: Arc<DepositKeyStorage>,

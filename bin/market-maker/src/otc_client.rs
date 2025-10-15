@@ -7,6 +7,7 @@ use futures_util::{SinkExt, StreamExt};
 use otc_protocols::mm::{MMRequest, ProtocolMessage};
 use snafu::prelude::*;
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{
     connect_async_with_config,
@@ -42,6 +43,8 @@ pub enum ClientError {
 }
 
 type Result<T, E = ClientError> = std::result::Result<T, E>;
+
+type WebSocketMessage = Message;
 
 pub struct OtcFillClient {
     config: Config,
@@ -126,23 +129,59 @@ impl OtcFillClient {
 
         info!("WebSocket connected, authenticated via headers");
 
-        let (mut write, mut read) = ws_stream.split();
+        let (ws_sink, mut ws_stream) = ws_stream.split();
 
-        while let Some(msg) = read.next().await {
+        // Create channel for writer task (buffer size of 1024 messages)
+        let (websocket_tx, mut websocket_rx) = mpsc::channel::<WebSocketMessage>(1024);
+
+        // Spawn single writer task that owns the sink
+        // This ensures all messages are sent in the order they are queued,
+        // without interleaving that could corrupt the protocol
+        let writer_handle = tokio::spawn(async move {
+            let mut sink = ws_sink;
+            while let Some(message) = websocket_rx.recv().await {
+                if let Err(e) = sink.send(message).await {
+                    error!("Failed to send WebSocket message: {}", e);
+                    break;
+                }
+            }
+            // Gracefully close the sink
+            let _ = sink.flush().await;
+            let _ = sink.close().await;
+            info!("WebSocket writer task finished");
+        });
+
+
+        let message_handler = Arc::new(self.handler.clone());
+
+        // Handle incoming messages
+        while let Some(msg) = ws_stream.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
-                    // TODO: Do we want to support concurrent messaging from a market maker?
+                    // Try to parse as a protocol message
                     match serde_json::from_str::<ProtocolMessage<MMRequest>>(&text) {
                         Ok(protocol_msg) => {
-                            if let Some(response) = self.handler.handle_request(&protocol_msg).await
-                            {
-                                let response_json =
-                                    serde_json::to_string(&response).context(SerializationSnafu)?;
-                                write
-                                    .send(Message::Text(response_json))
-                                    .await
-                                    .context(MessageSendSnafu)?;
-                            }
+                            let websocket_sender = websocket_tx.clone();
+                            let message_handler = message_handler.clone();
+                            tokio::spawn(async move {
+                                if let Some(response) = message_handler.handle_request(&protocol_msg).await
+                                {
+                                    let response_json = match serde_json::to_string(&response) {
+                                        Ok(json) => json,
+                                        Err(e) => {
+                                            error!("Failed to serialize response: {}", e);
+                                            return;
+                                        }
+                                    };
+
+                                    // Send response through the fan-in channel to the writer task
+                                    if let Err(e) =
+                                        websocket_sender.send(Message::Text(response_json)).await
+                                    {
+                                        error!("Failed to queue response message: {}", e);
+                                    }
+                                }
+                            });
                         }
                         Err(e) => {
                             error!("Failed to parse message: {}", e);
@@ -160,6 +199,12 @@ impl OtcFillClient {
                 _ => {}
             }
         }
+
+        // Clean up: drop sender to signal writer task to exit
+        drop(websocket_tx);
+
+        // Wait for writer task to finish
+        let _ = writer_handle.await;
 
         Ok(())
     }
