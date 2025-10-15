@@ -77,7 +77,7 @@ impl OTCMessageHandler {
                         }
                     }
                     Err(e) => {
-                        error!("Failed to retrieve quote {} from database: {}", quote_id, e);
+                        warn!("Failed to retrieve quote {} from database: {}", quote_id, e);
                         (false, Some("Quote not found in database".to_string()))
                     }
                 };

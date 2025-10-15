@@ -2,6 +2,8 @@
 name = "devnet"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
 
 [dependencies]
 serde_json = { workspace = true }
@@ -27,8 +29,4 @@ eip7702-delegator-contract = {workspace=true}
 eip3009-erc20-contract = {workspace=true}
 libc = {workspace=true} 
 utc = {workspace=true}
-
-
-# these dependences below here should be removed to be replaced with the project preferred crates of tracing and snafu respectively
-log = "0.4.27"
-eyre = "0.6.12"
+eyre = {workspace=true}

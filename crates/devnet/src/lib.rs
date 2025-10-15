@@ -9,7 +9,7 @@ use blockchain_utils::P2WPKHBitcoinWallet;
 pub use evm_devnet::EthDevnet;
 
 use evm_devnet::ForkConfig;
-use log::info;
+use tracing::info;
 use std::sync::Arc;
 use std::{path::PathBuf, str::FromStr};
 use tempfile::{NamedTempFile, TempDir};
