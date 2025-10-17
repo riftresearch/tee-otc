@@ -137,7 +137,7 @@ impl OTCMessageHandler {
 
                 let response = self
                     .payment_manager
-                    .make_payment(
+                    .queue_payment(
                         request_id,
                         swap_id,
                         quote_id,

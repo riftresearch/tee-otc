@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use metrics::counter;
 use otc_models::{
     ChainType, LatestRefund, Lot, MMDepositStatus, SettlementStatus, Swap, SwapStatus,
@@ -153,6 +155,64 @@ impl SwapRepository {
         .await?;
 
         Swap::from_row(&row)
+    }
+
+    pub async fn get_swaps(&self, ids: &[Uuid]) -> OtcServerResult<Vec<Swap>> {
+        use std::collections::HashMap;
+
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query(
+            r"
+            SELECT 
+                s.id, s.quote_id, s.market_maker_id,
+                s.metadata,
+                s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
+                s.user_destination_address, s.user_evm_account_address,
+                s.status,
+                s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
+                s.latest_refund,
+                s.failure_reason, s.failure_at,
+                s.mm_notified_at, s.mm_private_key_sent_at,
+                s.created_at, s.updated_at,
+                -- Quote fields
+                q.id as quote_id,
+                q.from_chain, q.from_token, q.from_amount, q.from_decimals,
+                q.to_chain, q.to_token, q.to_amount, q.to_decimals,
+                q.fee_schedule AS quote_fee_schedule,
+                q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
+            FROM swaps s
+            JOIN quotes q ON s.quote_id = q.id
+            WHERE s.id = ANY($1)
+            ",
+        )
+        .bind(ids)
+        .fetch_all(&self.pool)
+        .await?;
+
+        // Build a map of id -> Swap for efficient lookup
+        let mut swap_map: HashMap<Uuid, Swap> = HashMap::with_capacity(rows.len());
+        for row in rows {
+            let swap = Swap::from_row(&row)?;
+            swap_map.insert(swap.id, swap);
+        }
+
+        // Collect swaps in the same order as the input IDs, returning an error if any ID is missing
+        let mut result = Vec::with_capacity(ids.len());
+        for &id in ids {
+            match swap_map.remove(&id) {
+                Some(swap) => result.push(swap),
+                None => {
+                    return Err(OtcServerError::InvalidData {
+                        message: format!("Swap with id {} not found", id),
+                    })
+                }
+            }
+        }
+
+        Ok(result)
     }
 
     pub async fn update_status(&self, id: Uuid, status: SwapStatus) -> OtcServerResult<()> {
@@ -564,27 +624,262 @@ impl SwapRepository {
         Ok(())
     }
 
-    /// Update swap when MM deposit is detected
-    pub async fn mm_deposit_detected(
+    /// Update multiple swaps when MM deposits are detected in a batch
+    pub async fn batch_mm_deposit_detected(
         &self,
-        swap_id: Uuid,
-        deposit_status: MMDepositStatus,
+        deposit_status_map: HashMap<Uuid, MMDepositStatus>,
     ) -> OtcServerResult<()> {
-        // First get the swap
-        let mut swap = self.get(swap_id).await?;
+        if deposit_status_map.is_empty() {
+            return Ok(());
+        }
 
-        // Apply the state transition
-        swap.mm_deposit_detected(
-            deposit_status.tx_hash.clone(),
-            deposit_status.amount,
-            deposit_status.confirmations,
-        )
-        .map_err(|e| OtcServerError::InvalidState {
-            message: format!("State transition failed: {e}"),
-        })?;
+        let swap_ids: Vec<Uuid> = deposit_status_map.keys().copied().collect();
+        
+        // Get all swaps
+        let mut swaps = self.get_swaps(&swap_ids).await?;
 
-        // Update the database
-        self.update(&swap).await?;
+        // Apply state transitions to each swap
+        for swap in &mut swaps {
+            let deposit_status = deposit_status_map
+                .get(&swap.id)
+                .ok_or_else(|| OtcServerError::InvalidData {
+                    message: format!("Missing deposit status for swap {}", swap.id),
+                })?;
+
+            swap.mm_deposit_detected(
+                deposit_status.tx_hash.clone(),
+                deposit_status.amount,
+                deposit_status.confirmations,
+            )
+            .map_err(|e| OtcServerError::InvalidState {
+                message: format!("State transition failed for swap {}: {}", swap.id, e),
+            })?;
+        }
+
+        // Update all swaps in a transaction for atomicity
+        let mut tx = self.pool.begin().await?;
+
+        for swap in &swaps {
+            let user_deposit_json = swap
+                .user_deposit_status
+                .as_ref()
+                .map(user_deposit_status_to_json)
+                .transpose()?;
+            let mm_deposit_json = swap
+                .mm_deposit_status
+                .as_ref()
+                .map(mm_deposit_status_to_json)
+                .transpose()?;
+            let settlement_json = swap
+                .settlement_status
+                .as_ref()
+                .map(settlement_status_to_json)
+                .transpose()?;
+            let latest_refund_json = swap
+                .latest_refund
+                .as_ref()
+                .map(latest_refund_to_json)
+                .transpose()?;
+
+            sqlx::query(
+                r"
+                UPDATE swaps
+                SET 
+                    status = $2,
+                    user_deposit_status = $3,
+                    mm_deposit_status = $4,
+                    settlement_status = $5,
+                    latest_refund = $6,
+                    failure_reason = $7,
+                    failure_at = $8,
+                    mm_notified_at = $9,
+                    mm_private_key_sent_at = $10,
+                    updated_at = $11
+                WHERE id = $1
+                ",
+            )
+            .bind(swap.id)
+            .bind(swap.status)
+            .bind(user_deposit_json)
+            .bind(mm_deposit_json)
+            .bind(settlement_json)
+            .bind(latest_refund_json)
+            .bind(&swap.failure_reason)
+            .bind(swap.failure_at)
+            .bind(swap.mm_notified_at)
+            .bind(swap.mm_private_key_sent_at)
+            .bind(swap.updated_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Update MM deposit confirmations for multiple swaps in a batch
+    pub async fn batch_update_mm_confirmations(
+        &self,
+        swap_ids: &[Uuid],
+        confirmations: u32,
+    ) -> OtcServerResult<()> {
+        if swap_ids.is_empty() {
+            return Ok(());
+        }
+
+        // Get all swaps
+        let mut swaps = self.get_swaps(swap_ids).await?;
+
+        // Apply state transitions to each swap
+        for swap in &mut swaps {
+            swap.update_confirmations(None, Some(confirmations as u64))
+                .map_err(|e| OtcServerError::InvalidState {
+                    message: format!("State transition failed for swap {}: {}", swap.id, e),
+                })?;
+        }
+
+        // Update all swaps in a transaction for atomicity
+        let mut tx = self.pool.begin().await?;
+
+        for swap in &swaps {
+            let user_deposit_json = swap
+                .user_deposit_status
+                .as_ref()
+                .map(user_deposit_status_to_json)
+                .transpose()?;
+            let mm_deposit_json = swap
+                .mm_deposit_status
+                .as_ref()
+                .map(mm_deposit_status_to_json)
+                .transpose()?;
+            let settlement_json = swap
+                .settlement_status
+                .as_ref()
+                .map(settlement_status_to_json)
+                .transpose()?;
+            let latest_refund_json = swap
+                .latest_refund
+                .as_ref()
+                .map(latest_refund_to_json)
+                .transpose()?;
+
+            sqlx::query(
+                r"
+                UPDATE swaps
+                SET 
+                    status = $2,
+                    user_deposit_status = $3,
+                    mm_deposit_status = $4,
+                    settlement_status = $5,
+                    latest_refund = $6,
+                    failure_reason = $7,
+                    failure_at = $8,
+                    mm_notified_at = $9,
+                    mm_private_key_sent_at = $10,
+                    updated_at = $11
+                WHERE id = $1
+                ",
+            )
+            .bind(swap.id)
+            .bind(swap.status)
+            .bind(user_deposit_json)
+            .bind(mm_deposit_json)
+            .bind(settlement_json)
+            .bind(latest_refund_json)
+            .bind(&swap.failure_reason)
+            .bind(swap.failure_at)
+            .bind(swap.mm_notified_at)
+            .bind(swap.mm_private_key_sent_at)
+            .bind(swap.updated_at)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    /// Mark multiple swaps as MM deposit confirmed (settled) in a batch
+    pub async fn batch_mm_deposit_confirmed(&self, swap_ids: &[Uuid]) -> OtcServerResult<()> {
+        if swap_ids.is_empty() {
+            return Ok(());
+        }
+
+        // Get all swaps
+        let mut swaps = self.get_swaps(swap_ids).await?;
+
+        // Apply state transitions to each swap
+        for swap in &mut swaps {
+            swap.mm_deposit_confirmed()
+                .map_err(|e| OtcServerError::InvalidState {
+                    message: format!("State transition failed for swap {}: {}", swap.id, e),
+                })?;
+        }
+
+        // Update all swaps in a transaction for atomicity
+        let mut tx = self.pool.begin().await?;
+
+        for swap in &swaps {
+            let user_deposit_json = swap
+                .user_deposit_status
+                .as_ref()
+                .map(user_deposit_status_to_json)
+                .transpose()?;
+            let mm_deposit_json = swap
+                .mm_deposit_status
+                .as_ref()
+                .map(mm_deposit_status_to_json)
+                .transpose()?;
+            let settlement_json = swap
+                .settlement_status
+                .as_ref()
+                .map(settlement_status_to_json)
+                .transpose()?;
+            let latest_refund_json = swap
+                .latest_refund
+                .as_ref()
+                .map(latest_refund_to_json)
+                .transpose()?;
+
+            sqlx::query(
+                r"
+                UPDATE swaps
+                SET 
+                    status = $2,
+                    user_deposit_status = $3,
+                    mm_deposit_status = $4,
+                    settlement_status = $5,
+                    latest_refund = $6,
+                    failure_reason = $7,
+                    failure_at = $8,
+                    mm_notified_at = $9,
+                    mm_private_key_sent_at = $10,
+                    updated_at = $11
+                WHERE id = $1
+                ",
+            )
+            .bind(swap.id)
+            .bind(swap.status)
+            .bind(user_deposit_json)
+            .bind(mm_deposit_json)
+            .bind(settlement_json)
+            .bind(latest_refund_json)
+            .bind(&swap.failure_reason)
+            .bind(swap.failure_at)
+            .bind(swap.mm_notified_at)
+            .bind(swap.mm_private_key_sent_at)
+            .bind(swap.updated_at)
+            .execute(&mut *tx)
+            .await?;
+
+            // Record settlement metrics for each swap
+            record_settlement_volume(swap);
+        }
+
+        tx.commit().await?;
+
         Ok(())
     }
 
@@ -603,21 +898,6 @@ impl SwapRepository {
         Ok(())
     }
 
-    /// Update MM deposit confirmations
-    pub async fn update_mm_confirmations(
-        &self,
-        swap_id: Uuid,
-        confirmations: u32,
-    ) -> OtcServerResult<()> {
-        let mut swap = self.get(swap_id).await?;
-        swap.update_confirmations(None, Some(confirmations as u64))
-            .map_err(|e| OtcServerError::InvalidState {
-                message: format!("State transition failed: {e}"),
-            })?;
-        self.update(&swap).await?;
-        Ok(())
-    }
-
     /// Update swap when user deposit is confirmed
     pub async fn user_deposit_confirmed(&self, swap_id: Uuid) -> OtcServerResult<()> {
         let mut swap = self.get(swap_id).await?;
@@ -626,19 +906,6 @@ impl SwapRepository {
                 message: format!("State transition failed: {e}"),
             })?;
         self.update(&swap).await?;
-        Ok(())
-    }
-
-    /// Update swap when MM deposit is confirmed
-    pub async fn mm_deposit_confirmed(&self, swap_id: Uuid) -> OtcServerResult<()> {
-        let mut swap = self.get(swap_id).await?;
-        swap.mm_deposit_confirmed()
-            .map_err(|e| OtcServerError::InvalidState {
-                message: format!("State transition failed: {e}"),
-            })?;
-        self.update(&swap).await?;
-
-        record_settlement_volume(&swap);
         Ok(())
     }
 

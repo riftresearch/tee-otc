@@ -235,6 +235,10 @@ pub async fn build_mm_test_args(
 ) -> MarketMakerArgs {
     let db_url = create_test_database(connect_options).await.unwrap();
     MarketMakerArgs {
+        bitcoin_batch_interval_secs: 1,
+        bitcoin_batch_size: 100,
+        ethereum_batch_interval_secs: 1,
+        ethereum_batch_size: 392,
         market_maker_tag: TEST_MARKET_MAKER_TAG.to_string(),
         market_maker_id: TEST_MARKET_MAKER_API_ID.to_string(),
         api_secret: TEST_MARKET_MAKER_API_SECRET.to_string(),

@@ -25,9 +25,10 @@ use market_maker::{
         },
         EVMWallet,
     },
-    wallet::{Payment, Wallet},
+    wallet::{ Wallet},
     Result as MarketMakerResult, WalletError,
 };
+use otc_chains::traits::Payment;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
 use snafu::location;
 use tokio::{fs, task::JoinSet, time::sleep};
@@ -461,13 +462,7 @@ impl BitcoinDedicatedWallets {
     fn funding_payments(&self, currency: &Currency, amount: U256) -> Vec<Payment> {
         self.wallets
             .iter()
-            .map(|wallet| Payment {
-                to_address: wallet.receive_address(&currency.token),
-                lot: Lot {
-                    currency: currency.clone(),
-                    amount,
-                },
-            })
+            .map(|wallet| Payment { lot: Lot { currency: currency.clone(), amount }, to_address: wallet.receive_address(&currency.token) })
             .collect()
     }
 
@@ -479,7 +474,7 @@ impl BitcoinDedicatedWallets {
 
         let sender_address = wallet.receive_address(&lot.currency.token);
         let tx_hash = wallet
-            .create_payment(lot, recipient, None)
+            .create_batch_payment(vec![Payment { lot: lot.clone(), to_address: recipient.to_string() }], None)
             .await
             .map_err(map_wallet_error)?;
         Ok((tx_hash, sender_address))

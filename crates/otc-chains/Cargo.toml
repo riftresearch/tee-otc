@@ -35,3 +35,4 @@ hkdf = { workspace = true }
 getrandom = { workspace = true }
 utc = {workspace=true}
 reqwest = {workspace=true}
+uuid = {workspace=true}

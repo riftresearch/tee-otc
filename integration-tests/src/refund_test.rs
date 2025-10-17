@@ -5,6 +5,7 @@ use alloy::signers::k256::ecdsa::SigningKey;
 use alloy::signers::k256::Secp256k1;
 use alloy::signers::local::PrivateKeySigner;
 use mock_instant::global::MockClock;
+use otc_chains::traits::Payment;
 use std::time::Duration;
 
 use alloy::primitives::{Bytes, U256};
@@ -235,18 +236,14 @@ async fn test_refund_from_bitcoin_user_deposit(
     }
     // now send funds to the deposit address
     let tx_hash = user_bitcoin_wallet
-        .create_payment(
-            &Lot {
-                currency: Currency {
-                    chain: ChainType::Bitcoin,
-                    token: TokenIdentifier::Native,
-                    decimals: response_json.decimals,
-                },
-                amount: response_json.expected_amount,
+        .create_batch_payment(vec![Payment { lot: Lot {
+            currency: Currency {
+                chain: ChainType::Bitcoin,
+                token: TokenIdentifier::Native,
+                decimals: response_json.decimals,
             },
-            &response_json.deposit_address,
-            None,
-        )
+            amount: response_json.expected_amount,
+        }, to_address: response_json.deposit_address }], None)
         .await
         .unwrap();
 

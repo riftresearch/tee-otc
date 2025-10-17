@@ -4,7 +4,7 @@ use crate::otc_handler::OTCMessageHandler;
 use crate::payment_manager::PaymentManager;
 use crate::quote_storage::QuoteStorage;
 use futures_util::{SinkExt, StreamExt};
-use otc_protocols::mm::{MMRequest, ProtocolMessage};
+use otc_protocols::mm::{MMRequest, MMResponse, ProtocolMessage};
 use snafu::prelude::*;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -49,6 +49,8 @@ type WebSocketMessage = Message;
 pub struct OtcFillClient {
     config: Config,
     handler: OTCMessageHandler,
+    /// Receiver for unsolicited MMResponse messages (taken on first run)
+    otc_response_rx: Arc<tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<ProtocolMessage<MMResponse>>>>>,
 }
 
 impl OtcFillClient {
@@ -57,9 +59,14 @@ impl OtcFillClient {
         quote_storage: Arc<QuoteStorage>,
         deposit_key_storage: Arc<DepositKeyStorage>,
         payment_manager: Arc<PaymentManager>,
+        otc_response_rx: mpsc::UnboundedReceiver<ProtocolMessage<MMResponse>>,
     ) -> Self {
         let handler = OTCMessageHandler::new(quote_storage, deposit_key_storage, payment_manager);
-        Self { config, handler }
+        Self { 
+            config, 
+            handler,
+            otc_response_rx: Arc::new(tokio::sync::Mutex::new(Some(otc_response_rx))),
+        }
     }
 
     pub async fn run(&self) -> Result<()> {
@@ -153,6 +160,33 @@ impl OtcFillClient {
 
 
         let message_handler = Arc::new(self.handler.clone());
+
+        // Take the receiver for unsolicited MMResponse messages (only on first connection)
+        let mut otc_response_rx = {
+            let mut guard = self.otc_response_rx.lock().await;
+            guard.take()
+        };
+
+        // Spawn task to forward unsolicited MMResponse messages from PaymentManager to websocket
+        if let Some(mut rx) = otc_response_rx.take() {
+            let websocket_tx_clone = websocket_tx.clone();
+            tokio::spawn(async move {
+                while let Some(response_msg) = rx.recv().await {
+                    let response_json = match serde_json::to_string(&response_msg) {
+                        Ok(json) => json,
+                        Err(e) => {
+                            error!("Failed to serialize unsolicited MMResponse: {}", e);
+                            continue;
+                        }
+                    };
+
+                    if let Err(e) = websocket_tx_clone.send(Message::Text(response_json)).await {
+                        error!("Failed to queue unsolicited MMResponse message: {}", e);
+                        break;
+                    }
+                }
+            });
+        }
 
         // Handle incoming messages
         while let Some(msg) = ws_stream.next().await {

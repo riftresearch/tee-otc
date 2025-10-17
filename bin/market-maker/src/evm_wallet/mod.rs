@@ -18,7 +18,7 @@ use eip7702_delegator_contract::{
     EIP7702Delegator::{EIP7702DelegatorInstance, Execution},
     ModeCode, EIP7702_DELEGATOR_CROSSCHAIN_ADDRESS,
 };
-use otc_chains::traits::MarketMakerPaymentValidation;
+use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
 use snafu::location;
 use tokio::task::JoinSet;
@@ -149,24 +149,32 @@ impl EVMWallet {
 
 #[async_trait]
 impl Wallet for EVMWallet {
-    async fn create_payment(
+    async fn create_batch_payment(
         &self,
-        lot: &Lot,
-        to_address: &str,
-        mm_payment_validation: Option<MarketMakerPaymentValidation>,
+        payments: Vec<Payment>,
+        mm_payment_validation: Option<MarketMakerPaymentVerification>,
     ) -> WalletResult<String> {
-        if lot.currency.chain != ChainType::Ethereum {
+        let first_payment = &payments[0];
+        if first_payment.lot.currency.chain != ChainType::Ethereum {
             return Err(WalletError::UnsupportedToken {
-                token: lot.currency.token.clone(),
+                token: first_payment.lot.currency.token.clone(),
                 loc: location!(),
             });
         }
-        ensure_valid_token(&lot.currency.token)?;
+        ensure_valid_token(&first_payment.lot.currency.token)?;
+        // now make sure all payments lots currencies are the same
+        for payment in &payments {
+            if payment.lot.currency != first_payment.lot.currency {
+                return Err(WalletError::InvalidBatchPaymentRequest {
+                    loc: location!(),
+                });
+            }
+        }
+
         let transaction_request = create_evm_transfer_transaction(
             &self.tx_broadcaster.sender,
             &self.provider,
-            lot,
-            to_address,
+            payments,
             mm_payment_validation,
             self.deposit_key_storage.clone(),
         )
@@ -360,7 +368,7 @@ pub fn create_payment_executions(
     recipients: &[Address],
     amounts: &[U256],
 ) -> Vec<Execution> {
-    let token_address = token_contract.address().clone();
+    let token_address = *token_contract.address();
     recipients
         .iter()
         .zip(amounts.iter())
@@ -384,7 +392,7 @@ pub fn build_transaction_with_validation(
     sender: &Address,
     provider: DynProvider,
     executions: Vec<Execution>,
-    mm_payment_validation: Option<&MarketMakerPaymentValidation>,
+    mm_payment_validation: Option<&MarketMakerPaymentVerification>,
 ) -> Result<TransactionRequest, WalletError> {
     debug!("executions: {executions:?}");
 
@@ -405,7 +413,7 @@ pub fn build_transaction_with_validation(
 
     // Add nonce to the end of calldata if provided
     if let Some(mm_payment_validation) = mm_payment_validation {
-        let nonce = mm_payment_validation.embedded_nonce;
+        let nonce = mm_payment_validation.batch_nonce_digest;
         // Audit: Consider how this could be problematic if done with arbitrary addresses (not whitelisted)
         let mut calldata_with_nonce = transaction_request
             .input
@@ -424,12 +432,24 @@ pub fn build_transaction_with_validation(
 pub async fn create_evm_transfer_transaction(
     sender: &Address,
     provider: &Arc<WebsocketWalletProvider>,
-    lot: &Lot,
-    to_address: &str,
-    mm_payment_validation: Option<MarketMakerPaymentValidation>,
+    payments: Vec<Payment>,
+    mm_payment_validation: Option<MarketMakerPaymentVerification>,
     deposit_key_storage: Option<Arc<DepositKeyStorage>>,
 ) -> Result<TransactionRequest, WalletError> {
-    match &lot.currency.token {
+    // TODO: Temporary requirement that all tokens are the same in a batch
+    for (i, payment) in payments.iter().enumerate() {
+        if i == 0 { 
+            continue;
+        }
+        if payment.lot.currency != payments[i - 1].lot.currency {
+            return Err(WalletError::InvalidBatchPaymentRequest {
+                loc: location!(),
+            });
+        }
+    }
+
+    // -> extension of the above TODO, since we know all payments are to the same lot, the following is safe
+    match &payments[0].lot.currency.token {
         TokenIdentifier::Native => unimplemented!(),
         TokenIdentifier::Address(address) => {
             let token_address =
@@ -438,30 +458,40 @@ pub async fn create_evm_transfer_transaction(
                     .map_err(|_| WalletError::ParseAddressFailed {
                         context: "invalid token address".to_string(),
                     })?;
-            let to_address =
-                to_address
-                    .parse::<Address>()
-                    .map_err(|_| WalletError::ParseAddressFailed {
-                        context: "invalid to address".to_string(),
-                    })?;
+            
+
+            let mut recipients = payments
+                .iter()
+                .map(|payment| {
+                    payment.to_address
+                        .parse::<Address>()
+                        .map_err(|_| WalletError::ParseAddressFailed {
+                            context: format!("invalid recipient {} when parsing address for payment", payment.to_address),
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
             let fee_address =
                 Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Ethereum])
                     .unwrap();
 
+            let mut amounts: Vec<U256> = payments.iter().map(|payment| payment.lot.amount).collect();
+
             // Determine recipients and amounts based on whether we have payment validation
-            let (recipients, amounts) = match &mm_payment_validation {
-                Some(validation) => (
-                    vec![to_address, fee_address],
-                    vec![lot.amount, validation.fee_amount],
-                ),
-                None => (vec![to_address], vec![lot.amount]),
-            };
+            if let Some(validation) = &mm_payment_validation {
+                recipients.push(fee_address);
+                amounts.push(validation.aggregated_fee);
+            }
 
             // Acquire funding executions from deposit storage if available
             let funding_executions = match &deposit_key_storage {
                 Some(storage) => {
-                    get_funding_executions_from_deposits(storage, lot, provider, sender).await?
+                    let mut executions = Vec::new();
+                    for payment in payments {
+                        let execution = get_funding_executions_from_deposits(storage, &payment.lot, provider, sender).await?;
+                        executions.extend(execution);
+                    }
+                    executions
                 }
                 None => Vec::new(),
             };

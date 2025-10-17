@@ -4134,6 +4134,7 @@ dependencies = [
  "otc-chains",
  "otc-models",
  "otc-protocols",
+ "rand 0.8.5",
  "reqwest",
  "rustls 0.23.32",
  "serde",
@@ -4632,6 +4633,7 @@ dependencies = [
  "tokio",
  "tracing",
  "utc",
+ "uuid",
 ]
 
 [[package]]
@@ -6830,6 +6832,7 @@ dependencies = [
  "futures-util",
  "humantime",
  "market-maker",
+ "otc-chains",
  "otc-models",
  "otc-protocols",
  "otc-server",

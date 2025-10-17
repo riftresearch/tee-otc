@@ -50,6 +50,7 @@ pub struct AppState {
     pub address_screener: Option<ChainalysisAddressScreener>,
     pub chain_registry: Arc<ChainRegistry>,
     pub dstack_client: Arc<DstackClient>,
+    pub swap_monitoring_service: Arc<SwapMonitoringService>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -182,6 +183,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         address_screener,
         chain_registry,
         dstack_client,
+        swap_monitoring_service,
     };
 
     if let Some(metrics_addr) = args.metrics_listen_addr {
@@ -723,29 +725,59 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         }
     }
 
+
     // Handle incoming messages
+    let mm_id_clone = mm_id.clone();
     while let Some(msg) = receiver.next().await {
         match msg {
             Ok(Message::Text(text)) => {
                 match serde_json::from_str::<ProtocolMessage<MMResponse>>(&text) {
                     Ok(msg) => {
-                        match &msg.payload {
+                        match msg.payload {
                             MMResponse::QuoteValidated {
                                 quote_id, accepted, ..
                             } => {
                                 info!(
-                                    "Market maker {} validated quote {}: accepted={}",
-                                    mm_id, quote_id, accepted
+                                    market_maker_id = %mm_id_clone,
+                                    quote_id = %quote_id,
+                                    accepted = %accepted,
+                                    "Market maker validated quote",
                                 );
                                 state
                                     .mm_registry
-                                    .handle_validation_response(&mm_uuid, quote_id, *accepted);
+                                    .handle_validation_response(&mm_uuid, &quote_id, accepted);
                             }
                             MMResponse::Pong { .. } => {
                                 // Handle pong for keepalive
                             }
-                            MMResponse::DepositInitiated { .. } => {
-                                // Handle deposit notification - will be implemented when needed
+                            MMResponse::BatchPaymentSent { 
+                                tx_hash, 
+                                swap_ids, 
+                                batch_nonce_digest,
+                                .. 
+                            } => {
+                                info!(
+                                    market_maker_id = %mm_id_clone,
+                                    tx_hash = %tx_hash,
+                                    "Received batch payment notification from MM",
+                                );
+                                let swap_monitoring_service = state.swap_monitoring_service.clone();
+                                let mm_uuid_clone = mm_uuid;
+                                tokio::spawn(async move {
+                                    let res = swap_monitoring_service.track_batch_payment(mm_uuid_clone, &tx_hash, swap_ids.to_vec(), batch_nonce_digest).await;
+                                    if let Err(e) = res {
+                                        error!(
+                                            market_maker_id = %mm_uuid_clone,
+                                            tx_hash = %tx_hash,
+                                            swap_ids = ?swap_ids,
+                                            error = %e,
+                                            "Failed to track batch payment for MM",
+                                        );
+                                    }
+                                });
+                            }
+                            MMResponse::PaymentQueued { .. } => {
+                                // Handle payment queued notification
                             }
                             MMResponse::SwapCompleteAck { .. } => {
                                 // Handle swap complete acknowledgment

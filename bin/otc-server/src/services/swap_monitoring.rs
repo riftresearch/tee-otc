@@ -1,13 +1,13 @@
 use crate::db::Database;
 use crate::error::OtcServerError;
 use crate::{config::Settings, services::mm_registry};
-use alloy::primitives::U256;
-use blockchain_utils::FeeCalcFromLot;
 use metrics::histogram;
-use otc_chains::traits::MarketMakerPaymentValidation;
+use otc_chains::traits::{MarketMakerBatch, MarketMakerQueuedPayment, MarketMakerQueuedPaymentExt};
 use otc_chains::ChainRegistry;
 use otc_models::{MMDepositStatus, Swap, SwapStatus, TxStatus, UserDepositStatus};
-use snafu::prelude::*;
+use snafu::{location, prelude::*, Location};
+use uuid::Uuid;
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
@@ -18,14 +18,50 @@ const SWAP_MONITORING_DURATION_METRIC: &str = "otc_swap_monitoring_duration_seco
 
 #[derive(Debug, Snafu)]
 pub enum MonitoringError {
-    #[snafu(display("Database error: {}", source))]
-    Database { source: OtcServerError },
+    #[snafu(display("Database error: {source} at {loc}"))]
+    Database {
+        source: OtcServerError, 
+        #[snafu(implicit)]
+        loc: Location,
+    },
 
-    #[snafu(display("Chain operation error: {}", source))]
-    ChainOperation { source: otc_chains::Error },
+    #[snafu(display("Chain operation error: {source} at {loc}"))]
+    ChainOperation { 
+        source: otc_chains::Error, 
+        #[snafu(implicit)]
+        loc: Location,
+    },
 
-    #[snafu(display("Invalid state transition from {:?}", current_state))]
-    InvalidTransition { current_state: SwapStatus },
+    #[snafu(display("Invalid state transition from {:?} at {loc}", current_state))]
+    InvalidTransition { 
+        current_state: SwapStatus, 
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
+    #[snafu(display("Unauthorized market maker id: expected {expected} but got {actual} at {loc}"))]
+    UnauthorizedMarketMakerId {
+        expected: Uuid,
+        actual: Uuid,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
+    #[snafu(display("Invalid destination currency: expected {expected:?} but got {actual:?} at {loc}"))]
+    InvalidDestinationCurrency {
+        expected: otc_models::Currency,
+        actual: otc_models::Currency,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
+    #[snafu(display("Market maker batch verification failed: {context} for tx {tx_hash} at {loc}"))]
+    InvalidMarketMakerBatch {
+        context: String,
+        tx_hash: String,
+        #[snafu(implicit)]
+        loc: Location,
+    },
 }
 
 pub type MonitoringResult<T> = Result<T, MonitoringError>;
@@ -89,10 +125,39 @@ impl SwapMonitoringService {
         let active_swaps = self.db.swaps().get_active().await.context(DatabaseSnafu)?;
         info!("Monitoring {} active swaps", active_swaps.len());
 
-        let semaphore = Arc::new(Semaphore::new(self.max_concurrent_swaps));
         let mut join_set = tokio::task::JoinSet::new();
 
-        for swap in active_swaps {
+        // there's truly two meta-states where a swap can be in the happy-path
+        // 1. waiting for a user deposit to ultimately confirm (initiated -> confirmed)
+        // 2. waiting for a market maker deposit to ultimately confirm (initiated -> confirmed)
+        // As of the batch rewrite, it's highly inefficient to monitor each swap individually once
+        // the swap gets to stage 2.
+        // So solution is to first split them up into two groups
+        // if the state of a swap is:
+        // waiting_mm_deposit_confirmed these swaps should be split into groups of batches.
+        // and monitored as a batch that share the same mm_tx_hash (vec<vec<Swap>>)
+        // otherwise, they should be monitored individually (vec<Swap>)
+    
+        // Split into individual swaps vs those waiting for MM deposit confirmation
+        let (individual_swaps, waiting_mm_confirmed): (Vec<_>, Vec<_>) = active_swaps
+            .into_iter()
+            .partition(|swap| swap.status != SwapStatus::WaitingMMDepositConfirmed);
+
+        // Group the MM-waiting swaps by their shared mm_tx_hash into batches
+        let batched_swaps: HashMap<String, Vec<Swap>> = waiting_mm_confirmed
+            .into_iter()
+            .fold(HashMap::<String, Vec<Swap>>::new(), |mut acc, swap| {
+                if let Some(ref mm_deposit) = swap.mm_deposit_status {
+                    acc.entry(mm_deposit.tx_hash.clone())
+                    .or_default()
+                    .push(swap);
+                }
+                acc
+            });
+
+        let semaphore = Arc::new(Semaphore::new(self.max_concurrent_swaps));
+
+        for swap in individual_swaps {
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             let service = Arc::clone(self);
 
@@ -100,6 +165,18 @@ impl SwapMonitoringService {
                 let _permit = permit;
                 if let Err(e) = service.monitor_swap(&swap).await {
                     error!("Error monitoring swap {}: {}", swap.id, e);
+                }
+            });
+        }
+
+        for (mm_tx_hash, swaps) in batched_swaps {
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let service = Arc::clone(self);
+
+            join_set.spawn(async move {
+                let _permit = permit;
+                if let Err(e) = service.check_batch_for_mm_deposit_confirmation(&mm_tx_hash, &swaps).await {
+                    error!("Error monitoring batch for MM deposit {}: {}", mm_tx_hash, e);
                 }
             });
         }
@@ -136,10 +213,10 @@ impl SwapMonitoringService {
                 self.check_user_deposit_confirmation(swap).await?;
             }
             SwapStatus::WaitingMMDepositInitiated => {
-                self.check_mm_deposit(swap).await?;
+                // Market makers will ping us to initiate their deposit, so nothing to monitor
             }
             SwapStatus::WaitingMMDepositConfirmed => {
-                self.check_mm_deposit_confirmation(swap).await?;
+                // Swaps in this state are monitored by a batch monitoring method
             }
             SwapStatus::Settled => {
                 // Settlement already complete, nothing to monitor
@@ -163,6 +240,7 @@ impl SwapMonitoringService {
                 source: otc_chains::Error::ChainNotSupported {
                     chain: format!("{:?}", quote.from.currency.chain),
                 },
+                loc: location!(),
             },
         )?;
 
@@ -175,7 +253,7 @@ impl SwapMonitoringService {
 
         // Check for deposit from the user's wallet
         let deposit_info = chain_ops
-            .search_for_transfer(&user_wallet.address, &quote.from, None, None)
+            .search_for_transfer(&user_wallet.address, &quote.from, None)
             .await
             .context(ChainOperationSnafu)?;
 
@@ -232,6 +310,7 @@ impl SwapMonitoringService {
                 .as_ref()
                 .ok_or(MonitoringError::InvalidTransition {
                     current_state: swap.status,
+                    loc: location!(),
                 })?;
 
         // Get the chain operations for the user's deposit chain
@@ -240,6 +319,7 @@ impl SwapMonitoringService {
                 source: otc_chains::Error::ChainNotSupported {
                     chain: format!("{:?}", quote.from.currency.chain),
                 },
+                loc: location!(),
             },
         )?;
 
@@ -303,8 +383,8 @@ impl SwapMonitoringService {
             }
             TxStatus::NotFound => {
                 warn!(
-                    "User deposit tx {} for swap {} not found on chain",
-                    user_deposit.tx_hash, swap.id
+                    "User deposit tx {} for swap {} not found on chain {:?}",
+                    user_deposit.tx_hash, swap.id, quote.from.currency.chain 
                 );
             }
         }
@@ -312,157 +392,213 @@ impl SwapMonitoringService {
         Ok(())
     }
 
-    /// Check for market maker deposit
-    async fn check_mm_deposit(&self, swap: &Swap) -> MonitoringResult<()> {
-        // Get the quote to know what token/chain to check
-        let quote = &swap.quote;
 
-        // Get the chain operations for the MM's deposit chain (to = MM sends)
-        let chain_ops = self.chain_registry.get(&quote.to.currency.chain).ok_or(
-            MonitoringError::ChainOperation {
-                source: otc_chains::Error::ChainNotSupported {
-                    chain: format!("{:?}", quote.to.currency.chain),
-                },
-            },
-        )?;
-
-        // Check for deposit
-        let deposit_info = chain_ops
-            .search_for_transfer(
-                &swap.user_destination_address,
-                &quote.to,
-                Some(MarketMakerPaymentValidation {
-                    fee_amount: U256::from(quote.to.compute_protocol_fee()),
-                    embedded_nonce: swap.mm_nonce,
-                }),
-                None,
-            )
-            .await
-            .context(ChainOperationSnafu)?;
-
-        if let Some(deposit) = deposit_info {
-            info!(
-                "MM deposit detected for swap {}: {} on chain {:?}",
-                swap.id, deposit.tx_hash, quote.to.currency.chain
-            );
-
-            // Update swap state
-            let mm_deposit_status = MMDepositStatus {
-                tx_hash: deposit.tx_hash.clone(),
-                amount: deposit.amount,
-                deposit_detected_at: utc::now(),
-                confirmations: deposit.confirmations,
-                last_checked: utc::now(),
-            };
-
-            self.db
-                .swaps()
-                .mm_deposit_detected(swap.id, mm_deposit_status)
-                .await
-                .context(DatabaseSnafu)?;
+    /// Market maker's send notification of batch payments directly to us, so we can track the batch payment
+    /// this method will validate the expected nonce and fee amounts along with minifying the data necessary to verify this batch of payments
+    /// once the transaction is confirmed later on 
+    pub async fn track_batch_payment(&self, market_maker_id: Uuid, tx_hash: &String, swap_ids: Vec<Uuid>, mm_sent_batch_nonce_digest: [u8; 32]) -> MonitoringResult<()> {
+        // first get all swaps that are in this mm's requested batch
+        let swaps = self.db.swaps().get_swaps(&swap_ids).await.context(DatabaseSnafu)?;
+        
+        if swaps.is_empty() {
+            return Ok(());
         }
+
+        let dest_currency = swaps[0].quote.to.currency.clone();
+        
+        // Swap state verification 
+        for swap in &swaps {
+            // validate the market maker id is the same for all swaps
+            if swap.market_maker_id != market_maker_id {
+                return Err(MonitoringError::InvalidMarketMakerBatch {
+                    context: format!("Unauthorized market maker id {market_maker_id} attempted to track batch payment for swap id {}", swap.id),
+                    tx_hash: tx_hash.clone(),
+                    loc: location!(),
+                });
+            }
+            // validate the destination currency is the same for all swaps
+            if swap.quote.to.currency != dest_currency {
+                return Err(MonitoringError::InvalidMarketMakerBatch {
+                    context: format!("Destination currency mismatch processing swap id {}", swap.id),
+                    tx_hash: tx_hash.clone(),
+                    loc: location!(),
+                });
+            }
+            // can only update batch_payment for a swap if it's still waiting for MM initial deposit
+            if swap.status != SwapStatus::WaitingMMDepositInitiated {
+                return Err(MonitoringError::InvalidMarketMakerBatch {
+                    context: format!("Swap id {} is not in a state where a batch payment update is allowed", swap.id),
+                    tx_hash: tx_hash.clone(),
+                    loc: location!(),
+                });
+            }
+        }
+
+        // Now create the MarketMakerBatch to cache the relevant data for this batch payment
+        let market_maker_batch = match swaps.iter().map(MarketMakerQueuedPayment::from).collect::<Vec<_>>().to_market_maker_batch() { 
+            Some(batch) => batch,
+            None => return Err(MonitoringError::InvalidMarketMakerBatch {
+                context: "Market maker batch creation failed".to_string(),
+                tx_hash: tx_hash.clone(),
+                loc: location!(),
+            }),
+        };
+
+        if market_maker_batch.payment_verification.batch_nonce_digest != mm_sent_batch_nonce_digest {
+            return Err(MonitoringError::InvalidMarketMakerBatch {
+                context: "Batch nonce digest mismatch".to_string(),
+                tx_hash: tx_hash.clone(),
+                loc: location!(),
+            });
+        }
+
+        // It's unlikely the batch payment will be found onchain, so 
+        // we'll take the MMs word that the batch payment was sent, no risk if they lie, b/c the tx_hash will then never confirm
+
+        // Create a map of swap id => MMDepositStatus structs
+        let mm_deposit_status_map = swaps.iter().map(|swap| (swap.id, MMDepositStatus {
+            tx_hash: tx_hash.clone(),
+            amount: swap.quote.to.amount, // Note: actual amount sent could be more than expected
+            deposit_detected_at: utc::now(),
+            confirmations: 0,
+            last_checked: utc::now(),
+        })).collect::<HashMap<Uuid, MMDepositStatus>>();
+
+
+        // Store the batch payment in the batch database
+        let chain_type = dest_currency.chain;
+        let swap_ids = swaps.iter().map(|s| s.id).collect::<Vec<_>>();
+        self.db
+            .batches()
+            .add_batch(chain_type, tx_hash.clone(), &market_maker_batch, swap_ids)
+            .await
+            .context(DatabaseSnafu)?;
+
+        // Atomically update all swaps in the batch
+        self.db
+            .swaps()
+            .batch_mm_deposit_detected(mm_deposit_status_map)
+            .await
+            .context(DatabaseSnafu)?;
 
         Ok(())
     }
 
-    /// Check MM deposit confirmations
-    async fn check_mm_deposit_confirmation(&self, swap: &Swap) -> MonitoringResult<()> {
-        let quote = &swap.quote;
-        let mm_deposit =
-            swap.mm_deposit_status
-                .as_ref()
-                .ok_or(MonitoringError::InvalidTransition {
-                    current_state: swap.status,
-                })?;
+
+
+    /// Check MM deposit confirmations for a batch of swaps sharing the same transaction
+    async fn check_batch_for_mm_deposit_confirmation(&self, mm_tx_hash: &String, swaps: &[Swap]) -> MonitoringResult<()> {
+        if swaps.is_empty() {
+            return Ok(());
+        }
+
+        // All swaps in a batch share the same destination chain/currency, use the first one
+        let first_swap = &swaps[0];
+        let deposit_chain = &first_swap.quote.to.currency.chain;
 
         // Get the chain operations for the MM's deposit chain
-        let chain_ops = self.chain_registry.get(&quote.to.currency.chain).ok_or(
+        let chain_ops = self.chain_registry.get(&deposit_chain).ok_or(
             MonitoringError::ChainOperation {
                 source: otc_chains::Error::ChainNotSupported {
-                    chain: format!("{:?}", quote.to.currency.chain),
+                    chain: format!("{:?}", deposit_chain),
                 },
+                loc: location!(),
             },
         )?;
 
-        // Check confirmation status
+        let market_maker_batch = self.db.batches().get_batch(deposit_chain, mm_tx_hash).await.context(DatabaseSnafu)?;
+        let (market_maker_batch, _) = market_maker_batch.ok_or(MonitoringError::InvalidMarketMakerBatch {
+            context: format!("Market maker batch not found in local db for tx hash {}", mm_tx_hash),
+            tx_hash: mm_tx_hash.clone(),
+            loc: location!(),
+        })?;
+
+        // Check confirmation status once for the entire batch
         let tx_status = chain_ops
-            .get_tx_status(&mm_deposit.tx_hash)
+            .verify_market_maker_batch_transaction(mm_tx_hash, &market_maker_batch)
             .await
             .context(ChainOperationSnafu)?;
 
         match tx_status {
-            TxStatus::Confirmed(confirmations) => {
+            Some(confirmations) => {
+                let swap_ids: Vec<Uuid> = swaps.iter().map(|s| s.id).collect();
+                
                 info!(
-                    "MM deposit for swap {} has {} confirmations",
-                    swap.id, confirmations
+                    "MM deposit batch {} has {} confirmations for {} swaps",
+                    mm_tx_hash, confirmations, swaps.len()
                 );
 
-                // Update confirmations
+                // Update confirmations for all swaps in the batch atomically
                 self.db
                     .swaps()
-                    .update_mm_confirmations(swap.id, confirmations as u32)
+                    .batch_update_mm_confirmations(&swap_ids, confirmations as u32)
                     .await
                     .context(DatabaseSnafu)?;
 
-                // Check if we have enough confirmations
-                let (_, required_mm_confirmations) = swap.get_required_confirmations();
+                // Check if we have enough confirmations (use first swap's requirements)
+                let (_, required_mm_confirmations) = first_swap.get_required_confirmations();
                 if confirmations >= required_mm_confirmations {
                     info!(
-                        "MM deposit for swap {} has reached required confirmations",
-                        swap.id
+                        "MM deposit batch {} has reached required confirmations, settling {} swaps",
+                        mm_tx_hash, swaps.len()
                     );
 
-                    // Transition to settled state
+                    // Transition all swaps to settled state atomically
                     self.db
                         .swaps()
-                        .mm_deposit_confirmed(swap.id)
+                        .batch_mm_deposit_confirmed(&swap_ids)
                         .await
                         .context(DatabaseSnafu)?;
 
-                    // Send private key to MM
-                    let chain_ops = self.chain_registry.get(&quote.from.currency.chain).ok_or(
-                        MonitoringError::ChainOperation {
-                            source: otc_chains::Error::ChainNotSupported {
-                                chain: format!("{:?}", quote.from.currency.chain),
+                    // Send private keys to MM for each swap and mark as sent
+                    for swap in swaps {
+                        // Get chain ops for the user's deposit chain (from currency)
+                        let user_chain_ops = self.chain_registry.get(&swap.quote.from.currency.chain).ok_or(
+                            MonitoringError::ChainOperation {
+                                source: otc_chains::Error::ChainNotSupported {
+                                    chain: format!("{:?}", swap.quote.from.currency.chain),
+                                },
+                                loc: location!(),
                             },
-                        },
-                    )?;
+                        )?;
 
-                    let user_wallet = chain_ops
-                        .derive_wallet(&self.settings.master_key_bytes(), &swap.user_deposit_salt)
-                        .context(ChainOperationSnafu)?;
+                        let user_wallet = user_chain_ops
+                            .derive_wallet(&self.settings.master_key_bytes(), &swap.user_deposit_salt)
+                            .context(ChainOperationSnafu)?;
 
-                    let mm_registry = self.mm_registry.clone();
-                    let market_maker_id = swap.market_maker_id;
-                    let swap_id = swap.id;
-                    let private_key = user_wallet.private_key().to_string();
-                    let user_deposit_tx_hash =
-                        swap.user_deposit_status.as_ref().unwrap().tx_hash.clone();
-                    let lot = swap.quote.from.clone();
-                    tokio::spawn(async move {
-                        let _ = mm_registry
-                            .notify_swap_complete(
-                                &market_maker_id,
-                                &swap_id,
-                                &private_key,
-                                &lot,
-                                &user_deposit_tx_hash,
-                            )
-                            .await;
-                    });
+                        let mm_registry = self.mm_registry.clone();
+                        let market_maker_id = swap.market_maker_id;
+                        let swap_id = swap.id;
+                        let private_key = user_wallet.private_key().to_string();
+                        let user_deposit_tx_hash =
+                            swap.user_deposit_status.as_ref().unwrap().tx_hash.clone();
+                        let lot = swap.quote.from.clone();
+                        
+                        tokio::spawn(async move {
+                            let _ = mm_registry
+                                .notify_swap_complete(
+                                    &market_maker_id,
+                                    &swap_id,
+                                    &private_key,
+                                    &lot,
+                                    &user_deposit_tx_hash,
+                                )
+                                .await;
+                        });
 
-                    // Mark private key as sent
-                    self.db
-                        .swaps()
-                        .mark_private_key_sent(swap.id)
-                        .await
-                        .context(DatabaseSnafu)?;
+                        // Mark private key as sent
+                        self.db
+                            .swaps()
+                            .mark_private_key_sent(swap.id)
+                            .await
+                            .context(DatabaseSnafu)?;
+                    }
                 }
             }
-            TxStatus::NotFound => {
+            None => {
                 warn!(
-                    "MM deposit tx {} for swap {} not found on chain",
-                    mm_deposit.tx_hash, swap.id
+                    "MM deposit batch tx {} not found on chain {:?} for {} swaps",
+                    mm_tx_hash, deposit_chain, swaps.len()
                 );
             }
         }

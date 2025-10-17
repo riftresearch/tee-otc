@@ -8,7 +8,7 @@ use bdk_wallet::{
     signer::SignOptions,
     CreateParams, PersistedWallet, Wallet,
 };
-use otc_chains::traits::MarketMakerPaymentValidation;
+use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
 use otc_models::ChainType;
 use snafu::ResultExt;
 use tokio::sync::{mpsc, oneshot, Mutex};
@@ -21,14 +21,13 @@ use crate::bitcoin_wallet::{
     BuildTransactionSnafu, ExtractTransactionSnafu, PersistWalletSnafu, PsbtNotFinalizedSnafu,
     ReceiverFailedSnafu, SignTransactionSnafu, SyncWalletSnafu,
 };
-use crate::wallet::Payment;
 
 use super::{BitcoinWalletError, PARALLEL_REQUESTS};
 
 pub struct TransactionRequest {
     pub payments: Vec<Payment>,
     pub foreign_utxos: Vec<ForeignUtxo>,
-    pub mm_payment_validation: Option<MarketMakerPaymentValidation>,
+    pub mm_payment_validation: Option<MarketMakerPaymentVerification>,
     pub response_tx: oneshot::Sender<Result<String, BitcoinWalletError>>,
 }
 
@@ -79,7 +78,7 @@ impl BitcoinTransactionBroadcaster {
         &self,
         payments: Vec<Payment>,
         foreign_utxos: Vec<ForeignUtxo>,
-        mm_payment_validation: Option<MarketMakerPaymentValidation>,
+        mm_payment_validation: Option<MarketMakerPaymentVerification>,
     ) -> Result<String, BitcoinWalletError> {
         let (response_tx, response_rx) = oneshot::channel();
 
@@ -113,7 +112,7 @@ async fn process_transaction(
     network: bitcoin::Network,
     payments: Vec<Payment>,
     foreign_utxos: Vec<ForeignUtxo>,
-    mm_payment_validation: Option<MarketMakerPaymentValidation>,
+    mm_payment_validation: Option<MarketMakerPaymentVerification>,
 ) -> Result<String, BitcoinWalletError> {
     let start_time = Instant::now();
 
@@ -153,27 +152,10 @@ async fn process_transaction(
 
     // Build transaction
     let mut tx_builder = wallet_guard.build_tx();
-    for (address, amount) in payment_tuple {
-        tx_builder.add_recipient(address.script_pubkey(), amount);
-    }
 
-    // Add OP_RETURN output with nonce if provided
-    if let Some(mm_payment_validation) = mm_payment_validation {
-        let nonce = mm_payment_validation.embedded_nonce;
-        let op_return_script = create_op_return_script(&nonce);
-        tx_builder.add_recipient(op_return_script, Amount::ZERO);
-        // Now handle fees
-        let fee_amount = mm_payment_validation.fee_amount;
-        let fee_address =
-            Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Bitcoin])
-                .unwrap()
-                .assume_checked();
-        tx_builder.add_recipient(
-            fee_address.script_pubkey(),
-            Amount::from_sat(fee_amount.to::<u64>()),
-        );
-    }
+    tx_builder.ordering(bdk_wallet::TxOrdering::Untouched);
 
+    // Add foreign UTXOs first
     for foreign_utxo in &foreign_utxos {
         tx_builder
             .add_foreign_utxo(
@@ -183,6 +165,32 @@ async fn process_transaction(
             )
             .context(AddForeignUtxoSnafu)?;
     }
+
+    // Then actual recipients
+    for (address, amount) in payment_tuple {
+        tx_builder.add_recipient(address.script_pubkey(), amount);
+    }
+
+    // Then fee DIRECTLY after the last recipient && OP_RETURN w/ nonce if this is a market maker payment
+    if let Some(mm_payment_validation) = mm_payment_validation {
+        // Now handle fees
+        let fee_amount = mm_payment_validation.aggregated_fee;
+        let fee_address =
+            Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Bitcoin])
+                .unwrap()
+                .assume_checked();
+        tx_builder.add_recipient(
+            fee_address.script_pubkey(),
+            Amount::from_sat(fee_amount.to::<u64>()),
+        );
+
+        // Then OP_RETURN w/ nonce
+        let nonce = mm_payment_validation.batch_nonce_digest;
+        let op_return_script = create_op_return_script(&nonce);
+        tx_builder.add_recipient(op_return_script, Amount::ZERO);
+    }
+
+
 
     tx_builder.nlocktime(crate::bitcoin::absolute::LockTime::ZERO);
 
@@ -239,7 +247,7 @@ async fn process_transaction(
         let broadcast_start = Instant::now();
         const MAX_MEMPOOL_RETRIES: u32 = 10;
         let mut retry_count = 0;
-        
+
         let broadcast_result = loop {
             match esplora_client.broadcast(&tx).await {
                 Ok(_) => break Ok(()),
@@ -257,17 +265,17 @@ async fn process_transaction(
                 }
             }
         };
-        
+
         if let Err(e) = broadcast_result {
-                let mut wallet_guard = wallet.lock().await;
-                wallet_guard.cancel_tx(&tx);
-                let mut conn = connection.lock().await;
-                wallet_guard
-                    .persist(&mut conn)
-                    .context(PersistWalletSnafu)?;
+            let mut wallet_guard = wallet.lock().await;
+            wallet_guard.cancel_tx(&tx);
+            let mut conn = connection.lock().await;
+            wallet_guard
+                .persist(&mut conn)
+                .context(PersistWalletSnafu)?;
             return Err(BitcoinWalletError::BroadcastTransaction { source: e });
         }
-        
+
         info!("Transaction broadcast in {:?}", broadcast_start.elapsed());
 
         // Sync after broadcast to update wallet state
@@ -335,7 +343,7 @@ async fn light_sync_wallet(
     Ok(())
 }
 
-fn create_op_return_script(nonce: &[u8; 16]) -> ScriptBuf {
+fn create_op_return_script(nonce: &[u8; 32]) -> ScriptBuf {
     bitcoin::blockdata::script::Builder::new()
         .push_opcode(bitcoin::opcodes::all::OP_RETURN)
         .push_slice(nonce)
@@ -345,7 +353,8 @@ fn create_op_return_script(nonce: &[u8; 16]) -> ScriptBuf {
 /// Check if an esplora error is a mempool chain error (too many unconfirmed ancestors)
 fn is_mempool_chain_error(error: &bdk_esplora::esplora_client::Error) -> bool {
     let error_str = format!("{:?}", error);
-    error_str.contains("too-long-mempool-chain") || error_str.contains("too many unconfirmed ancestors")
+    error_str.contains("too-long-mempool-chain")
+        || error_str.contains("too many unconfirmed ancestors")
 }
 
 /// Wait for a new Bitcoin block to be mined
@@ -354,30 +363,30 @@ async fn wait_for_new_block(
 ) -> Result<(), BitcoinWalletError> {
     const POLL_INTERVAL_SECS: u64 = 5;
     const MAX_WAIT_MINUTES: u64 = 30;
-    
+
     let initial_height = esplora_client
         .get_height()
         .await
         .map_err(Box::new)
         .context(SyncWalletSnafu)?;
-    
+
     info!(
         "Waiting for new block (current height: {})...",
         initial_height
     );
-    
+
     let start = Instant::now();
     let max_wait = std::time::Duration::from_secs(MAX_WAIT_MINUTES * 60);
-    
+
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(POLL_INTERVAL_SECS)).await;
-        
+
         let current_height = esplora_client
             .get_height()
             .await
             .map_err(Box::new)
             .context(SyncWalletSnafu)?;
-        
+
         if current_height > initial_height {
             info!(
                 "New block mined! Height increased from {} to {} (waited {:?})",
@@ -387,7 +396,7 @@ async fn wait_for_new_block(
             );
             return Ok(());
         }
-        
+
         if start.elapsed() > max_wait {
             error!(
                 "Timeout waiting for new block after {:?} (height still {})",

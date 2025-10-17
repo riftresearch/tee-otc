@@ -48,6 +48,13 @@ pub enum Error {
     #[snafu(display("Transaction not found: {tx_hash}"))]
     TransactionNotFound { tx_hash: String },
 
+    #[snafu(display("Transaction deserialization failed: {context} at {loc}"))]
+    TransactionDeserializationFailed { 
+        context: String,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
     #[snafu(display("Insufficient balance: required {required}, available {available}"))]
     InsufficientBalance { required: U256, available: U256 },
 
@@ -62,6 +69,15 @@ pub enum Error {
 
     #[snafu(display("Failed to dump to address: {message}"))]
     DumpToAddress { message: String },
+
+    #[snafu(display("Bad market maker batch for {chain:?} tx {tx_hash}: {message} at {loc}"))]
+    BadMarketMakerBatch {
+        chain: ChainType,
+        tx_hash: String,
+        message: String,
+        #[snafu(implicit)]
+        loc: Location,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

@@ -1,4 +1,3 @@
-use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
 use otc_models::Lot;
 use serde::{Deserialize, Serialize};
@@ -85,14 +84,21 @@ pub enum MMResponse {
         timestamp: DateTime<Utc>,
     },
 
-    /// Response to `UserDeposited` - MM has initiated deposit
-    DepositInitiated {
+    /// Response to payment request - payment has been queued for batching
+    PaymentQueued {
         request_id: Uuid,
         swap_id: Uuid,
-        /// Transaction hash of MM's deposit
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Notification that MM has sent a batch payment
+    BatchPaymentSent {
+        request_id: Uuid,
+        /// Transaction hash of MM's batch payment
         tx_hash: String,
-        /// Actual amount sent (in case of rounding)
-        amount_sent: U256,
+        /// Swap IDs in the exact order they appear in the transaction
+        swap_ids: Vec<Uuid>,
+        batch_nonce_digest: [u8; 32],
         timestamp: DateTime<Utc>,
     },
 

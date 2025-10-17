@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use alloy::primitives::U256;
 use base64::{engine::general_purpose, Engine};
 use hmac::{Hmac, Mac};
+use otc_chains::traits::Payment;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier, CB_BTC_CONTRACT_ADDRESS};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
@@ -499,9 +500,11 @@ pub async fn convert_cbbtc_to_btc(
         .get_btc_deposit_address(&btc_account_id, ChainType::Ethereum)
         .await?;
 
+
     // send the cbbtc to the deposit address
+    let payments = vec![Payment { lot: lot.clone(), to_address: cbbtc_deposit_address }];
     let cbbtc_tx_hash = sender_wallet
-        .create_payment(&lot, &cbbtc_deposit_address, None)
+        .create_batch_payment(payments, None)
         .await
         .context(WalletSnafu)?;
 

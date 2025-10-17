@@ -275,6 +275,22 @@ pub struct MarketMakerArgs {
     /// Auto manage inventory, based on inventory target ratio and rebalance tolerance and using coinbase exchange to facilitate the conversion between BTC and cbBTC
     #[arg(long, env = "AUTO_MANAGE_INVENTORY", default_value = "false")]
     pub auto_manage_inventory: bool,
+
+    /// Bitcoin batch payment interval in seconds
+    #[arg(long, env = "BITCOIN_BATCH_INTERVAL_SECS", default_value = "24")]
+    pub bitcoin_batch_interval_secs: u64,
+
+    /// Bitcoin batch payment size (max payments per batch)
+    #[arg(long, env = "BITCOIN_BATCH_SIZE", default_value = "100")]
+    pub bitcoin_batch_size: usize,
+
+    /// Ethereum batch payment interval in seconds
+    #[arg(long, env = "ETHEREUM_BATCH_INTERVAL_SECS", default_value = "5")]
+    pub ethereum_batch_interval_secs: u64,
+
+    /// Ethereum batch payment size (max payments per batch)
+    #[arg(long, env = "ETHEREUM_BATCH_SIZE", default_value = "392")]
+    pub ethereum_batch_size: usize,
 }
 
 fn parse_hex_string(s: &str) -> std::result::Result<[u8; 32], String> {
@@ -398,9 +414,32 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         .context(PaymentStorageSnafu)?,
     );
 
+    // Configure batch payment processing for each chain
+    let mut batch_configs = std::collections::HashMap::new();
+    batch_configs.insert(
+        ChainType::Bitcoin,
+        payment_manager::BatchConfig {
+            interval_secs: args.bitcoin_batch_interval_secs,
+            batch_size: args.bitcoin_batch_size,
+        },
+    );
+    batch_configs.insert(
+        ChainType::Ethereum,
+        payment_manager::BatchConfig {
+            interval_secs: args.ethereum_batch_interval_secs,
+            batch_size: args.ethereum_batch_size,
+        },
+    );
+
+    // Create channel for MMResponse messages from PaymentManager to OTC server
+    let (otc_response_tx, otc_response_rx) = tokio::sync::mpsc::unbounded_channel();
+
     let payment_manager = Arc::new(PaymentManager::new(
         wallet_manager.clone(),
         payment_storage.clone(),
+        batch_configs,
+        Some(otc_response_tx),
+        &mut join_set,
     ));
 
     let otc_fill_client = otc_client::OtcFillClient::new(
@@ -414,6 +453,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         quote_storage.clone(),
         deposit_key_storage.clone(),
         payment_manager.clone(),
+        otc_response_rx,
     );
     join_set.spawn(async move { otc_fill_client.run().await.map_err(Error::from) });
 

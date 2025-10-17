@@ -1,20 +1,15 @@
 use alloy::primitives::{Address, U256};
 use alloy::providers::PendingTransactionError;
 use async_trait::async_trait;
-use otc_chains::traits::MarketMakerPaymentValidation;
+use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
 use otc_models::TokenIdentifier;
-use otc_models::{ChainType, Lot};
+use otc_models::ChainType;
 use snafu::{Location, Snafu};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::oneshot;
 
 use crate::bitcoin_wallet::BitcoinWalletError;
 
-#[derive(Debug, Clone)]
-pub struct Payment {
-    pub lot: Lot,
-    pub to_address: String,
-}
 
 #[derive(Debug, Snafu)]
 pub enum WalletError {
@@ -122,6 +117,11 @@ pub enum WalletError {
         #[snafu(implicit)]
         loc: Location,
     },
+    #[snafu(display("Invalid batch payment request, not all lots are the same, {}", loc))]
+    InvalidBatchPaymentRequest {
+        #[snafu(implicit)]
+        loc: Location,
+    },
 }
 
 pub type WalletResult<T, E = WalletError> = std::result::Result<T, E>;
@@ -136,15 +136,15 @@ pub struct WalletBalance {
     pub deposit_key_balance: U256,
 }
 
+
 #[async_trait]
 pub trait Wallet: Send + Sync {
-    /// Create a transaction for the given currency to the specified address
-    /// Optionally handle market maker payment validation
-    async fn create_payment(
+    /// Creates a transaction to send funds to the specified addresses
+    /// Optionally includes market maker payment validation (fee + embedded nonce)
+    async fn create_batch_payment(
         &self,
-        lot: &Lot,
-        recipient: &str,
-        mm_payment_validation: Option<MarketMakerPaymentValidation>,
+        payments: Vec<Payment>,
+        mm_payment_validation: Option<MarketMakerPaymentVerification>,
     ) -> WalletResult<String>;
 
     /// Waits until the given transaction reaches the specified number of confirmations.
@@ -224,17 +224,17 @@ impl Default for WalletManager {
 mod tests {
     use super::*;
     use alloy::primitives::U256;
-    use otc_models::{Currency, TokenIdentifier};
+    use otc_chains::traits::MarketMakerPaymentVerification;
+    use otc_models::{Currency, Lot, TokenIdentifier};
 
     struct MockWallet {}
 
     #[async_trait]
     impl Wallet for MockWallet {
-        async fn create_payment(
+        async fn create_batch_payment(
             &self,
-            _lot: &Lot,
-            _to_address: &str,
-            _mm_payment_validation: Option<MarketMakerPaymentValidation>,
+            _payments: Vec<Payment>,
+            _mm_payment_validation: Option<MarketMakerPaymentVerification>,
         ) -> WalletResult<String> {
             Ok("mock_txid_123".to_string())
         }
@@ -293,7 +293,7 @@ mod tests {
             .total_balance;
         assert!(bal > U256::from(0));
 
-        let txid = wallet.create_payment(&lot, "bc1q...", None).await.unwrap();
+        let txid = wallet.create_batch_payment(vec![Payment { lot: lot.clone(), to_address: "bc1q...".to_string() }], None).await.unwrap();
         assert_eq!(txid, "mock_txid_123");
 
         // Remove wallet

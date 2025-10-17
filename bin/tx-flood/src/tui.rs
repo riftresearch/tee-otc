@@ -669,7 +669,7 @@ impl SwapRow {
             .unwrap_or_else(|| "-".to_string());
         let amount_cell = self
             .amount
-            .map(|amt| format_amount(amt))
+            .map(format_amount)
             .unwrap_or_else(|| "-".to_string());
         let sender_cell = self
             .sender_address

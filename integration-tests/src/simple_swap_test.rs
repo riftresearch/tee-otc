@@ -11,6 +11,7 @@ use market_maker::evm_wallet::EVMWallet;
 use market_maker::payment_storage::PaymentStorage;
 use market_maker::wallet::Wallet;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, MarketMakerArgs};
+use otc_chains::traits::Payment;
 use otc_models::{ChainType, Currency, Lot, Quote, QuoteMode, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::SwapResponse;
@@ -73,6 +74,7 @@ async fn test_swap_from_bitcoin_to_ethereum(
     let devnet = RiftDevnet::builder()
         .using_token_indexer(connect_options.to_database_url())
         .using_esplora(true)
+        .bitcoin_mining_mode(MiningMode::Interval(2))
         .build()
         .await
         .unwrap()
@@ -247,38 +249,17 @@ async fn test_swap_from_bitcoin_to_ethereum(
         }
     };
     let tx_hash = user_bitcoin_wallet
-        .create_payment(
-            &Lot {
-                currency: Currency {
-                    chain: ChainType::Bitcoin,
-                    token: TokenIdentifier::Native,
-                    decimals: response_json.decimals,
-                },
-                amount: response_json.expected_amount,
+        .create_batch_payment(vec![Payment { lot: Lot {
+            currency: Currency {
+                chain: ChainType::Bitcoin,
+                token: TokenIdentifier::Native,
+                decimals: response_json.decimals,
             },
-            &response_json.deposit_address,
-            None,
-        )
+            amount: response_json.expected_amount,
+        }, to_address: response_json.deposit_address }], None)
         .await
         .unwrap();
-
-    info!(
-        "Broadcasting transaction from user wallet to deposit address: {}",
-        tx_hash
-    );
-    devnet.bitcoin.mine_blocks(6).await.unwrap();
-    info!("Mined block");
-
-    let get_tx_status = devnet
-        .bitcoin
-        .rpc_client
-        .get_raw_transaction_verbose(&tx_hash.parse::<bitcoin::Txid>().unwrap())
-        .await
-        .unwrap();
-
-    info!("Tx status: {:#?}", get_tx_status);
     wait_for_swap_to_be_settled(otc_port, response_json.swap_id).await;
-
     drop(devnet);
     tokio::join!(wallet_join_set.shutdown(), service_join_set.shutdown());
 }
@@ -463,18 +444,14 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let tx_hash = user_bitcoin_wallet
-        .create_payment(
-            &Lot {
-                currency: Currency {
-                    chain: ChainType::Bitcoin,
-                    token: TokenIdentifier::Native,
-                    decimals,
-                },
-                amount: expected_amount,
+        .create_batch_payment(vec![Payment { lot: Lot {
+            currency: Currency {
+                chain: ChainType::Bitcoin,
+                token: TokenIdentifier::Native,
+                decimals,
             },
-            &deposit_address,
-            None,
-        )
+            amount: expected_amount,
+        }, to_address: deposit_address }], None)
         .await
         .unwrap();
 
@@ -694,18 +671,15 @@ async fn test_swap_from_ethereum_to_bitcoin(
         }
     };
     let tx_hash = user_ethereum_wallet
-        .create_payment(
-            &Lot {
+        .create_batch_payment(
+            vec![Payment { lot: Lot {
                 currency: Currency {
                     chain: ChainType::Ethereum,
-                    token: TokenIdentifier::Address(
-                        devnet.ethereum.cbbtc_contract.address().to_string(),
-                    ),
+                    token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
                     decimals: response_json.decimals,
                 },
                 amount: response_json.expected_amount,
-            },
-            &response_json.deposit_address,
+            }, to_address: response_json.deposit_address }],
             None,
         )
         .await

@@ -1,7 +1,7 @@
-use crate::traits::MarketMakerPaymentValidation;
+use crate::traits::MarketMakerBatch;
 use crate::{key_derivation, ChainOperations, Result};
 use alloy::consensus::Transaction;
-use alloy::primitives::{Address, U256};
+use alloy::primitives::{Address, TxHash, U256};
 use alloy::providers::{DynProvider, Provider, ProviderBuilder};
 use alloy::rpc::types::{Log as RpcLog, TransactionReceipt};
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
@@ -14,7 +14,7 @@ use otc_models::{ChainType, Currency, Lot, TokenIdentifier, TransferInfo, TxStat
 use snafu::location;
 use std::str::FromStr;
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 sol! {
     #[derive(Debug)]
@@ -129,7 +129,6 @@ impl ChainOperations for EthereumChain {
         &self,
         recipient_address: &str,
         lot: &Lot,
-        mm_payment: Option<MarketMakerPaymentValidation>,
         _from_block_height: Option<u64>,
     ) -> Result<Option<TransferInfo>> {
         let token_address = match &lot.currency.token {
@@ -152,7 +151,7 @@ impl ChainOperations for EthereumChain {
             })?;
 
         let transfer_hint = self
-            .get_transfer(&recipient_address, &lot.amount, mm_payment)
+            .get_transfer(&recipient_address, &lot.amount)
             .await?;
         if transfer_hint.is_none() {
             return Ok(None);
@@ -160,6 +159,200 @@ impl ChainOperations for EthereumChain {
 
         Ok(Some(transfer_hint.unwrap()))
     }
+
+    // if this method returns an Err value, then we know the batch had an issue not worth retrying, if it's Ok(None) then either transient issue or batch is not in our rpc's view of the mempool
+    async fn verify_market_maker_batch_transaction(
+        &self,
+        tx_hash: &str,
+        market_maker_batch: &MarketMakerBatch,
+    ) -> Result<Option<u64>> {
+        let embedded_nonce = market_maker_batch.payment_verification.batch_nonce_digest;
+        let transaction_hash: TxHash = tx_hash.parse().map_err(|_| crate::Error::TransactionDeserializationFailed {
+            context: format!("Failed to parse EVM transaction hash {tx_hash}"),
+            loc: location!(),
+        })?;
+        let transaction = self
+            .provider
+            .get_transaction_by_hash(transaction_hash)
+            .await;
+        
+        let transaction = match transaction {
+            Ok(transaction) => transaction,
+            Err(e) => {
+                warn!("RPCError getting transaction by hash: {e}");
+                return Ok(None);
+            }
+        };
+
+        let transaction = match transaction {
+            Some(transaction) => transaction,
+            None => {
+                warn!("Transaction not found for evm batch: {tx_hash}");
+                return Ok(None);
+            }
+        };
+        let tx_hex = alloy::hex::encode(transaction.input());
+        let nonce_hex = alloy::hex::encode(embedded_nonce);
+        if !tx_hex.contains(&nonce_hex) {
+            return Err(crate::Error::BadMarketMakerBatch {
+                chain: ChainType::Ethereum,
+                tx_hash: tx_hash.to_string(),
+                message: "Transaction does not contain the expected nonce".to_string(),
+                loc: location!(),
+            });
+        }
+
+        let fee_address = Address::from_str(
+            &otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Ethereum],
+        )
+        .map_err(|_| crate::Error::Serialization {
+            message: "Invalid fee address".to_string(),
+        })?;
+        // Now get the receipt for the transaction
+        let transaction_receipt = self
+            .provider
+            .get_transaction_receipt(transaction_hash)
+            .await
+            .map_err(|e| crate::Error::EVMRpcError {
+                source: e,
+                loc: location!(),
+            })?;
+        
+        let transaction_receipt = match transaction_receipt {
+            Some(transaction_receipt) => transaction_receipt,
+            None => {
+                warn!("Transaction receipt not found for evm batch: {tx_hash}");
+                return Ok(None);
+            }
+        };
+
+        // create a map of address => expected lot use iter
+        let intra_tx_transfers = extract_all_transfers_from_transaction_receipt(&transaction_receipt);
+
+        // Invariant: All transfers in the tx in the order of the payments in the batch
+        // Find where intra_tx_transfers begins with the first payment
+        let start_index = intra_tx_transfers.iter().position(|transfer| transfer.inner.data.to == Address::from_str(&market_maker_batch.ordered_payments[0].to_address).unwrap() && transfer.inner.data.value >= market_maker_batch.ordered_payments[0].lot.amount);
+        let start_index = match start_index {
+            Some(start_index) => start_index,
+            None => {
+                return Err(crate::Error::BadMarketMakerBatch {
+                    chain: ChainType::Ethereum,
+                    tx_hash: tx_hash.to_string(),
+                    message: "First transfer log not found".to_string(),
+                    loc: location!(),
+                });
+            }
+        };
+        // Check that we have enough transfer logs to cover all payments
+        if intra_tx_transfers.len() - start_index < market_maker_batch.ordered_payments.len() {
+            return Err(crate::Error::BadMarketMakerBatch {
+                chain: ChainType::Ethereum,
+                tx_hash: tx_hash.to_string(),
+                message: "Not enough transfer logs to cover all payments in batch".to_string(),
+                loc: location!(),
+            });
+        }
+
+        // Zip together the transfers and payments starting from start_index
+        let transfers_and_payments = intra_tx_transfers[start_index..].iter()
+            .zip(&market_maker_batch.ordered_payments);
+
+        // Track current index for error reporting
+        let mut index = start_index;
+        
+        // Validate each transfer matches its corresponding payment
+        for (transfer, payment) in transfers_and_payments {
+            let expected_recipient = Address::from_str(&payment.to_address)
+                .map_err(|_| crate::Error::BadMarketMakerBatch {
+                    chain: ChainType::Ethereum,
+                    tx_hash: tx_hash.to_string(),
+                    message: "Invalid recipient address in payment".to_string(),
+                    loc: location!(),
+                })?;
+
+            if transfer.address() != self.allowed_token {
+                return Err(crate::Error::BadMarketMakerBatch {
+                    chain: ChainType::Ethereum,
+                    tx_hash: tx_hash.to_string(),
+                    message: "Transfer at index is not from allowed token contract".to_string(),
+                    loc: location!(),
+                });
+            }
+
+            if transfer.inner.data.to != expected_recipient {
+                return Err(crate::Error::BadMarketMakerBatch {
+                    chain: ChainType::Ethereum,
+                    tx_hash: tx_hash.to_string(),
+                    message: "Transfer recipient at index does not match payment".to_string(),
+                    loc: location!(),
+                });
+            }
+
+            if transfer.inner.data.value < payment.lot.amount {
+                return Err(crate::Error::BadMarketMakerBatch {
+                    chain: ChainType::Ethereum,
+                    tx_hash: tx_hash.to_string(),
+                    message: "Transfer amount at index is less than payment amount".to_string(),
+                    loc: location!(),
+                });
+            }
+
+            index += 1;
+        }
+
+        // Enforce invariant: the next transfer log must be the fee transfer
+        let Some(next_log) = intra_tx_transfers.get(index) else {
+            return Err(crate::Error::BadMarketMakerBatch {
+                chain: ChainType::Ethereum,
+                tx_hash: tx_hash.to_string(),
+                message: "Missing next transfer log for fee validation".to_string(),
+                loc: location!(),
+            });
+        };
+        // Same token and correct recipient
+        if next_log.address() != self.allowed_token {
+            return Err(crate::Error::BadMarketMakerBatch {
+                chain: ChainType::Ethereum,
+                tx_hash: tx_hash.to_string(),
+                message: "Next transfer not from allowed token contract".to_string(),
+                loc: location!(),
+            });
+        }
+        if next_log.inner.data.to != fee_address {
+            return Err(crate::Error::BadMarketMakerBatch {
+                chain: ChainType::Ethereum,
+                tx_hash: tx_hash.to_string(),
+                message: "Fee address is not the expected address in next log".to_string(),
+                loc: location!(),
+            });
+        }
+        if next_log.inner.data.value < market_maker_batch.payment_verification.aggregated_fee {
+            return Err(crate::Error::BadMarketMakerBatch {
+                chain: ChainType::Ethereum,
+                tx_hash: tx_hash.to_string(),
+                message: "Fee amount in next log is less than expected".to_string(),
+                loc: location!(),
+            });
+        }
+        let current_block_height =
+            self.provider
+                .get_block_number()
+                .await;
+        
+        let current_block_height = match current_block_height {
+            Ok(current_block_height) => current_block_height,
+            Err(e) => {
+                warn!("RPCError getting current block height: {e}");
+                return Ok(None);
+            }
+        };
+
+        let confirmations = current_block_height - transaction_receipt.block_number.unwrap();
+        Ok(Some(confirmations))
+    }
+
+
+
 
     /// Dump to address here just gives permission for the recipient to call receiveWithAuthorization
     /// What is returned is an unsigned transaction calldata that the recipient can sign and send
@@ -257,11 +450,10 @@ impl EthereumChain {
         &self,
         recipient_address: &Address,
         amount: &U256,
-        mm_payment: Option<MarketMakerPaymentValidation>,
     ) -> Result<Option<TransferInfo>> {
         info!(
-            "Searching for transfer for address: {}, amount: {}, mm_payment: {:?}",
-            recipient_address, amount, mm_payment
+            "Searching for transfer for address: {}, amount: {}",
+            recipient_address, amount
         );
 
         // use the untrusted evm_indexer_client to get the transfer hint - this will only return 50 latest transfers (TODO: how to handle this?)
@@ -275,10 +467,6 @@ impl EthereumChain {
             })?;
 
         if transfers.transfers.is_empty() {
-            if mm_payment.is_some() {
-                info!("No transfers found for mm_payment");
-                return Ok(None);
-            }
             info!("No transfers found");
             return Ok(None);
         }
@@ -312,7 +500,7 @@ impl EthereumChain {
             let intra_tx_transfers =
                 extract_all_transfers_from_transaction_receipt(&transaction_receipt);
 
-            for (index, transfer_log) in intra_tx_transfers.iter().enumerate() {
+            for transfer_log in intra_tx_transfers {
                 // Ensure this transfer is for the allowed token (same contract)
                 if transfer_log.address() != self.allowed_token {
                     continue;
@@ -330,58 +518,7 @@ impl EthereumChain {
                     debug!("Transfer amount is less than expected: {:?}", transfer);
                     continue;
                 }
-                // validate the embedded nonce
-                if let Some(mm_payment) = &mm_payment {
-                    let embedded_nonce = mm_payment.embedded_nonce;
-                    let transaction = self
-                        .provider
-                        .get_transaction_by_hash(transfer.transaction_hash)
-                        .await
-                        .map_err(|e| crate::Error::EVMRpcError {
-                            source: e,
-                            loc: location!(),
-                        })?;
-                    if transaction.is_none() {
-                        debug!("Transaction not found for transfer: {:?}", transfer);
-                        continue;
-                    }
-                    let transaction = transaction.unwrap();
-                    let tx_hex = alloy::hex::encode(transaction.input());
-                    let nonce_hex = alloy::hex::encode(embedded_nonce);
-                    if !tx_hex.contains(&nonce_hex) {
-                        debug!(
-                            "Transaction does not contain the expected nonce: {:?}",
-                            transfer
-                        );
-                        continue;
-                    }
 
-                    let fee_address = Address::from_str(
-                        &otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Ethereum],
-                    )
-                    .map_err(|_| crate::Error::Serialization {
-                        message: "Invalid fee address".to_string(),
-                    })?;
-
-                    // Enforce invariant: the next transfer log must be the fee transfer
-                    let Some(next_log) = intra_tx_transfers.get(index + 1) else {
-                        debug!("Missing next transfer log for fee validation");
-                        continue;
-                    };
-                    // Same token and correct recipient
-                    if next_log.address() != self.allowed_token {
-                        debug!("Next transfer not from allowed token contract");
-                        continue;
-                    }
-                    if next_log.inner.data.to != fee_address {
-                        info!("Fee address is not the expected address in next log");
-                        continue;
-                    }
-                    if next_log.inner.data.value < mm_payment.fee_amount {
-                        info!("Fee amount in next log is less than expected");
-                        continue;
-                    }
-                }
                 // get the current block height
                 let current_block_height = self.provider.get_block_number().await.map_err(|e| {
                     crate::Error::EVMRpcError {
@@ -414,18 +551,15 @@ impl EthereumChain {
 
         Ok(transfer_hint)
     }
+
 }
 
 fn extract_all_transfers_from_transaction_receipt(
     transaction_receipt: &TransactionReceipt,
 ) -> Vec<RpcLog<Transfer>> {
-    let mut transfers = Vec::new();
-    for log in transaction_receipt.logs() {
-        let decoded = log.log_decode::<Transfer>();
-        if let Ok(decoded) = decoded {
-            // Preserve full decoded log to keep contract address and event fields
-            transfers.push(decoded);
-        }
-    }
-    transfers
+    transaction_receipt
+        .logs()
+        .iter()
+        .filter_map(|log| log.log_decode::<Transfer>().ok())
+        .collect()
 }

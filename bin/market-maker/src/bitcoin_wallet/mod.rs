@@ -5,6 +5,7 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 use ::esplora_client::{OutPoint, Txid};
 use alloy::primitives::U256;
 use async_trait::async_trait;
+use rand::Rng;
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_wallet::bitcoin::secp256k1::Secp256k1;
 use bdk_wallet::descriptor;
@@ -14,16 +15,16 @@ use bdk_wallet::{
     bitcoin::Network, error::CreateTxError, signer::SignerError, AddForeignUtxoError, CreateParams,
     KeychainKind, LoadParams, LoadWithPersistError, PersistedWallet,
 };
-use otc_chains::traits::MarketMakerPaymentValidation;
+use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
 use snafu::{location, Location, ResultExt, Snafu};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::bitcoin_wallet::transaction_broadcaster::{ForeignUtxo, TransactionRequest};
 use crate::deposit_key_storage::{DepositKeyStorage, DepositKeyStorageTrait, FillStatus};
-use crate::wallet::{self, Payment, Wallet as WalletTrait, WalletBalance, WalletError};
+use crate::wallet::{self, Wallet as WalletTrait, WalletBalance, WalletError};
 use crate::WalletResult;
 
 const PARALLEL_REQUESTS: usize = 5;
@@ -287,117 +288,125 @@ impl WalletTrait for BitcoinWallet {
         Ok(())
     }
 
-    async fn create_payment(
+    async fn create_batch_payment(
         &self,
-        lot: &Lot,
-        to_address: &str,
-        mm_payment_validation: Option<MarketMakerPaymentValidation>,
+        payments: Vec<Payment>,
+        mm_payment_validation: Option<MarketMakerPaymentVerification>,
     ) -> WalletResult<String> {
-        ensure_valid_lot(lot)?;
+        for payment in &payments {
+            ensure_valid_lot(&payment.lot)?;
+        }
 
-        info!(
-            "Queueing Bitcoin transaction to {} for {:?}",
-            to_address, lot
-        );
+        let batch_id = alloy::hex::encode(rand::thread_rng().gen::<[u8; 8]>());
+        for payment in &payments {
+            println!("[{}] queuing payment: {:?}", batch_id, payment);
+        }
+
         let mut foreign_utxos = Vec::new();
         if let Some(deposit_key_storage) = self.deposit_key_storage.clone() {
-            match deposit_key_storage
-                .take_deposits_that_fill_lot(lot)
-                .await
-                .map_err(|e| WalletError::DepositKeyStorageError {
-                    source: e,
-                    loc: location!(),
-                })? {
-                FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
-                    for deposit in deposits {
-                        let tx = self
-                            .esplora_client
-                            .get_tx(&Txid::from_str(&deposit.funding_tx_hash).unwrap())
-                            .await
-                            .map_err(|e| WalletError::EsploraClientError {
-                                source: e,
-                                loc: location!(),
-                            })?;
-                        // Parse the descriptor string to get the address
-                        let mut descriptor_str = deposit.private_key.clone();
-                        if !descriptor_str.starts_with("wpkh(") {
-                            descriptor_str = format!("wpkh({})", descriptor_str);
-                        }
-                        let network = self.wallet.lock().await.network();
-                        let secp = Secp256k1::new();
+            for payment in &payments {
+                let lot = payment.lot.clone();
+                match deposit_key_storage
+                    .take_deposits_that_fill_lot(&lot)
+                    .await
+                    .map_err(|e| WalletError::DepositKeyStorageError {
+                        source: e,
+                        loc: location!(),
+                    })? {
+                    FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
+                        for deposit in deposits {
+                            let tx = self
+                                .esplora_client
+                                .get_tx(&Txid::from_str(&deposit.funding_tx_hash).unwrap())
+                                .await
+                                .map_err(|e| WalletError::EsploraClientError {
+                                    source: e,
+                                    loc: location!(),
+                                })?;
+                            let tx = match tx { 
+                                Some(tx) => tx,
+                                None => {
+                                    warn!("Transaction not found for deposit: {:?}", deposit);
+                                    continue;
+                                }
+                            };
+                            
+                            // Parse the descriptor string to get the address
+                            let mut descriptor_str = deposit.private_key.clone();
+                            if !descriptor_str.starts_with("wpkh(") {
+                                descriptor_str = format!("wpkh({})", descriptor_str);
+                            }
+                            let network = self.wallet.lock().await.network();
+                            let secp = Secp256k1::new();
 
-                        // Parse the descriptor with secret keys using BDK's parse_descriptor
-                        let (public_desc, _key_map) =
-                            descriptor::Descriptor::<DescriptorPublicKey>::parse_descriptor(
-                                &secp,
-                                &descriptor_str,
-                            )
-                            .map_err(|e| {
+                            // Parse the descriptor with secret keys using BDK's parse_descriptor
+                            let (public_desc, _key_map) =
+                                descriptor::Descriptor::<DescriptorPublicKey>::parse_descriptor(
+                                    &secp,
+                                    &descriptor_str,
+                                )
+                                .map_err(|e| {
+                                    WalletError::InvalidDescriptor {
+                                        reason: format!(
+                                            "Failed to parse descriptor with secret keys: {e}"
+                                        ),
+                                        loc: location!(),
+                                    }
+                                })?;
+
+                            // Derive at index 0 to get the concrete address
+                            let derived_desc = public_desc.at_derivation_index(0).map_err(|e| {
                                 WalletError::InvalidDescriptor {
-                                    reason: format!(
-                                        "Failed to parse descriptor with secret keys: {e}"
-                                    ),
+                                    reason: format!("Failed to derive descriptor at index 0: {e}"),
                                     loc: location!(),
                                 }
                             })?;
 
-                        // Derive at index 0 to get the concrete address
-                        let derived_desc = public_desc.at_derivation_index(0).map_err(|e| {
-                            WalletError::InvalidDescriptor {
-                                reason: format!("Failed to derive descriptor at index 0: {e}"),
-                                loc: location!(),
-                            }
-                        })?;
+                            let deposit_address = derived_desc.address(network).map_err(|e| {
+                                WalletError::InvalidDescriptor {
+                                    reason: format!("Failed to get address from descriptor: {e}"),
+                                    loc: location!(),
+                                }
+                            })?;
+                            info!("deposit_address from descriptor: {:?}", deposit_address);
 
-                        let deposit_address = derived_desc.address(network).map_err(|e| {
-                            WalletError::InvalidDescriptor {
-                                reason: format!("Failed to get address from descriptor: {e}"),
-                                loc: location!(),
-                            }
-                        })?;
-                        info!("deposit_address from descriptor: {:?}", deposit_address);
+                            // find all UTXOs in `tx` that pay to `deposit_address`
+                            let target_spk = deposit_address.script_pubkey();
 
-                        if let Some(tx) = tx {
-                            let out = tx
+                            for (vout, txo) in tx
                                 .output
                                 .iter()
                                 .enumerate()
-                                .filter(|(_, out)| {
-                                    out.value.to_sat() == lot.amount.to::<u64>()
-                                        && out.script_pubkey == deposit_address.script_pubkey()
-                                })
-                                .take(1)
-                                .next();
-                            if let Some(out) = out {
-                                // Craft a complete PSBT input for a foreign UTXO.
-                                // For comprehensive BIP143 compliance, we include both witness_utxo
-                                // and non_witness_utxo fields.
+                                .filter(|(_, o)| o.script_pubkey == target_spk)
+                            {
+                                // Build PSBT input for each spendable output
                                 let psbt_input = bdk_wallet::bitcoin::psbt::Input {
-                                    witness_utxo: Some(out.1.clone()),
+                                    witness_utxo: Some(txo.clone()),
                                     non_witness_utxo: Some(tx.clone()),
                                     ..Default::default()
                                 };
 
-                                // Typical satisfaction weight for P2WPKH inputs is ~108 wu.
+                                // Typical P2WPKH input weight; adjust if your descriptor isn’t P2WPKH
                                 let satisfaction_weight = bdk_wallet::bitcoin::Weight::from_wu(108);
 
-                                info!("Adding foreign UTXO: {:?}", out.0);
+                                info!("Adding foreign UTXO: vout={vout}");
 
                                 foreign_utxos.push(ForeignUtxo {
-                                    outpoint: OutPoint::new(tx.compute_txid(), out.0 as u32),
+                                    outpoint: OutPoint::new(tx.compute_txid(), vout as u32),
                                     psbt_input,
                                     satisfaction_weight,
-                                    foreign_descriptor: deposit.private_key.clone(),
+                                    foreign_descriptor: descriptor_str.clone(),
                                 });
                             }
                         }
                     }
-                }
-                FillStatus::Empty => {
-                    println!("FillStatus::Empty");
-                    // No foreign utxos to add
+                    FillStatus::Empty => {
+                        println!("FillStatus::Empty");
+                        // No foreign utxos to add
+                    }
                 }
             }
+
         }
 
         info!(
@@ -407,10 +416,7 @@ impl WalletTrait for BitcoinWallet {
         // Send transaction request to the broadcaster
         self.tx_broadcaster
             .broadcast_transaction(
-                vec![Payment {
-                    to_address: to_address.to_string(),
-                    lot: lot.clone(),
-                }],
+                payments,
                 foreign_utxos,
                 mm_payment_validation,
             )

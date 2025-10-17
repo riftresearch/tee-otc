@@ -7,6 +7,8 @@ use uuid::Uuid;
 pub const MM_NEVER_DEPOSITS_TIMEOUT: Duration = Duration::minutes(60);
 pub const MM_DEPOSIT_NEVER_CONFIRMED_TIMEOUT: Duration = Duration::minutes(60 * 24); // 24 hours
 
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Swap {
     pub id: Uuid,

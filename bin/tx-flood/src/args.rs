@@ -90,7 +90,12 @@ pub struct Args {
     pub max_amount: U256,
 
     /// Enable randomized amounts between min_amount and max_amount for each swap
-    #[arg(long, env = "RANDOMIZE_AMOUNTS", default_value_t = true)]
+    #[arg(
+        long,
+        env = "RANDOMIZE_AMOUNTS",
+        default_value = "true",
+        action = clap::ArgAction::Set
+    )]
     pub randomize_amounts: bool,
 
     /// Bitcoin descriptor representing the funded wallet (wpkh(desc)...)

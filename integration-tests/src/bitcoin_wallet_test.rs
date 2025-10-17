@@ -7,7 +7,7 @@ use market_maker::{
     deposit_key_storage::{Deposit, DepositKeyStorage, DepositKeyStorageTrait},
     wallet::Wallet,
 };
-use otc_chains::traits::MarketMakerPaymentValidation;
+use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::sync::Arc;
@@ -135,7 +135,13 @@ async fn test_bitcoin_wallet_basic_operations() {
     };
 
     let invalid_tx_result = bitcoin_wallet
-        .create_payment(&btc_lot, "invalid_bitcoin_address", None)
+        .create_batch_payment(
+            vec![Payment {
+                lot: btc_lot.clone(),
+                to_address: "invalid_bitcoin_address".to_string(),
+            }],
+            None,
+        )
         .await;
 
     assert!(
@@ -160,20 +166,34 @@ async fn test_bitcoin_wallet_basic_operations() {
         .unwrap();
 
     let tx_result1 = bitcoin_wallet
-        .create_payment(&btc_lot, &user_btc_address, None)
+        .create_batch_payment(
+            vec![Payment {
+                lot: btc_lot.clone(),
+                to_address: user_btc_address.to_string(),
+            }],
+            None,
+        )
         .await;
     let tx_result2 = bitcoin_wallet
-        .create_payment(&btc_lot, &user_btc_address, None)
+        .create_batch_payment(
+            vec![Payment {
+                lot: btc_lot.clone(),
+                to_address: user_btc_address.to_string(),
+            }],
+            None,
+        )
         .await;
 
-    let mm_nonce = hex!("deadbeefdeadbeefdeadbeefdeadbeef");
+    let mm_nonce = hex!("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
     let tx_result3 = bitcoin_wallet
-        .create_payment(
-            &btc_lot,
-            &user_btc_address,
-            Some(MarketMakerPaymentValidation {
-                embedded_nonce: mm_nonce,
-                fee_amount: U256::from(300),
+        .create_batch_payment(
+            vec![Payment {
+                lot: btc_lot.clone(),
+                to_address: user_btc_address.to_string(),
+            }],
+            Some(MarketMakerPaymentVerification {
+                batch_nonce_digest: mm_nonce.clone(),
+                aggregated_fee: U256::from(300),
             }),
         )
         .await;
@@ -283,7 +303,13 @@ async fn test_bitcoin_wallet_error_handling() {
     };
 
     let result = bitcoin_wallet
-        .create_payment(&lot, "invalid_btc_address", None)
+        .create_batch_payment(
+            vec![Payment {
+                lot: lot.clone(),
+                to_address: "invalid_btc_address".to_string(),
+            }],
+            None,
+        )
         .await;
 
     assert!(result.is_err(), "Should fail with invalid address");
@@ -429,7 +455,13 @@ async fn test_bitcoin_wallet_spend_from_deposit_storage(
     let to_address = recipient_account.bitcoin_wallet.address.to_string();
 
     let txid = bitcoin_wallet
-        .create_payment(&lot, &to_address, None)
+        .create_batch_payment(
+            vec![Payment {
+                lot: lot.clone(),
+                to_address: to_address.to_string(),
+            }],
+            None,
+        )
         .await
         .expect("create payment should succeed");
 

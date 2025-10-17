@@ -87,4 +87,31 @@ impl PaymentStorage {
 
         Ok(())
     }
+
+    pub async fn set_batch_payment(&self, swap_ids: Vec<Uuid>, txid: impl Into<String>) -> Result<()> {
+        let txid = txid.into();
+
+        // Use a single transaction to insert all payments with the same txid
+        let mut tx = self.pool.begin().await.context(DatabaseSnafu)?;
+
+        for swap_id in swap_ids {
+            sqlx::query(
+                r#"
+                INSERT INTO mm_payments (swap_id, txid)
+                VALUES ($1, $2)
+                ON CONFLICT (swap_id)
+                DO UPDATE SET txid = EXCLUDED.txid
+                "#,
+            )
+            .bind(swap_id)
+            .bind(&txid)
+            .execute(&mut *tx)
+            .await
+            .context(DatabaseSnafu)?;
+        }
+
+        tx.commit().await.context(DatabaseSnafu)?;
+
+        Ok(())
+    }
 }

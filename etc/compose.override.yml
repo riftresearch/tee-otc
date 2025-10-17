@@ -252,6 +252,11 @@ services:
       COINBASE_EXCHANGE_API_SECRET: ""
       COINBASE_EXCHANGE_API_BASE_URL: https://api.exchange.coinbase.com
       AUTO_MANAGE_INVENTORY: false
+      BITCOIN_BATCH_INTERVAL_SECS: 2
+      BITCOIN_BATCH_SIZE: 100
+      ETHEREUM_BATCH_INTERVAL_SECS: 2
+      ETHEREUM_BATCH_SIZE: 392
+
     volumes: []
     networks:
       - rift-network

@@ -12,14 +12,14 @@ pub enum TokenIdentifier {
     Address(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Currency {
     pub chain: ChainType,
     pub token: TokenIdentifier,
     pub decimals: u8,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Lot {
     pub currency: Currency,
     pub amount: U256,
