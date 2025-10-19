@@ -127,10 +127,22 @@ async fn test_evm_wallet_nonce_error_retry(
     let user_address = user_account.ethereum_address.to_string();
 
     // Send the first transaction normally
-    let tx1_future = evm_wallet.create_batch_payment(vec![Payment { lot: lot.clone(), to_address: user_address.clone() }], None);
+    let tx1_future = evm_wallet.create_batch_payment(
+        vec![Payment {
+            lot: lot.clone(),
+            to_address: user_address.clone(),
+        }],
+        None,
+    );
 
     // Immediately send another transaction to create a nonce conflict
-    let tx2_future = evm_wallet.create_batch_payment(vec![Payment { lot: lot.clone(), to_address: user_address.to_string() }], None);
+    let tx2_future = evm_wallet.create_batch_payment(
+        vec![Payment {
+            lot: lot.clone(),
+            to_address: user_address.to_string(),
+        }],
+        None,
+    );
 
     // Both transactions should eventually succeed due to retry logic
     let (tx1_result, tx2_result) = tokio::join!(tx1_future, tx2_future);
@@ -186,10 +198,16 @@ async fn test_evm_wallet_nonce_error_retry(
     // Test Case 3: Verify transaction with custom nonce embedding
     info!("Test Case 3: Testing transaction with custom nonce");
 
-    let custom_nonce: [u8; 32] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32];
+    let custom_nonce: [u8; 32] = [
+        1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+        26, 27, 28, 29, 30, 31, 32,
+    ];
     let tx_with_nonce = evm_wallet
         .create_batch_payment(
-            vec![Payment { lot: lot.clone(), to_address: user_address.clone() }],
+            vec![Payment {
+                lot: lot.clone(),
+                to_address: user_address.clone(),
+            }],
             Some(MarketMakerPaymentVerification {
                 batch_nonce_digest: custom_nonce.clone(),
                 aggregated_fee: U256::from(300),
@@ -305,7 +323,15 @@ async fn test_evm_wallet_gas_price_bumping(
     // we'll verify the retry logic exists and works
 
     let user_address = user_account.ethereum_address.to_string();
-    let tx_result = evm_wallet.create_batch_payment(vec![Payment { lot: lot.clone(), to_address: user_address.clone() }], None).await;
+    let tx_result = evm_wallet
+        .create_batch_payment(
+            vec![Payment {
+                lot: lot.clone(),
+                to_address: user_address.clone(),
+            }],
+            None,
+        )
+        .await;
     println!("tx_result: {:?}", tx_result);
 
     assert!(
@@ -388,7 +414,13 @@ async fn test_evm_wallet_error_handling(
     };
 
     let result = evm_wallet
-        .create_batch_payment(vec![Payment { lot: invalid_lot.clone(), to_address: "invalid_address".to_string() }], None)
+        .create_batch_payment(
+            vec![Payment {
+                lot: invalid_lot.clone(),
+                to_address: "invalid_address".to_string(),
+            }],
+            None,
+        )
         .await;
 
     assert!(result.is_err(), "Should fail with invalid address");
@@ -503,7 +535,13 @@ async fn test_evm_wallet_actually_sends_token(
         .unwrap();
 
     let payment_txid = evm_wallet
-        .create_batch_payment(vec![Payment { lot: lot.clone(), to_address: recipient_account.ethereum_address.to_string() }], None)
+        .create_batch_payment(
+            vec![Payment {
+                lot: lot.clone(),
+                to_address: recipient_account.ethereum_address.to_string(),
+            }],
+            None,
+        )
         .await
         .unwrap();
 
@@ -664,7 +702,13 @@ async fn test_evm_wallet_spend_from_deposit_storage(
         .unwrap();
 
     let _txid = evm_wallet
-        .create_batch_payment(vec![Payment { lot: lot.clone(), to_address: recipient_account.ethereum_address.to_string() }], None)
+        .create_batch_payment(
+            vec![Payment {
+                lot: lot.clone(),
+                to_address: recipient_account.ethereum_address.to_string(),
+            }],
+            None,
+        )
         .await
         .expect("create payment should succeed");
 

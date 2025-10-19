@@ -88,7 +88,11 @@ impl PaymentStorage {
         Ok(())
     }
 
-    pub async fn set_batch_payment(&self, swap_ids: Vec<Uuid>, txid: impl Into<String>) -> Result<()> {
+    pub async fn set_batch_payment(
+        &self,
+        swap_ids: Vec<Uuid>,
+        txid: impl Into<String>,
+    ) -> Result<()> {
         let txid = txid.into();
 
         // Use a single transaction to insert all payments with the same txid

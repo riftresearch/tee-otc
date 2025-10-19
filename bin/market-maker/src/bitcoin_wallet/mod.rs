@@ -5,7 +5,6 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 use ::esplora_client::{OutPoint, Txid};
 use alloy::primitives::U256;
 use async_trait::async_trait;
-use rand::Rng;
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_wallet::bitcoin::secp256k1::Secp256k1;
 use bdk_wallet::descriptor;
@@ -17,6 +16,7 @@ use bdk_wallet::{
 };
 use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
+use rand::Rng;
 use snafu::{location, Location, ResultExt, Snafu};
 use tokio::sync::Mutex;
 use tokio::task::JoinSet;
@@ -323,14 +323,14 @@ impl WalletTrait for BitcoinWallet {
                                     source: e,
                                     loc: location!(),
                                 })?;
-                            let tx = match tx { 
+                            let tx = match tx {
                                 Some(tx) => tx,
                                 None => {
                                     warn!("Transaction not found for deposit: {:?}", deposit);
                                     continue;
                                 }
                             };
-                            
+
                             // Parse the descriptor string to get the address
                             let mut descriptor_str = deposit.private_key.clone();
                             if !descriptor_str.starts_with("wpkh(") {
@@ -340,19 +340,15 @@ impl WalletTrait for BitcoinWallet {
                             let secp = Secp256k1::new();
 
                             // Parse the descriptor with secret keys using BDK's parse_descriptor
-                            let (public_desc, _key_map) =
-                                descriptor::Descriptor::<DescriptorPublicKey>::parse_descriptor(
-                                    &secp,
-                                    &descriptor_str,
-                                )
-                                .map_err(|e| {
-                                    WalletError::InvalidDescriptor {
-                                        reason: format!(
-                                            "Failed to parse descriptor with secret keys: {e}"
-                                        ),
-                                        loc: location!(),
-                                    }
-                                })?;
+                            let (public_desc, _key_map) = descriptor::Descriptor::<
+                                DescriptorPublicKey,
+                            >::parse_descriptor(
+                                &secp, &descriptor_str
+                            )
+                            .map_err(|e| WalletError::InvalidDescriptor {
+                                reason: format!("Failed to parse descriptor with secret keys: {e}"),
+                                loc: location!(),
+                            })?;
 
                             // Derive at index 0 to get the concrete address
                             let derived_desc = public_desc.at_derivation_index(0).map_err(|e| {
@@ -406,7 +402,6 @@ impl WalletTrait for BitcoinWallet {
                     }
                 }
             }
-
         }
 
         info!(
@@ -415,11 +410,7 @@ impl WalletTrait for BitcoinWallet {
         );
         // Send transaction request to the broadcaster
         self.tx_broadcaster
-            .broadcast_transaction(
-                payments,
-                foreign_utxos,
-                mm_payment_validation,
-            )
+            .broadcast_transaction(payments, foreign_utxos, mm_payment_validation)
             .await
             .map_err(|e| WalletError::BitcoinWalletClient {
                 source: e,

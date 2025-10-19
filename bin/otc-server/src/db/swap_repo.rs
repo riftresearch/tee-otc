@@ -634,17 +634,18 @@ impl SwapRepository {
         }
 
         let swap_ids: Vec<Uuid> = deposit_status_map.keys().copied().collect();
-        
+
         // Get all swaps
         let mut swaps = self.get_swaps(&swap_ids).await?;
 
         // Apply state transitions to each swap
         for swap in &mut swaps {
-            let deposit_status = deposit_status_map
-                .get(&swap.id)
-                .ok_or_else(|| OtcServerError::InvalidData {
-                    message: format!("Missing deposit status for swap {}", swap.id),
-                })?;
+            let deposit_status =
+                deposit_status_map
+                    .get(&swap.id)
+                    .ok_or_else(|| OtcServerError::InvalidData {
+                        message: format!("Missing deposit status for swap {}", swap.id),
+                    })?;
 
             swap.mm_deposit_detected(
                 deposit_status.tx_hash.clone(),

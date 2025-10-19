@@ -114,7 +114,10 @@ impl WrappedBitcoinQuoter {
     ) -> Result<()> {
         loop {
             let send_fee_sats_on_btc = {
-                let sats_per_vbyte_by_confirmations = esplora_client.get_fee_estimates().await.context(EsploraSnafu)?;
+                let sats_per_vbyte_by_confirmations = esplora_client
+                    .get_fee_estimates()
+                    .await
+                    .context(EsploraSnafu)?;
                 let sats_per_vbyte = sats_per_vbyte_by_confirmations.get(&1).unwrap_or(&1.5);
                 let sats_per_vbyte = sats_per_vbyte * fee_safety_multiplier;
 

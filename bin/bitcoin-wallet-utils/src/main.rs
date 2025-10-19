@@ -1,4 +1,7 @@
-use bitcoin::{key::{CompressedPublicKey, Secp256k1}, Address, PrivateKey};
+use bitcoin::{
+    key::{CompressedPublicKey, Secp256k1},
+    Address, PrivateKey,
+};
 use blockchain_utils::P2WPKHBitcoinWallet;
 
 fn main() {

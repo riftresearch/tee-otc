@@ -249,14 +249,20 @@ async fn test_swap_from_bitcoin_to_ethereum(
         }
     };
     let tx_hash = user_bitcoin_wallet
-        .create_batch_payment(vec![Payment { lot: Lot {
-            currency: Currency {
-                chain: ChainType::Bitcoin,
-                token: TokenIdentifier::Native,
-                decimals: response_json.decimals,
-            },
-            amount: response_json.expected_amount,
-        }, to_address: response_json.deposit_address }], None)
+        .create_batch_payment(
+            vec![Payment {
+                lot: Lot {
+                    currency: Currency {
+                        chain: ChainType::Bitcoin,
+                        token: TokenIdentifier::Native,
+                        decimals: response_json.decimals,
+                    },
+                    amount: response_json.expected_amount,
+                },
+                to_address: response_json.deposit_address,
+            }],
+            None,
+        )
         .await
         .unwrap();
     wait_for_swap_to_be_settled(otc_port, response_json.swap_id).await;
@@ -444,14 +450,20 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     let tx_hash = user_bitcoin_wallet
-        .create_batch_payment(vec![Payment { lot: Lot {
-            currency: Currency {
-                chain: ChainType::Bitcoin,
-                token: TokenIdentifier::Native,
-                decimals,
-            },
-            amount: expected_amount,
-        }, to_address: deposit_address }], None)
+        .create_batch_payment(
+            vec![Payment {
+                lot: Lot {
+                    currency: Currency {
+                        chain: ChainType::Bitcoin,
+                        token: TokenIdentifier::Native,
+                        decimals,
+                    },
+                    amount: expected_amount,
+                },
+                to_address: deposit_address,
+            }],
+            None,
+        )
         .await
         .unwrap();
 
@@ -672,14 +684,19 @@ async fn test_swap_from_ethereum_to_bitcoin(
     };
     let tx_hash = user_ethereum_wallet
         .create_batch_payment(
-            vec![Payment { lot: Lot {
-                currency: Currency {
-                    chain: ChainType::Ethereum,
-                    token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
-                    decimals: response_json.decimals,
+            vec![Payment {
+                lot: Lot {
+                    currency: Currency {
+                        chain: ChainType::Ethereum,
+                        token: TokenIdentifier::Address(
+                            devnet.ethereum.cbbtc_contract.address().to_string(),
+                        ),
+                        decimals: response_json.decimals,
+                    },
+                    amount: response_json.expected_amount,
                 },
-                amount: response_json.expected_amount,
-            }, to_address: response_json.deposit_address }],
+                to_address: response_json.deposit_address,
+            }],
             None,
         )
         .await

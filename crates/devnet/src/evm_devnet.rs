@@ -7,8 +7,8 @@ use eip7702_delegator_contract::{
     EIP7702_DELEGATOR_CROSSCHAIN_ADDRESS,
 };
 use eyre::{eyre, Result};
-use tracing::info;
 use tokio::time::Instant;
+use tracing::info;
 
 use alloy::{
     node_bindings::{Anvil, AnvilInstance},

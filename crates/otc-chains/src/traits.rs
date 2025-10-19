@@ -35,7 +35,6 @@ pub struct MarketMakerQueuedPayment {
     pub mm_nonce: [u8; 16],
 }
 
-
 // we can derive a MarketMakerQueuedPayment from a Swap
 impl From<&Swap> for MarketMakerQueuedPayment {
     fn from(swap: &Swap) -> Self {
@@ -48,7 +47,6 @@ impl From<&Swap> for MarketMakerQueuedPayment {
         }
     }
 }
-
 
 pub trait MarketMakerQueuedPaymentExt {
     fn to_market_maker_batch(&self) -> Option<MarketMakerBatch>;
@@ -92,8 +90,6 @@ impl MarketMakerQueuedPaymentExt for [MarketMakerQueuedPayment] {
         })
     }
 }
-
-
 
 // implementors of this trait should be stateless
 #[async_trait]

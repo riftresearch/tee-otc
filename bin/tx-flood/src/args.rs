@@ -54,7 +54,11 @@ pub struct Args {
     pub otc_url: Url,
 
     /// Override URL for the quote endpoint (defaults to <otc_url>/api/v1/quotes/request)
-    #[arg(long, env = "QUOTE_URL", default_value = "http://0.0.0.0:3001/api/v1/quotes/request")]
+    #[arg(
+        long,
+        env = "QUOTE_URL",
+        default_value = "http://0.0.0.0:3001/api/v1/quotes/request"
+    )]
     pub quote_url: Url,
 
     /// Total number of swaps to execute
@@ -131,7 +135,11 @@ pub struct Args {
     pub dedicated_wallets: bool,
 
     /// Additional sats to allocate to each dedicated Bitcoin wallet for miner fees
-    #[arg(long, env = "DEDICATED_WALLET_BITCOIN_FEE_RESERVE_SATS", default_value_t = 5_000)]
+    #[arg(
+        long,
+        env = "DEDICATED_WALLET_BITCOIN_FEE_RESERVE_SATS",
+        default_value_t = 5_000
+    )]
     pub dedicated_wallet_bitcoin_fee_reserve_sats: u64,
 
     /// Additional wei to allocate to each dedicated EVM wallet for gas fees
@@ -199,7 +207,6 @@ pub struct EvmWalletConfig {
     pub confirmations: u64,
 }
 
-
 impl Args {
     pub fn into_config(self) -> Result<Config> {
         let Args {
@@ -237,7 +244,9 @@ impl Args {
             return Err(anyhow!("swaps_per_interval must be greater than zero"));
         }
         if min_amount > max_amount {
-            return Err(anyhow!("min_amount must be less than or equal to max_amount"));
+            return Err(anyhow!(
+                "min_amount must be less than or equal to max_amount"
+            ));
         }
 
         // Define the two currency pairs
@@ -291,7 +300,8 @@ impl Args {
         };
 
         let bitcoin_wallet_db_dir = tempfile::tempdir().unwrap();
-        let funding_bitcoin_wallet_db_path = bitcoin_wallet_db_dir.path().join("main_fund_wallet.sqlite");
+        let funding_bitcoin_wallet_db_path =
+            bitcoin_wallet_db_dir.path().join("main_fund_wallet.sqlite");
         let bitcoin = if needs_bitcoin {
             Some(BitcoinWalletConfig {
                 db_path: funding_bitcoin_wallet_db_path.to_string_lossy().to_string(),
@@ -376,4 +386,3 @@ fn parse_private_key(value: &str) -> Result<[u8; 32], String> {
     array.copy_from_slice(&bytes);
     Ok(array)
 }
-

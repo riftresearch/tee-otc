@@ -49,7 +49,7 @@ pub enum Error {
     TransactionNotFound { tx_hash: String },
 
     #[snafu(display("Transaction deserialization failed: {context} at {loc}"))]
-    TransactionDeserializationFailed { 
+    TransactionDeserializationFailed {
         context: String,
         #[snafu(implicit)]
         loc: Location,

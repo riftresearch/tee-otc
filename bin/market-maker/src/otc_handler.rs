@@ -43,45 +43,46 @@ impl OTCMessageHandler {
                 );
 
                 // Verify the quote exists in our database
-                let (accepted, rejection_reason) = match self.quote_storage.get_quote(*quote_id).await {
-                    Ok(quote) => {
-                        let stored_hash = quote.hash();
-                        info!(
-                            "Found quote {} in database, hash: {}",
-                            quote_id,
-                            alloy::hex::encode(stored_hash)
-                        );
-                        // Verify the hash matches
-                        if stored_hash != *quote_hash {
-                            let rejection_reason = format!(
-                                "Quote {} hash mismatch! Expected: {}, Got: {}",
+                let (accepted, rejection_reason) =
+                    match self.quote_storage.get_quote(*quote_id).await {
+                        Ok(quote) => {
+                            let stored_hash = quote.hash();
+                            info!(
+                                "Found quote {} in database, hash: {}",
                                 quote_id,
-                                alloy::hex::encode(stored_hash),
-                                alloy::hex::encode(quote_hash),
+                                alloy::hex::encode(stored_hash)
                             );
-                            warn!(rejection_reason);
-                            (false, Some(rejection_reason))
-                        } else {
-                            // Make sure the quote is not expired
-                            let current_time = utc::now();
-                            let quote_expiration = quote.expires_at;
-                            if current_time > quote_expiration {
+                            // Verify the hash matches
+                            if stored_hash != *quote_hash {
                                 let rejection_reason = format!(
-                                    "Swap was requested with quote {} that is expired!",
-                                    quote_id
+                                    "Quote {} hash mismatch! Expected: {}, Got: {}",
+                                    quote_id,
+                                    alloy::hex::encode(stored_hash),
+                                    alloy::hex::encode(quote_hash),
                                 );
                                 warn!(rejection_reason);
                                 (false, Some(rejection_reason))
                             } else {
-                                (true, None)
+                                // Make sure the quote is not expired
+                                let current_time = utc::now();
+                                let quote_expiration = quote.expires_at;
+                                if current_time > quote_expiration {
+                                    let rejection_reason = format!(
+                                        "Swap was requested with quote {} that is expired!",
+                                        quote_id
+                                    );
+                                    warn!(rejection_reason);
+                                    (false, Some(rejection_reason))
+                                } else {
+                                    (true, None)
+                                }
                             }
                         }
-                    }
-                    Err(e) => {
-                        warn!("Failed to retrieve quote {} from database: {}", quote_id, e);
-                        (false, Some("Quote not found in database".to_string()))
-                    }
-                };
+                        Err(e) => {
+                            warn!("Failed to retrieve quote {} from database: {}", quote_id, e);
+                            (false, Some("Quote not found in database".to_string()))
+                        }
+                    };
 
                 info!(
                     "Quote {} validation result: accepted={}, reason={:?}",

@@ -150,9 +150,7 @@ impl ChainOperations for EthereumChain {
                 message: "Invalid address".to_string(),
             })?;
 
-        let transfer_hint = self
-            .get_transfer(&recipient_address, &lot.amount)
-            .await?;
+        let transfer_hint = self.get_transfer(&recipient_address, &lot.amount).await?;
         if transfer_hint.is_none() {
             return Ok(None);
         }
@@ -167,15 +165,18 @@ impl ChainOperations for EthereumChain {
         market_maker_batch: &MarketMakerBatch,
     ) -> Result<Option<u64>> {
         let embedded_nonce = market_maker_batch.payment_verification.batch_nonce_digest;
-        let transaction_hash: TxHash = tx_hash.parse().map_err(|_| crate::Error::TransactionDeserializationFailed {
-            context: format!("Failed to parse EVM transaction hash {tx_hash}"),
-            loc: location!(),
-        })?;
+        let transaction_hash: TxHash =
+            tx_hash
+                .parse()
+                .map_err(|_| crate::Error::TransactionDeserializationFailed {
+                    context: format!("Failed to parse EVM transaction hash {tx_hash}"),
+                    loc: location!(),
+                })?;
         let transaction = self
             .provider
             .get_transaction_by_hash(transaction_hash)
             .await;
-        
+
         let transaction = match transaction {
             Ok(transaction) => transaction,
             Err(e) => {
@@ -217,7 +218,7 @@ impl ChainOperations for EthereumChain {
                 source: e,
                 loc: location!(),
             })?;
-        
+
         let transaction_receipt = match transaction_receipt {
             Some(transaction_receipt) => transaction_receipt,
             None => {
@@ -227,11 +228,16 @@ impl ChainOperations for EthereumChain {
         };
 
         // create a map of address => expected lot use iter
-        let intra_tx_transfers = extract_all_transfers_from_transaction_receipt(&transaction_receipt);
+        let intra_tx_transfers =
+            extract_all_transfers_from_transaction_receipt(&transaction_receipt);
 
         // Invariant: All transfers in the tx in the order of the payments in the batch
         // Find where intra_tx_transfers begins with the first payment
-        let start_index = intra_tx_transfers.iter().position(|transfer| transfer.inner.data.to == Address::from_str(&market_maker_batch.ordered_payments[0].to_address).unwrap() && transfer.inner.data.value >= market_maker_batch.ordered_payments[0].lot.amount);
+        let start_index = intra_tx_transfers.iter().position(|transfer| {
+            transfer.inner.data.to
+                == Address::from_str(&market_maker_batch.ordered_payments[0].to_address).unwrap()
+                && transfer.inner.data.value >= market_maker_batch.ordered_payments[0].lot.amount
+        });
         let start_index = match start_index {
             Some(start_index) => start_index,
             None => {
@@ -254,21 +260,23 @@ impl ChainOperations for EthereumChain {
         }
 
         // Zip together the transfers and payments starting from start_index
-        let transfers_and_payments = intra_tx_transfers[start_index..].iter()
+        let transfers_and_payments = intra_tx_transfers[start_index..]
+            .iter()
             .zip(&market_maker_batch.ordered_payments);
 
         // Track current index for error reporting
         let mut index = start_index;
-        
+
         // Validate each transfer matches its corresponding payment
         for (transfer, payment) in transfers_and_payments {
-            let expected_recipient = Address::from_str(&payment.to_address)
-                .map_err(|_| crate::Error::BadMarketMakerBatch {
+            let expected_recipient = Address::from_str(&payment.to_address).map_err(|_| {
+                crate::Error::BadMarketMakerBatch {
                     chain: ChainType::Ethereum,
                     tx_hash: tx_hash.to_string(),
                     message: "Invalid recipient address in payment".to_string(),
                     loc: location!(),
-                })?;
+                }
+            })?;
 
             if transfer.address() != self.allowed_token {
                 return Err(crate::Error::BadMarketMakerBatch {
@@ -334,11 +342,8 @@ impl ChainOperations for EthereumChain {
                 loc: location!(),
             });
         }
-        let current_block_height =
-            self.provider
-                .get_block_number()
-                .await;
-        
+        let current_block_height = self.provider.get_block_number().await;
+
         let current_block_height = match current_block_height {
             Ok(current_block_height) => current_block_height,
             Err(e) => {
@@ -350,9 +355,6 @@ impl ChainOperations for EthereumChain {
         let confirmations = current_block_height - transaction_receipt.block_number.unwrap();
         Ok(Some(confirmations))
     }
-
-
-
 
     /// Dump to address here just gives permission for the recipient to call receiveWithAuthorization
     /// What is returned is an unsigned transaction calldata that the recipient can sign and send
@@ -551,7 +553,6 @@ impl EthereumChain {
 
         Ok(transfer_hint)
     }
-
 }
 
 fn extract_all_transfers_from_transaction_receipt(

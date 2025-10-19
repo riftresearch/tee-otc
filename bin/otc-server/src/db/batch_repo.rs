@@ -1,8 +1,8 @@
 use otc_chains::traits::MarketMakerBatch;
 use otc_models::ChainType;
 use sqlx::postgres::PgPool;
-use uuid::Uuid;
 use sqlx::Row;
+use uuid::Uuid;
 
 use crate::error::{OtcServerError, OtcServerResult};
 
@@ -31,9 +31,10 @@ impl BatchRepository {
         let batch_json = serde_json::to_value(batch).map_err(|e| OtcServerError::InvalidData {
             message: format!("Failed to serialize batch: {e}"),
         })?;
-        let swap_ids_json = serde_json::to_value(&swap_ids).map_err(|e| OtcServerError::InvalidData {
-            message: format!("Failed to serialize swap ids: {e}"),
-        })?;
+        let swap_ids_json =
+            serde_json::to_value(&swap_ids).map_err(|e| OtcServerError::InvalidData {
+                message: format!("Failed to serialize swap ids: {e}"),
+            })?;
 
         sqlx::query(
             r#"
@@ -84,11 +85,15 @@ impl BatchRepository {
                 let batch_json: serde_json::Value = row.get("full_batch");
                 let swap_ids_json: serde_json::Value = row.get("swap_ids");
 
-                let batch: MarketMakerBatch = serde_json::from_value(batch_json).map_err(|e| OtcServerError::InvalidData {
-                    message: format!("Failed to deserialize batch: {e}"),
+                let batch: MarketMakerBatch = serde_json::from_value(batch_json).map_err(|e| {
+                    OtcServerError::InvalidData {
+                        message: format!("Failed to deserialize batch: {e}"),
+                    }
                 })?;
-                let swap_ids: Vec<Uuid> = serde_json::from_value(swap_ids_json).map_err(|e| OtcServerError::InvalidData {
-                    message: format!("Failed to deserialize swap ids: {e}"),
+                let swap_ids: Vec<Uuid> = serde_json::from_value(swap_ids_json).map_err(|e| {
+                    OtcServerError::InvalidData {
+                        message: format!("Failed to deserialize swap ids: {e}"),
+                    }
                 })?;
 
                 Ok(Some((batch, swap_ids)))
@@ -97,4 +102,3 @@ impl BatchRepository {
         }
     }
 }
-

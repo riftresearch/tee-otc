@@ -190,8 +190,6 @@ async fn process_transaction(
         tx_builder.add_recipient(op_return_script, Amount::ZERO);
     }
 
-
-
     tx_builder.nlocktime(crate::bitcoin::absolute::LockTime::ZERO);
 
     // Create and sign the transaction

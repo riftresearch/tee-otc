@@ -738,7 +738,7 @@ fn format_amount(amount: U256) -> String {
     let s = amount.to_string();
     let mut result = String::new();
     let mut count = 0;
-    
+
     for ch in s.chars().rev() {
         if count > 0 && count % 3 == 0 {
             result.push(',');
@@ -746,6 +746,6 @@ fn format_amount(amount: U256) -> String {
         result.push(ch);
         count += 1;
     }
-    
+
     result.chars().rev().collect()
 }

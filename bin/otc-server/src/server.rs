@@ -725,7 +725,6 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         }
     }
 
-
     // Handle incoming messages
     let mm_id_clone = mm_id.clone();
     while let Some(msg) = receiver.next().await {
@@ -750,11 +749,11 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
                             MMResponse::Pong { .. } => {
                                 // Handle pong for keepalive
                             }
-                            MMResponse::BatchPaymentSent { 
-                                tx_hash, 
-                                swap_ids, 
+                            MMResponse::BatchPaymentSent {
+                                tx_hash,
+                                swap_ids,
                                 batch_nonce_digest,
-                                .. 
+                                ..
                             } => {
                                 info!(
                                     market_maker_id = %mm_id_clone,
@@ -764,7 +763,14 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
                                 let swap_monitoring_service = state.swap_monitoring_service.clone();
                                 let mm_uuid_clone = mm_uuid;
                                 tokio::spawn(async move {
-                                    let res = swap_monitoring_service.track_batch_payment(mm_uuid_clone, &tx_hash, swap_ids.to_vec(), batch_nonce_digest).await;
+                                    let res = swap_monitoring_service
+                                        .track_batch_payment(
+                                            mm_uuid_clone,
+                                            &tx_hash,
+                                            swap_ids.to_vec(),
+                                            batch_nonce_digest,
+                                        )
+                                        .await;
                                     if let Err(e) = res {
                                         error!(
                                             market_maker_id = %mm_uuid_clone,

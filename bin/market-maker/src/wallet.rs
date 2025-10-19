@@ -2,14 +2,13 @@ use alloy::primitives::{Address, U256};
 use alloy::providers::PendingTransactionError;
 use async_trait::async_trait;
 use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
-use otc_models::TokenIdentifier;
 use otc_models::ChainType;
+use otc_models::TokenIdentifier;
 use snafu::{Location, Snafu};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::oneshot;
 
 use crate::bitcoin_wallet::BitcoinWalletError;
-
 
 #[derive(Debug, Snafu)]
 pub enum WalletError {
@@ -135,7 +134,6 @@ pub struct WalletBalance {
     // sum of balances from all deposit keys
     pub deposit_key_balance: U256,
 }
-
 
 #[async_trait]
 pub trait Wallet: Send + Sync {
@@ -293,7 +291,16 @@ mod tests {
             .total_balance;
         assert!(bal > U256::from(0));
 
-        let txid = wallet.create_batch_payment(vec![Payment { lot: lot.clone(), to_address: "bc1q...".to_string() }], None).await.unwrap();
+        let txid = wallet
+            .create_batch_payment(
+                vec![Payment {
+                    lot: lot.clone(),
+                    to_address: "bc1q...".to_string(),
+                }],
+                None,
+            )
+            .await
+            .unwrap();
         assert_eq!(txid, "mock_txid_123");
 
         // Remove wallet

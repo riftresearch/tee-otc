@@ -236,14 +236,20 @@ async fn test_refund_from_bitcoin_user_deposit(
     }
     // now send funds to the deposit address
     let tx_hash = user_bitcoin_wallet
-        .create_batch_payment(vec![Payment { lot: Lot {
-            currency: Currency {
-                chain: ChainType::Bitcoin,
-                token: TokenIdentifier::Native,
-                decimals: response_json.decimals,
-            },
-            amount: response_json.expected_amount,
-        }, to_address: response_json.deposit_address }], None)
+        .create_batch_payment(
+            vec![Payment {
+                lot: Lot {
+                    currency: Currency {
+                        chain: ChainType::Bitcoin,
+                        token: TokenIdentifier::Native,
+                        decimals: response_json.decimals,
+                    },
+                    amount: response_json.expected_amount,
+                },
+                to_address: response_json.deposit_address,
+            }],
+            None,
+        )
         .await
         .unwrap();
 

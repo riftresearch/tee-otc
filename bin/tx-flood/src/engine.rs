@@ -170,12 +170,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
 
     send_update(
         &update_tx,
-        SwapUpdate::with_amount_and_chain(
-            index,
-            SwapStage::QuoteRequested,
-            amount,
-            deposit_chain,
-        ),
+        SwapUpdate::with_amount_and_chain(index, SwapStage::QuoteRequested, amount, deposit_chain),
     );
 
     let quote = match request_quote(&client, &quote_url, &quote_request).await {
@@ -528,16 +523,16 @@ fn generate_random_amount(min: U256, max: U256) -> U256 {
     if min == max {
         return min;
     }
-    
+
     let mut rng = rand::thread_rng();
     let range = max - min;
-    
+
     // For small ranges that fit in u64, use efficient u64 random generation
     if let Some(range_u64) = range.try_into().ok().filter(|&r: &u64| r <= u64::MAX) {
         let random_offset = rng.gen_range(0..=range_u64);
         return min + U256::from(random_offset);
     }
-    
+
     // For larger ranges, sample bytes and modulo
     // This is less efficient but handles the full U256 range
     let mut bytes = [0u8; 32];

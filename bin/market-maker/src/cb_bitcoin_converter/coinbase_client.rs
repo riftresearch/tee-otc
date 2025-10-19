@@ -311,8 +311,11 @@ impl CoinbaseClient {
             .as_str()
             .context(InvalidRequestSnafu {
                 reason: "Withdrawal id missing or not string",
-            }).map_err(|e| { 
-                tracing::error!("Failed to parse withdrawal response: {e}, response: {text}, body: {body_str}");
+            })
+            .map_err(|e| {
+                tracing::error!(
+                    "Failed to parse withdrawal response: {e}, response: {text}, body: {body_str}"
+                );
                 e
             })?
             .to_string();
@@ -412,7 +415,10 @@ pub async fn convert_btc_to_cbbtc(
         .await?;
 
     // send the btc to the deposit address
-    let payments = vec![Payment { lot: lot.clone(), to_address: btc_deposit_address }];
+    let payments = vec![Payment {
+        lot: lot.clone(),
+        to_address: btc_deposit_address,
+    }];
     let btc_tx_hash = sender_wallet
         .create_batch_payment(payments, None)
         .await
@@ -506,9 +512,11 @@ pub async fn convert_cbbtc_to_btc(
         .get_btc_deposit_address(&btc_account_id, ChainType::Ethereum)
         .await?;
 
-
     // send the cbbtc to the deposit address
-    let payments = vec![Payment { lot: lot.clone(), to_address: cbbtc_deposit_address }];
+    let payments = vec![Payment {
+        lot: lot.clone(),
+        to_address: cbbtc_deposit_address,
+    }];
     let cbbtc_tx_hash = sender_wallet
         .create_batch_payment(payments, None)
         .await

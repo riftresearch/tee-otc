@@ -165,9 +165,7 @@ impl Wallet for EVMWallet {
         // now make sure all payments lots currencies are the same
         for payment in &payments {
             if payment.lot.currency != first_payment.lot.currency {
-                return Err(WalletError::InvalidBatchPaymentRequest {
-                    loc: location!(),
-                });
+                return Err(WalletError::InvalidBatchPaymentRequest { loc: location!() });
             }
         }
 
@@ -438,13 +436,11 @@ pub async fn create_evm_transfer_transaction(
 ) -> Result<TransactionRequest, WalletError> {
     // TODO: Temporary requirement that all tokens are the same in a batch
     for (i, payment) in payments.iter().enumerate() {
-        if i == 0 { 
+        if i == 0 {
             continue;
         }
         if payment.lot.currency != payments[i - 1].lot.currency {
-            return Err(WalletError::InvalidBatchPaymentRequest {
-                loc: location!(),
-            });
+            return Err(WalletError::InvalidBatchPaymentRequest { loc: location!() });
         }
     }
 
@@ -458,16 +454,18 @@ pub async fn create_evm_transfer_transaction(
                     .map_err(|_| WalletError::ParseAddressFailed {
                         context: "invalid token address".to_string(),
                     })?;
-            
 
             let mut recipients = payments
                 .iter()
                 .map(|payment| {
-                    payment.to_address
-                        .parse::<Address>()
-                        .map_err(|_| WalletError::ParseAddressFailed {
-                            context: format!("invalid recipient {} when parsing address for payment", payment.to_address),
-                        })
+                    payment.to_address.parse::<Address>().map_err(|_| {
+                        WalletError::ParseAddressFailed {
+                            context: format!(
+                                "invalid recipient {} when parsing address for payment",
+                                payment.to_address
+                            ),
+                        }
+                    })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
@@ -475,7 +473,8 @@ pub async fn create_evm_transfer_transaction(
                 Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Ethereum])
                     .unwrap();
 
-            let mut amounts: Vec<U256> = payments.iter().map(|payment| payment.lot.amount).collect();
+            let mut amounts: Vec<U256> =
+                payments.iter().map(|payment| payment.lot.amount).collect();
 
             // Determine recipients and amounts based on whether we have payment validation
             if let Some(validation) = &mm_payment_validation {
@@ -488,7 +487,13 @@ pub async fn create_evm_transfer_transaction(
                 Some(storage) => {
                     let mut executions = Vec::new();
                     for payment in payments {
-                        let execution = get_funding_executions_from_deposits(storage, &payment.lot, provider, sender).await?;
+                        let execution = get_funding_executions_from_deposits(
+                            storage,
+                            &payment.lot,
+                            provider,
+                            sender,
+                        )
+                        .await?;
                         executions.extend(execution);
                     }
                     executions

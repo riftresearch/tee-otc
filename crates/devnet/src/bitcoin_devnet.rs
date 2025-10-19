@@ -5,9 +5,9 @@ use std::{path::PathBuf, str::FromStr, time::Duration};
 use bitcoincore_rpc_async::bitcoin::Txid;
 use bitcoincore_rpc_async::json::GetRawTransactionVerbose;
 use corepc_node::Conf;
-use tracing::info;
 use tokio::task::JoinSet;
 use tokio::time::Instant;
+use tracing::info;
 
 use bitcoin::{Address as BitcoinAddress, Amount};
 use bitcoincore_rpc_async::RpcApi;

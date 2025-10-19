@@ -1,4 +1,4 @@
-use crate::{key_derivation, ChainOperations, traits::MarketMakerBatch, Result};
+use crate::{key_derivation, traits::MarketMakerBatch, ChainOperations, Result};
 use alloy::hex;
 use alloy::primitives::U256;
 use async_trait::async_trait;
@@ -385,9 +385,11 @@ impl ChainOperations for BitcoinChain {
         market_maker_batch: &MarketMakerBatch,
     ) -> Result<Option<u64>> {
         let embedded_nonce = market_maker_batch.payment_verification.batch_nonce_digest;
-        let txid = bitcoin::Txid::from_str(tx_hash).map_err(|e| crate::Error::TransactionDeserializationFailed {
-            context: format!("Failed to parse txid: {e}"),
-            loc: location!(),
+        let txid = bitcoin::Txid::from_str(tx_hash).map_err(|e| {
+            crate::Error::TransactionDeserializationFailed {
+                context: format!("Failed to parse txid: {e}"),
+                loc: location!(),
+            }
         })?;
         let tx_verbose_result = self.rpc_client.get_raw_transaction_verbose(&txid).await;
         let tx_verbose = match tx_verbose_result {
@@ -401,14 +403,17 @@ impl ChainOperations for BitcoinChain {
         let confirmations = tx_verbose.confirmations.unwrap_or(0);
         let tx_data = tx_verbose.hex;
 
-        let tx_bytes = hex::decode(tx_data).map_err(|e| crate::Error::TransactionDeserializationFailed {
-            context: format!("Failed to decode bitcoin tx data hex to bytes: {e}"),
-            loc: location!(),
-        })?;
+        let tx_bytes =
+            hex::decode(tx_data).map_err(|e| crate::Error::TransactionDeserializationFailed {
+                context: format!("Failed to decode bitcoin tx data hex to bytes: {e}"),
+                loc: location!(),
+            })?;
 
-        let tx = bitcoin::consensus::deserialize::<Transaction>(&tx_bytes).map_err(|e| crate::Error::TransactionDeserializationFailed {
-            context: format!("Failed to deserialize tx data as bitcoin transaction: {e}"),
-            loc: location!(),
+        let tx = bitcoin::consensus::deserialize::<Transaction>(&tx_bytes).map_err(|e| {
+            crate::Error::TransactionDeserializationFailed {
+                context: format!("Failed to deserialize tx data as bitcoin transaction: {e}"),
+                loc: location!(),
+            }
         })?;
 
         // Each tx can only have one of the following prefixed script pubkeys
@@ -424,7 +429,8 @@ impl ChainOperations for BitcoinChain {
             return Err(crate::Error::BadMarketMakerBatch {
                 chain: ChainType::Bitcoin,
                 tx_hash: tx_hash.to_string(),
-                message: "Batch tx passed contains an invalid number of OP_RETURN outputs".to_string(),
+                message: "Batch tx passed contains an invalid number of OP_RETURN outputs"
+                    .to_string(),
                 loc: location!(),
             });
         }
@@ -441,14 +447,22 @@ impl ChainOperations for BitcoinChain {
             return Err(crate::Error::BadMarketMakerBatch {
                 chain: ChainType::Bitcoin,
                 tx_hash: tx_hash.to_string(),
-                message: "Batch tx passed contains an invalid embedded nonce in OP_RETURN output".to_string(),
+                message: "Batch tx passed contains an invalid embedded nonce in OP_RETURN output"
+                    .to_string(),
                 loc: location!(),
             });
         }
 
         // Validate all payment outputs match the expected payments in the batch
         let first_payment = market_maker_batch.ordered_payments[0].clone();
-        let first_utxo_index = tx.output.iter().position(|output| output.script_pubkey == Address::from_str(&first_payment.to_address).unwrap().assume_checked().script_pubkey() && output.value >= Amount::from_sat(first_payment.lot.amount.to::<u64>()));
+        let first_utxo_index = tx.output.iter().position(|output| {
+            output.script_pubkey
+                == Address::from_str(&first_payment.to_address)
+                    .unwrap()
+                    .assume_checked()
+                    .script_pubkey()
+                && output.value >= Amount::from_sat(first_payment.lot.amount.to::<u64>())
+        });
         let first_utxo_index = match first_utxo_index {
             Some(first_utxo_index) => first_utxo_index,
             None => {
@@ -462,10 +476,14 @@ impl ChainOperations for BitcoinChain {
         };
         let mut track_index = first_utxo_index;
         for (index, expected_payment) in market_maker_batch.ordered_payments.iter().enumerate() {
-            let payment_address = Address::from_str(&expected_payment.to_address).unwrap().assume_checked();
+            let payment_address = Address::from_str(&expected_payment.to_address)
+                .unwrap()
+                .assume_checked();
             let expected_payment_amount = Amount::from_sat(expected_payment.lot.amount.to::<u64>());
             let payment_output = &tx.output[first_utxo_index + index];
-            if payment_output.script_pubkey != payment_address.script_pubkey() || payment_output.value < expected_payment_amount {
+            if payment_output.script_pubkey != payment_address.script_pubkey()
+                || payment_output.value < expected_payment_amount
+            {
                 return Err(crate::Error::BadMarketMakerBatch {
                     chain: ChainType::Bitcoin,
                     tx_hash: tx_hash.to_string(),
@@ -484,19 +502,22 @@ impl ChainOperations for BitcoinChain {
             Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Bitcoin])?
                 .assume_checked();
         let fee_output = &tx.output[fee_index];
-        if fee_output.script_pubkey != fee_address.script_pubkey() || fee_output.value < Amount::from_sat(fee.to::<u64>()) {
+        if fee_output.script_pubkey != fee_address.script_pubkey()
+            || fee_output.value < Amount::from_sat(fee.to::<u64>())
+        {
             // The fee is not valid in some way
             return Err(crate::Error::BadMarketMakerBatch {
                 chain: ChainType::Bitcoin,
                 tx_hash: tx_hash.to_string(),
-                message: format!("Fee output {fee_output:?} does not match expected at index {fee_index}"),
+                message: format!(
+                    "Fee output {fee_output:?} does not match expected at index {fee_index}"
+                ),
                 loc: location!(),
             });
         }
-        // At this point, the batch is valid so return the confirmations 
+        // At this point, the batch is valid so return the confirmations
         Ok(Some(confirmations))
     }
-
 
     fn validate_address(&self, address: &str) -> bool {
         match Address::from_str(address) {
@@ -569,7 +590,7 @@ impl BitcoinChain {
                 // before we download the full tx
                 continue;
             }
-   
+
             // At this point, our new candidate is valid and the most confirmed transfer we've seen
             // so let's return it
             most_confirmed_transfer = Some(TransferInfo {
@@ -581,6 +602,4 @@ impl BitcoinChain {
         }
         Ok(most_confirmed_transfer)
     }
-
-
 }

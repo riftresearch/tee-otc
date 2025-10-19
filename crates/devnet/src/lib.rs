@@ -9,12 +9,12 @@ use blockchain_utils::P2WPKHBitcoinWallet;
 pub use evm_devnet::EthDevnet;
 
 use evm_devnet::ForkConfig;
-use tracing::info;
 use std::sync::Arc;
 use std::{path::PathBuf, str::FromStr};
 use tempfile::{NamedTempFile, TempDir};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
+use tracing::info;
 
 use bitcoincore_rpc_async::RpcApi;
 
@@ -621,7 +621,7 @@ impl RiftDevnetBuilder {
                     e
                 )
             })?;
-        
+
         let funding_amount = bitcoin::Amount::from_btc(1000.0).unwrap().to_sat();
 
         // Fund demo_account with cbBTC
