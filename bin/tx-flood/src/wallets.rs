@@ -313,6 +313,7 @@ impl PaymentWallets {
                 random_evm_addresses
                     .get(swap_index)
                     .copied()
+                    .filter(|addr| *addr != Address::ZERO)
                     .or_else(|| Some(ethereum.0.sender))
                     .ok_or_else(|| anyhow::anyhow!("no EVM address for swap {}", swap_index))
             }

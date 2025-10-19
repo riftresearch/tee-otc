@@ -303,6 +303,7 @@ impl CoinbaseClient {
             .context(HttpRequestSnafu)?;
 
         let text = response.text().await.context(HttpRequestSnafu)?;
+        info!("Withdrawal response: {text}");
         let response_data: serde_json::Value =
             serde_json::from_str(&text).context(JsonDecodeSnafu)?;
 
