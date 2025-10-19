@@ -411,10 +411,12 @@ pub async fn convert_btc_to_cbbtc(
         .get_btc_deposit_address(&btc_account_id, ChainType::Bitcoin)
         .await?;
 
-    // send btc to the deposit address
-    let btc_tx_hash = coinbase_client
-        .withdraw_bitcoin(&btc_deposit_address, &amount_sats, ChainType::Bitcoin)
-        .await?;
+    // send the btc to the deposit address
+    let payments = vec![Payment { lot: lot.clone(), to_address: btc_deposit_address }];
+    let btc_tx_hash = sender_wallet
+        .create_batch_payment(payments, None)
+        .await
+        .context(WalletSnafu)?;
 
     // wait for the btc to be confirmed
     sender_wallet
