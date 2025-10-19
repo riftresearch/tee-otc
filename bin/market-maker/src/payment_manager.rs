@@ -28,8 +28,6 @@ pub struct PaymentManager {
     /// Channels for queuing payments per chain
     bitcoin_tx: UnboundedSender<MarketMakerQueuedPayment>,
     ethereum_tx: UnboundedSender<MarketMakerQueuedPayment>,
-    /// Channel for sending MMResponse messages to the OTC server
-    otc_response_tx: Option<UnboundedSender<ProtocolMessage<MMResponse>>>,
     /// Tracks swap_ids that are currently queued but not yet broadcast
     /// Prevents duplicate queueing during websocket reconnect replays
     in_flight_payments: Arc<DashMap<Uuid, ()>>,
@@ -87,7 +85,6 @@ impl PaymentManager {
             payment_storage,
             bitcoin_tx,
             ethereum_tx,
-            otc_response_tx,
             in_flight_payments,
         }
     }

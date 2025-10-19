@@ -7,7 +7,7 @@ use futures_util::{SinkExt, StreamExt};
 use otc_protocols::mm::{MMRequest, MMResponse, ProtocolMessage};
 use snafu::prelude::*;
 use std::sync::Arc;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, watch};
 use tokio::time::{sleep, Duration};
 use tokio_tungstenite::{
     connect_async_with_config,
@@ -49,8 +49,8 @@ type WebSocketMessage = Message;
 pub struct OtcFillClient {
     config: Config,
     handler: OTCMessageHandler,
-    /// Receiver for unsolicited MMResponse messages (taken on first run)
-    otc_response_rx: Arc<tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<ProtocolMessage<MMResponse>>>>>,
+    /// Broadcasts the currently active websocket sender (if any) to the persistent forwarder
+    websocket_tx_watch: watch::Sender<Option<mpsc::Sender<WebSocketMessage>>>,
 }
 
 impl OtcFillClient {
@@ -62,10 +62,50 @@ impl OtcFillClient {
         otc_response_rx: mpsc::UnboundedReceiver<ProtocolMessage<MMResponse>>,
     ) -> Self {
         let handler = OTCMessageHandler::new(quote_storage, deposit_key_storage, payment_manager);
-        Self { 
-            config, 
+        let (websocket_tx_watch, mut websocket_tx_watch_rx) =
+            watch::channel::<Option<mpsc::Sender<WebSocketMessage>>>(None);
+
+        tokio::spawn(async move {
+            let mut otc_response_rx = otc_response_rx;
+            while let Some(response_msg) = otc_response_rx.recv().await {
+                let response_json = match serde_json::to_string(&response_msg) {
+                    Ok(json) => json,
+                    Err(e) => {
+                        error!("Failed to serialize unsolicited MMResponse: {}", e);
+                        continue;
+                    }
+                };
+
+                let message = Message::Text(response_json);
+
+                loop {
+                    let current_sender = websocket_tx_watch_rx.borrow().clone();
+                    match current_sender {
+                        Some(sender) => match sender.send(message.clone()).await {
+                            Ok(_) => break,
+                            Err(e) => {
+                                error!("Failed to queue unsolicited MMResponse message: {}", e);
+                                if websocket_tx_watch_rx.changed().await.is_err() {
+                                    info!("WebSocket sender watch channel closed, stopping MMResponse forwarder");
+                                    return;
+                                }
+                            }
+                        },
+                        None => {
+                            if websocket_tx_watch_rx.changed().await.is_err() {
+                                info!("WebSocket sender watch channel closed, stopping MMResponse forwarder");
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        Self {
+            config,
             handler,
-            otc_response_rx: Arc::new(tokio::sync::Mutex::new(Some(otc_response_rx))),
+            websocket_tx_watch,
         }
     }
 
@@ -158,35 +198,15 @@ impl OtcFillClient {
             info!("WebSocket writer task finished");
         });
 
+        if self
+            .websocket_tx_watch
+            .send(Some(websocket_tx.clone()))
+            .is_err()
+        {
+            warn!("Failed to publish websocket sender to MMResponse forwarder");
+        }
 
         let message_handler = Arc::new(self.handler.clone());
-
-        // Take the receiver for unsolicited MMResponse messages (only on first connection)
-        let mut otc_response_rx = {
-            let mut guard = self.otc_response_rx.lock().await;
-            guard.take()
-        };
-
-        // Spawn task to forward unsolicited MMResponse messages from PaymentManager to websocket
-        if let Some(mut rx) = otc_response_rx.take() {
-            let websocket_tx_clone = websocket_tx.clone();
-            tokio::spawn(async move {
-                while let Some(response_msg) = rx.recv().await {
-                    let response_json = match serde_json::to_string(&response_msg) {
-                        Ok(json) => json,
-                        Err(e) => {
-                            error!("Failed to serialize unsolicited MMResponse: {}", e);
-                            continue;
-                        }
-                    };
-
-                    if let Err(e) = websocket_tx_clone.send(Message::Text(response_json)).await {
-                        error!("Failed to queue unsolicited MMResponse message: {}", e);
-                        break;
-                    }
-                }
-            });
-        }
 
         // Handle incoming messages
         while let Some(msg) = ws_stream.next().await {
@@ -198,7 +218,8 @@ impl OtcFillClient {
                             let websocket_sender = websocket_tx.clone();
                             let message_handler = message_handler.clone();
                             tokio::spawn(async move {
-                                if let Some(response) = message_handler.handle_request(&protocol_msg).await
+                                if let Some(response) =
+                                    message_handler.handle_request(&protocol_msg).await
                                 {
                                     let response_json = match serde_json::to_string(&response) {
                                         Ok(json) => json,
@@ -236,6 +257,10 @@ impl OtcFillClient {
 
         // Clean up: drop sender to signal writer task to exit
         drop(websocket_tx);
+
+        if self.websocket_tx_watch.send(None).is_err() {
+            warn!("Failed to clear websocket sender for MMResponse forwarder");
+        }
 
         // Wait for writer task to finish
         let _ = writer_handle.await;
