@@ -291,7 +291,7 @@ impl CoinbaseClient {
         let response = self
             .http_client
             .post(endpoint_url)
-            .body(body_str)
+            .body(body_str.clone())
             .header("Content-Type", "application/json")
             .header("User-Agent", USER_AGENT)
             .header("CB-ACCESS-KEY", &auth_headers.access_key)
@@ -311,6 +311,9 @@ impl CoinbaseClient {
             .as_str()
             .context(InvalidRequestSnafu {
                 reason: "Withdrawal id missing or not string",
+            }).map_err(|e| { 
+                tracing::error!("Failed to parse withdrawal response: {e}, response: {text}, body: {body_str}");
+                e
             })?
             .to_string();
 
