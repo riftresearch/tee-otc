@@ -1,7 +1,7 @@
 use crate::db::Database;
 use crate::error::OtcServerError;
 use crate::{config::Settings, services::mm_registry};
-use metrics::histogram;
+use metrics::{gauge, histogram};
 use otc_chains::traits::{MarketMakerQueuedPayment, MarketMakerQueuedPaymentExt};
 use otc_chains::ChainRegistry;
 use otc_models::{MMDepositStatus, Swap, SwapStatus, TxStatus, UserDepositStatus};
@@ -14,7 +14,9 @@ use tokio::time;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-const SWAP_MONITORING_DURATION_METRIC: &str = "otc_swap_monitoring_duration_seconds";
+pub const SWAP_MONITORING_DURATION_METRIC: &str = "otc_swap_monitoring_duration_seconds";
+pub const ACTIVE_INDIVIDUAL_SWAPS_METRIC: &str = "otc_swaps_active_individual";
+pub const ACTIVE_SWAP_BATCHES_METRIC: &str = "otc_swap_batches_active";
 
 #[derive(Debug, Snafu)]
 pub enum MonitoringError {
@@ -161,6 +163,9 @@ impl SwapMonitoringService {
                 acc
             },
         );
+
+        gauge!(ACTIVE_INDIVIDUAL_SWAPS_METRIC).set(individual_swaps.len() as f64);
+        gauge!(ACTIVE_SWAP_BATCHES_METRIC).set(batched_swaps.len() as f64);
 
         let semaphore = Arc::new(Semaphore::new(self.max_concurrent_swaps));
 
@@ -593,8 +598,6 @@ impl SwapMonitoringService {
         match tx_status {
             Some(confirmations) => {
                 let swap_ids: Vec<Uuid> = swaps.iter().map(|s| s.id).collect();
-
-                
 
                 info!(
                     "MM deposit batch {} has {} confirmations for {} swaps",

@@ -252,7 +252,6 @@ impl Swap {
     pub fn is_active(&self) -> bool {
         !matches!(self.status, SwapStatus::Settled | SwapStatus::Failed)
     }
-
 }
 
 #[cfg(test)]

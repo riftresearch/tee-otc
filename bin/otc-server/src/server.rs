@@ -8,7 +8,13 @@ use crate::{
         swap_repo::{SWAP_FEES_TOTAL_METRIC, SWAP_VOLUME_TOTAL_METRIC},
         Database,
     },
-    services::{MMRegistry, SwapManager, SwapMonitoringService},
+    services::{
+        swap_monitoring::{
+            ACTIVE_INDIVIDUAL_SWAPS_METRIC, ACTIVE_SWAP_BATCHES_METRIC,
+            SWAP_MONITORING_DURATION_METRIC,
+        },
+        MMRegistry, SwapManager, SwapMonitoringService,
+    },
     OtcServerArgs, Result,
 };
 use axum::{
@@ -61,8 +67,6 @@ struct Status {
 
 const MM_PING_INTERVAL: Duration = Duration::from_secs(30);
 const QUOTE_LATENCY_METRIC: &str = "otc_quote_response_seconds";
-const SWAP_MONITORING_DURATION_METRIC: &str = "otc_swap_monitoring_duration_seconds";
-
 static PROMETHEUS_HANDLE: OnceLock<Arc<PrometheusHandle>> = OnceLock::new();
 
 pub async fn run_server(args: OtcServerArgs) -> Result<()> {
@@ -294,6 +298,16 @@ fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
     describe_histogram!(
         SWAP_MONITORING_DURATION_METRIC,
         "Duration in seconds for monitoring all active swaps in a single iteration."
+    );
+
+    describe_gauge!(
+        ACTIVE_INDIVIDUAL_SWAPS_METRIC,
+        "Current number of swaps monitored individually in the latest monitoring cycle."
+    );
+
+    describe_gauge!(
+        ACTIVE_SWAP_BATCHES_METRIC,
+        "Current number of market maker deposit batches monitored in the latest monitoring cycle."
     );
 
     describe_counter!(
