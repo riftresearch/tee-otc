@@ -1,14 +1,11 @@
--- Ensure the dedicated schema exists so objects land in quote_storage
-CREATE SCHEMA IF NOT EXISTS quote_storage;
-
 -- Market Maker Quotes Table
 -- This migration creates the quotes table for the market maker to store locally generated quotes
 
 -- Enable UUID extension
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- Create market maker quotes table
-CREATE TABLE IF NOT EXISTS mm_quotes (
+-- Create market maker quotes table in the public schema
+CREATE TABLE IF NOT EXISTS public.mm_quotes (
     id UUID PRIMARY KEY,
     
     -- The market maker that created the quote
@@ -38,10 +35,10 @@ CREATE TABLE IF NOT EXISTS mm_quotes (
 );
 
 -- Create indexes for efficient queries
-CREATE INDEX IF NOT EXISTS idx_mm_quotes_market_maker ON mm_quotes(market_maker_id);
-CREATE INDEX IF NOT EXISTS idx_mm_quotes_expires_at ON mm_quotes(expires_at);
-CREATE INDEX IF NOT EXISTS idx_mm_quotes_created_at ON mm_quotes(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_mm_quotes_market_maker ON public.mm_quotes(market_maker_id);
+CREATE INDEX IF NOT EXISTS idx_mm_quotes_expires_at ON public.mm_quotes(expires_at);
+CREATE INDEX IF NOT EXISTS idx_mm_quotes_created_at ON public.mm_quotes(created_at DESC);
 
 -- Index for finding unsent quotes
-CREATE INDEX IF NOT EXISTS idx_mm_quotes_unsent ON mm_quotes(sent_to_rfq, sent_to_otc)
+CREATE INDEX IF NOT EXISTS idx_mm_quotes_unsent ON public.mm_quotes(sent_to_rfq, sent_to_otc)
 WHERE sent_to_rfq = FALSE OR sent_to_otc = FALSE;

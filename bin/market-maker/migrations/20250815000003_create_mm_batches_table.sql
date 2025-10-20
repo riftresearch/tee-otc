@@ -1,8 +1,5 @@
--- Ensure the dedicated schema exists so objects land in payment_storage
-CREATE SCHEMA IF NOT EXISTS payment_storage;
-
 -- Track batch payments executed by the market maker
-CREATE TABLE IF NOT EXISTS mm_batches (
+CREATE TABLE IF NOT EXISTS public.mm_batches (
     txid TEXT PRIMARY KEY,
     chain TEXT NOT NULL,
     swap_ids UUID[] NOT NULL,
@@ -11,4 +8,4 @@ CREATE TABLE IF NOT EXISTS mm_batches (
 );
 
 CREATE INDEX IF NOT EXISTS idx_mm_batches_created_at
-    ON mm_batches (created_at);
+    ON public.mm_batches (created_at);

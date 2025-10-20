@@ -1,8 +1,5 @@
--- Ensure the dedicated schema exists so objects land in deposit_key_storage
-CREATE SCHEMA IF NOT EXISTS deposit_key_storage;
-
--- Create table for market maker deposits
-CREATE TABLE IF NOT EXISTS mm_deposits (
+-- Create table for market maker deposits in the public schema
+CREATE TABLE IF NOT EXISTS public.mm_deposits (
     private_key  TEXT      NOT NULL PRIMARY KEY,
     chain        TEXT      NOT NULL,
     token        JSONB     NOT NULL,
@@ -18,4 +15,4 @@ CREATE TABLE IF NOT EXISTS mm_deposits (
 
 -- Helpful index for matching/scanning available deposits
 CREATE INDEX IF NOT EXISTS idx_mm_deposits_match
-ON mm_deposits (status, chain, decimals, created_at, private_key);
+ON public.mm_deposits (status, chain, decimals, created_at, private_key);
