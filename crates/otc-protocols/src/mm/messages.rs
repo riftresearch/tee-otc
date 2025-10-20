@@ -67,6 +67,12 @@ pub enum MMRequest {
         request_id: Uuid,
         timestamp: DateTime<Utc>,
     },
+
+    /// Acknowledge MM keepalive ping
+    Pong {
+        request_id: Uuid,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 /// Messages sent from Market Maker to OTC server
@@ -106,6 +112,16 @@ pub enum MMResponse {
     SwapCompleteAck {
         request_id: Uuid,
         swap_id: Uuid,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Market maker initiated keepalive ping
+    Ping {
+        request_id: Uuid,
+        /// MM's current status
+        status: MMStatus,
+        /// Software version
+        version: String,
         timestamp: DateTime<Utc>,
     },
 

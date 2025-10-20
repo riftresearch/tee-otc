@@ -42,6 +42,15 @@ pub struct SettledSwapNotification {
     pub deposit_chain: ChainType,
 }
 
+#[derive(Debug, Clone)]
+pub struct ForceSwapNotification {
+    pub swap_id: Uuid,
+    pub market_maker_id: Uuid,
+    pub user_deposit_salt: [u8; 32],
+    pub user_deposit_tx_hash: String,
+    pub lot: Lot,
+}
+
 #[derive(Clone)]
 pub struct SwapRepository {
     pool: PgPool,
@@ -495,6 +504,64 @@ impl SwapRepository {
                 user_deposit_tx_hash: deposit_status.tx_hash,
                 lot,
                 deposit_chain,
+            });
+        }
+
+        Ok(swaps)
+    }
+
+    pub async fn get_swaps_waiting_mm_for_force_complete(
+        &self,
+    ) -> OtcServerResult<Vec<ForceSwapNotification>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                s.id AS swap_id,
+                s.market_maker_id,
+                s.user_deposit_salt,
+                s.user_deposit_status,
+                q.from_chain,
+                q.from_token,
+                q.from_amount,
+                q.from_decimals
+            FROM swaps s
+            JOIN quotes q ON s.quote_id = q.id
+            WHERE (s.status = $1 OR s.status = $2)
+              AND s.user_deposit_status IS NOT NULL
+            "#,
+        )
+        .bind(SwapStatus::WaitingMMDepositInitiated)
+        .bind(SwapStatus::WaitingMMDepositConfirmed)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut swaps = Vec::with_capacity(rows.len());
+        for row in rows {
+            let salt_vec: Vec<u8> = row.try_get("user_deposit_salt")?;
+            if salt_vec.len() != 32 {
+                return Err(OtcServerError::InvalidData {
+                    message: "user_deposit_salt must be exactly 32 bytes".to_string(),
+                });
+            }
+            let mut user_deposit_salt = [0u8; 32];
+            user_deposit_salt.copy_from_slice(&salt_vec);
+
+            let user_deposit_status_json: serde_json::Value = row.try_get("user_deposit_status")?;
+            let user_deposit_status = user_deposit_status_from_json(user_deposit_status_json)?;
+
+            let lot = lot_from_db(
+                row.try_get::<String, _>("from_chain")?,
+                row.try_get::<serde_json::Value, _>("from_token")?,
+                row.try_get::<String, _>("from_amount")?,
+                row.try_get::<i16, _>("from_decimals")? as u8,
+            )?;
+
+            swaps.push(ForceSwapNotification {
+                swap_id: row.try_get("swap_id")?,
+                market_maker_id: row.try_get("market_maker_id")?,
+                user_deposit_salt,
+                user_deposit_tx_hash: user_deposit_status.tx_hash,
+                lot,
             });
         }
 

@@ -2,7 +2,7 @@ use crate::db::Database;
 use crate::error::OtcServerError;
 use crate::{config::Settings, services::mm_registry};
 use metrics::histogram;
-use otc_chains::traits::{MarketMakerBatch, MarketMakerQueuedPayment, MarketMakerQueuedPaymentExt};
+use otc_chains::traits::{MarketMakerQueuedPayment, MarketMakerQueuedPaymentExt};
 use otc_chains::ChainRegistry;
 use otc_models::{MMDepositStatus, Swap, SwapStatus, TxStatus, UserDepositStatus};
 use snafu::{location, prelude::*, Location};
@@ -428,6 +428,22 @@ impl SwapMonitoringService {
         }
 
         let dest_currency = swaps[0].quote.to.currency.clone();
+
+        if self
+            .db
+            .batches()
+            .get_batch(&dest_currency.chain, tx_hash)
+            .await
+            .context(DatabaseSnafu)?
+            .is_some()
+        {
+            info!(
+                market_maker_id = %market_maker_id,
+                tx_hash = %tx_hash,
+                "Batch payment already tracked; skipping duplicate notification"
+            );
+            return Ok(());
+        }
 
         // Swap state verification
         for swap in &swaps {

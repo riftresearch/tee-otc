@@ -4,17 +4,19 @@ use crate::otc_handler::OTCMessageHandler;
 use crate::payment_manager::PaymentManager;
 use crate::quote_storage::QuoteStorage;
 use futures_util::{SinkExt, StreamExt};
-use otc_protocols::mm::{MMRequest, MMResponse, ProtocolMessage};
+use otc_protocols::mm::{MMRequest, MMResponse, MMStatus, ProtocolMessage};
 use snafu::prelude::*;
 use std::sync::Arc;
-use tokio::sync::{mpsc, watch};
-use tokio::time::{sleep, Duration};
+use tokio::sync::Notify;
+use tokio::sync::{mpsc, oneshot, watch, Mutex};
+use tokio::time::{sleep, Duration, Instant};
 use tokio_tungstenite::{
     connect_async_with_config,
     tungstenite::{http, Message},
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use url::Url;
+use uuid::Uuid;
 
 #[derive(Debug, Snafu)]
 pub enum ClientError {
@@ -45,6 +47,15 @@ pub enum ClientError {
 type Result<T, E = ClientError> = std::result::Result<T, E>;
 
 type WebSocketMessage = Message;
+
+const PING_INTERVAL_SECS: u64 = 30;
+const PING_TIMEOUT_SECS: u64 = 10;
+const READ_TIMEOUT_SECS: u64 = 60;
+
+struct PendingPing {
+    id: Uuid,
+    sent_at: Instant,
+}
 
 pub struct OtcFillClient {
     config: Config,
@@ -106,6 +117,57 @@ impl OtcFillClient {
             config,
             handler,
             websocket_tx_watch,
+        }
+    }
+
+    async fn replay_sent_batches(&self, websocket_sender: &mpsc::Sender<WebSocketMessage>) {
+        let payment_manager = self.handler.payment_manager();
+        let storage = payment_manager.payment_storage();
+
+        let batches = match storage.list_batches().await {
+            Ok(batches) => batches,
+            Err(e) => {
+                error!("Failed to load cached batch payments for replay: {}", e);
+                return;
+            }
+        };
+
+        if batches.is_empty() {
+            return;
+        }
+
+        info!(
+            "Replaying {} batch payment notifications to OTC server",
+            batches.len()
+        );
+
+        for batch in batches {
+            let protocol_msg = ProtocolMessage {
+                version: env!("CARGO_PKG_VERSION").to_string(),
+                sequence: 0,
+                payload: MMResponse::BatchPaymentSent {
+                    request_id: Uuid::new_v4(),
+                    tx_hash: batch.txid.clone(),
+                    swap_ids: batch.swap_ids.clone(),
+                    batch_nonce_digest: batch.batch_nonce_digest,
+                    timestamp: batch.created_at,
+                },
+            };
+
+            match serde_json::to_string(&protocol_msg) {
+                Ok(json) => {
+                    if let Err(e) = websocket_sender.send(Message::Text(json)).await {
+                        error!("Failed to replay batch {} to OTC server: {}", batch.txid, e);
+                        break;
+                    }
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to serialize batch payment replay message for {}: {}",
+                        batch.txid, e
+                    );
+                }
+            }
         }
     }
 
@@ -198,6 +260,85 @@ impl OtcFillClient {
             info!("WebSocket writer task finished");
         });
 
+        let pending_ping = Arc::new(Mutex::new(None::<PendingPing>));
+        let disconnect_notify = Arc::new(Notify::new());
+
+        let ping_sender = websocket_tx.clone();
+        let pending_for_ping = pending_ping.clone();
+        let notify_for_ping = disconnect_notify.clone();
+        let (ping_shutdown_tx, ping_shutdown_rx) = oneshot::channel();
+        let mut ping_shutdown_rx = ping_shutdown_rx;
+        let ping_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(PING_INTERVAL_SECS));
+            let mut sequence: u64 = 0;
+            let version = env!("CARGO_PKG_VERSION").to_string();
+
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let mut new_ping_id = None;
+                        let mut timed_out = false;
+                        {
+                            let guard = pending_for_ping.lock().await;
+                            if let Some(pending) = guard.as_ref() {
+                                if pending.sent_at.elapsed() >= Duration::from_secs(PING_TIMEOUT_SECS) {
+                                    timed_out = true;
+                                }
+                            } else {
+                                new_ping_id = Some(Uuid::new_v4());
+                            }
+                        }
+
+                        if timed_out {
+                            warn!(
+                                "OTC ping watchdog detected no pong within {}s; closing connection",
+                                PING_TIMEOUT_SECS
+                            );
+                            notify_for_ping.notify_waiters();
+                            break;
+                        }
+
+                        if let Some(ping_id) = new_ping_id {
+                            let ping_message = ProtocolMessage {
+                                version: version.clone(),
+                                sequence,
+                                payload: MMResponse::Ping {
+                                    request_id: ping_id,
+                                    status: MMStatus::Active,
+                                    version: version.clone(),
+                                    timestamp: utc::now(),
+                                },
+                            };
+
+                            match serde_json::to_string(&ping_message) {
+                                Ok(json) => {
+                                    if ping_sender.send(Message::Text(json)).await.is_err() {
+                                        warn!("OTC ping sender channel closed; stopping ping task");
+                                        notify_for_ping.notify_waiters();
+                                        break;
+                                    }
+
+                                    let mut guard = pending_for_ping.lock().await;
+                                    *guard = Some(PendingPing {
+                                        id: ping_id,
+                                        sent_at: Instant::now(),
+                                    });
+                                    sequence = sequence.wrapping_add(1);
+                                }
+                                Err(e) => {
+                                    error!("Failed to serialize OTC ping: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    _ = &mut ping_shutdown_rx => {
+                        debug!("OTC ping task received shutdown signal");
+                        break;
+                    }
+                }
+            }
+        });
+
         if self
             .websocket_tx_watch
             .send(Some(websocket_tx.clone()))
@@ -206,54 +347,100 @@ impl OtcFillClient {
             warn!("Failed to publish websocket sender to MMResponse forwarder");
         }
 
+        self.replay_sent_batches(&websocket_tx).await;
+
         let message_handler = Arc::new(self.handler.clone());
+        let read_timeout = tokio::time::sleep(Duration::from_secs(READ_TIMEOUT_SECS));
+        tokio::pin!(read_timeout);
 
         // Handle incoming messages
-        while let Some(msg) = ws_stream.next().await {
-            match msg {
-                Ok(Message::Text(text)) => {
-                    // Try to parse as a protocol message
-                    match serde_json::from_str::<ProtocolMessage<MMRequest>>(&text) {
-                        Ok(protocol_msg) => {
-                            let websocket_sender = websocket_tx.clone();
-                            let message_handler = message_handler.clone();
-                            tokio::spawn(async move {
-                                if let Some(response) =
-                                    message_handler.handle_request(&protocol_msg).await
-                                {
-                                    let response_json = match serde_json::to_string(&response) {
-                                        Ok(json) => json,
-                                        Err(e) => {
-                                            error!("Failed to serialize response: {}", e);
-                                            return;
-                                        }
-                                    };
+        loop {
+            tokio::select! {
+                _ = disconnect_notify.notified() => {
+                    warn!("OTC disconnect requested by watchdog");
+                    break;
+                }
+                _ = &mut read_timeout => {
+                    warn!(
+                        "OTC WebSocket read timed out after {}s; disconnecting",
+                        READ_TIMEOUT_SECS
+                    );
+                    disconnect_notify.notify_waiters();
+                    break;
+                }
+                maybe_msg = ws_stream.next() => {
+                    match maybe_msg {
+                        Some(msg) => {
+                            read_timeout.as_mut().reset(Instant::now() + Duration::from_secs(READ_TIMEOUT_SECS));
+                            match msg {
+                                Ok(Message::Text(text)) => {
+                                    match serde_json::from_str::<ProtocolMessage<MMRequest>>(&text) {
+                                        Ok(protocol_msg) => {
+                                            if let MMRequest::Pong { request_id, .. } = &protocol_msg.payload {
+                                                let mut guard = pending_ping.lock().await;
+                                                if guard
+                                                    .as_ref()
+                                                    .map(|pending| pending.id == *request_id)
+                                                    .unwrap_or(false)
+                                                {
+                                                    *guard = None;
+                                                }
+                                            }
 
-                                    // Send response through the fan-in channel to the writer task
-                                    if let Err(e) =
-                                        websocket_sender.send(Message::Text(response_json)).await
-                                    {
-                                        error!("Failed to queue response message: {}", e);
+                                            let websocket_sender = websocket_tx.clone();
+                                            let message_handler = message_handler.clone();
+                                            tokio::spawn(async move {
+                                                if let Some(response) =
+                                                    message_handler.handle_request(&protocol_msg).await
+                                                {
+                                                    let response_json =
+                                                        match serde_json::to_string(&response) {
+                                                            Ok(json) => json,
+                                                            Err(e) => {
+                                                                error!("Failed to serialize response: {}", e);
+                                                                return;
+                                                            }
+                                                        };
+
+                                                    if let Err(e) = websocket_sender
+                                                        .send(Message::Text(response_json))
+                                                        .await
+                                                    {
+                                                        error!("Failed to queue response message: {}", e);
+                                                    }
+                                                }
+                                            });
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to parse message: {}", e);
+                                        }
                                     }
                                 }
-                            });
+                                Ok(Message::Close(_)) => {
+                                    info!("Server closed connection");
+                                    disconnect_notify.notify_waiters();
+                                    break;
+                                }
+                                Err(e) => {
+                                    error!("WebSocket error: {}", e);
+                                    disconnect_notify.notify_waiters();
+                                    break;
+                                }
+                                _ => {}
+                            }
                         }
-                        Err(e) => {
-                            error!("Failed to parse message: {}", e);
+                        None => {
+                            info!("OTC WebSocket stream ended by server");
+                            disconnect_notify.notify_waiters();
+                            break;
                         }
                     }
                 }
-                Ok(Message::Close(_)) => {
-                    info!("Server closed connection");
-                    break;
-                }
-                Err(e) => {
-                    error!("WebSocket error: {}", e);
-                    break;
-                }
-                _ => {}
             }
         }
+
+        let _ = ping_shutdown_tx.send(());
+        let _ = ping_handle.await;
 
         // Clean up: drop sender to signal writer task to exit
         drop(websocket_tx);

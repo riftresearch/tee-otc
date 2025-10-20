@@ -216,6 +216,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         )
         .route("/api/v1/tdx/quote", get(get_tdx_quote))
         .route("/api/v1/tdx/info", get(get_tdx_info))
+        .route("/force-swap-complete", post(force_swap_complete))
         .with_state(state);
 
     // Add CORS layer if cors_domain is specified
@@ -566,11 +567,109 @@ struct ConnectedMarketMakersResponse {
     market_makers: Vec<Uuid>,
 }
 
+#[derive(Serialize)]
+struct ForceSwapCompleteResponse {
+    processed: usize,
+    successes: Vec<Uuid>,
+    failures: Vec<ForceSwapCompleteFailure>,
+}
+
+#[derive(Serialize)]
+struct ForceSwapCompleteFailure {
+    swap_id: Uuid,
+    reason: String,
+}
+
 async fn get_connected_market_makers(
     State(state): State<AppState>,
 ) -> Json<ConnectedMarketMakersResponse> {
     let market_makers = state.mm_registry.get_connected_market_makers();
     Json(ConnectedMarketMakersResponse { market_makers })
+}
+
+async fn force_swap_complete(
+    State(state): State<AppState>,
+) -> Result<Json<ForceSwapCompleteResponse>, crate::error::OtcServerError> {
+    let swaps = state
+        .db
+        .swaps()
+        .get_swaps_waiting_mm_for_force_complete()
+        .await?;
+
+    let total = swaps.len();
+    warn!(
+        total = total,
+        "Force swap-complete endpoint triggered; attempting to send private keys"
+    );
+
+    let master_key = state.swap_manager.master_key_bytes();
+    let mut successes = Vec::new();
+    let mut failures = Vec::new();
+
+    for swap in swaps {
+        info!(
+            swap_id = %swap.swap_id,
+            market_maker_id = %swap.market_maker_id,
+            "Force-sending SwapComplete notification"
+        );
+
+        let chain_ops = match state.chain_registry.get(&swap.lot.currency.chain) {
+            Some(ops) => ops,
+            None => {
+                let reason = format!("Unsupported chain {:?}", swap.lot.currency.chain);
+                warn!(
+                    swap_id = %swap.swap_id,
+                    reason = %reason,
+                    "Unable to locate chain operations for force completion"
+                );
+                failures.push(ForceSwapCompleteFailure {
+                    swap_id: swap.swap_id,
+                    reason,
+                });
+                continue;
+            }
+        };
+
+        let wallet = match chain_ops.derive_wallet(&master_key, &swap.user_deposit_salt) {
+            Ok(wallet) => wallet,
+            Err(e) => {
+                let reason = format!("Failed to derive user deposit wallet: {e}");
+                warn!(
+                    swap_id = %swap.swap_id,
+                    reason = %reason,
+                    "Unable to derive wallet during force completion"
+                );
+                failures.push(ForceSwapCompleteFailure {
+                    swap_id: swap.swap_id,
+                    reason,
+                });
+                continue;
+            }
+        };
+
+        let private_key = wallet.private_key().to_owned();
+
+        state
+            .mm_registry
+            .notify_swap_complete(
+                &swap.market_maker_id,
+                &swap.swap_id,
+                &private_key,
+                &swap.lot,
+                &swap.user_deposit_tx_hash,
+            )
+            .await;
+
+        successes.push(swap.swap_id);
+    }
+
+    let response = ForceSwapCompleteResponse {
+        processed: total,
+        successes,
+        failures,
+    };
+
+    Ok(Json(response))
 }
 
 async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
@@ -745,6 +844,9 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
                                 state
                                     .mm_registry
                                     .handle_validation_response(&mm_uuid, &quote_id, accepted);
+                            }
+                            MMResponse::Ping { .. } => {
+                                // Handle keepalive ping (no-op; we respond elsewhere)
                             }
                             MMResponse::Pong { .. } => {
                                 // Handle pong for keepalive

@@ -6,7 +6,10 @@ use dashmap::{mapref::entry::Entry, DashMap};
 use otc_chains::traits::{MarketMakerQueuedPayment, MarketMakerQueuedPaymentExt};
 use otc_models::{ChainType, Lot};
 use otc_protocols::mm::{MMErrorCode, MMResponse};
-use tokio::{sync::mpsc::{self, UnboundedSender}, task::JoinSet};
+use tokio::{
+    sync::mpsc::{self, UnboundedSender},
+    task::JoinSet,
+};
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -155,7 +158,7 @@ impl PaymentManager {
                 entry.insert(());
             }
         }
-        
+
         info!("Queueing payment for swap {swap_id} and quote {quote_id}");
 
         // Create queued payment
@@ -188,8 +191,12 @@ impl PaymentManager {
                     message: "Failed to queue payment - channel closed".to_string(),
                     timestamp: utc::now(),
                 }
-            },
+            }
         }
+    }
+
+    pub fn payment_storage(&self) -> Arc<PaymentStorage> {
+        self.payment_storage.clone()
     }
 }
 
@@ -216,7 +223,6 @@ fn spawn_batch_processor(
         loop {
             // Drain up to batch_size items from the channel
             let mut queued_payments = Vec::new();
-            
             while queued_payments.len() < config.batch_size {
                 match rx.try_recv() {
                     Ok(payment) => queued_payments.push(payment),
@@ -257,14 +263,21 @@ fn spawn_batch_processor(
             match wallet.create_batch_payment(payment_batch.ordered_payments, Some(payment_batch.payment_verification)).await {
                 Ok(tx_hash) => {
                     let swap_ids: Vec<Uuid> = queued_payments.iter().map(|qp| qp.swap_id).collect();
-                    
                     info!(
                         "Batch payment successful for {:?}: tx_hash={}, swap_ids={:?}",
                         chain_type, tx_hash, swap_ids
                     );
 
                     // Store all payments with the same tx_hash
-                    if let Err(e) = payment_storage.set_batch_payment(swap_ids.clone(), tx_hash.clone()).await {
+                    if let Err(e) = payment_storage
+                        .set_batch_payment(
+                            swap_ids.clone(),
+                            tx_hash.clone(),
+                            chain_type,
+                            batch_nonce_digest,
+                        )
+                        .await
+                    {
                         error!(
                             "Failed to store batch payment in database for {:?}: swap_ids={:?}, error={}",
                             chain_type, swap_ids, e

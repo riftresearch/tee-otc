@@ -25,6 +25,10 @@ impl OTCMessageHandler {
         }
     }
 
+    pub fn payment_manager(&self) -> Arc<PaymentManager> {
+        self.payment_manager.clone()
+    }
+
     pub async fn handle_request(
         &self,
         msg: &ProtocolMessage<MMRequest>,
@@ -216,6 +220,8 @@ impl OTCMessageHandler {
                     payload: response,
                 })
             }
+
+            MMRequest::Pong { .. } => None,
         }
     }
 }
