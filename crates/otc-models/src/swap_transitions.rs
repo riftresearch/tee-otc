@@ -253,13 +253,6 @@ impl Swap {
         !matches!(self.status, SwapStatus::Settled | SwapStatus::Failed)
     }
 
-    /// Get required confirmations based on chain and amount
-    #[must_use]
-    pub fn get_required_confirmations(&self) -> (u64, u64) {
-        // TODO: Implement logic based on chain type and amount
-        // For now, return default values
-        (3, 3) // (user_confirmations, mm_confirmations)
-    }
 }
 
 #[cfg(test)]

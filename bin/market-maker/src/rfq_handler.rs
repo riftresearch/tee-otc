@@ -128,6 +128,10 @@ impl RFQMessageHandler {
                     payload: response,
                 })
             }
+            RFQRequest::Pong { .. } => {
+                // Keep-alive acknowledgment from server, nothing to do
+                None
+            }
         }
     }
 }

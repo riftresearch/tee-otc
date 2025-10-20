@@ -357,8 +357,7 @@ impl SwapMonitoringService {
                     .context(DatabaseSnafu)?;
 
                 // Check if we have enough confirmations
-                let (required_user_confirmations, _) = swap.get_required_confirmations();
-                if confirmations >= required_user_confirmations {
+                if confirmations >= chain_ops.minimum_block_confirmations().into() {
                     info!(
                         "User deposit for swap {} has reached required confirmations",
                         swap.id
@@ -561,7 +560,7 @@ impl SwapMonitoringService {
         // Get the chain operations for the MM's deposit chain
         let chain_ops =
             self.chain_registry
-                .get(&deposit_chain)
+                .get(deposit_chain)
                 .ok_or(MonitoringError::ChainOperation {
                     source: otc_chains::Error::ChainNotSupported {
                         chain: format!("{:?}", deposit_chain),
@@ -595,6 +594,8 @@ impl SwapMonitoringService {
             Some(confirmations) => {
                 let swap_ids: Vec<Uuid> = swaps.iter().map(|s| s.id).collect();
 
+                
+
                 info!(
                     "MM deposit batch {} has {} confirmations for {} swaps",
                     mm_tx_hash,
@@ -610,8 +611,7 @@ impl SwapMonitoringService {
                     .context(DatabaseSnafu)?;
 
                 // Check if we have enough confirmations (use first swap's requirements)
-                let (_, required_mm_confirmations) = first_swap.get_required_confirmations();
-                if confirmations >= required_mm_confirmations {
+                if confirmations >= chain_ops.minimum_block_confirmations().into() {
                     info!(
                         "MM deposit batch {} has reached required confirmations, settling {} swaps",
                         mm_tx_hash,

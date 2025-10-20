@@ -1,16 +1,18 @@
 use crate::config::Config;
 use crate::rfq_handler::RFQMessageHandler;
 use futures_util::{SinkExt, StreamExt};
-use otc_protocols::rfq::{ProtocolMessage, RFQRequest};
+use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse};
 use snafu::prelude::*;
-use tokio::sync::mpsc;
-use tokio::time::{sleep, Duration};
+use std::sync::Arc;
+use tokio::sync::{mpsc, oneshot, Mutex, Notify};
+use tokio::time::{sleep, Duration, Instant};
 use tokio_tungstenite::{
     connect_async_with_config,
     tungstenite::{http, Message},
 };
 use tracing::{error, info, warn};
 use url::Url;
+use uuid::Uuid;
 
 #[derive(Debug, Snafu)]
 pub enum RfqClientError {
@@ -37,6 +39,15 @@ pub enum RfqClientError {
 type Result<T, E = RfqClientError> = std::result::Result<T, E>;
 
 type WebSocketMessage = Message;
+
+const PING_INTERVAL_SECS: u64 = 30;
+const PING_TIMEOUT_SECS: u64 = 10;
+const READ_TIMEOUT_SECS: u64 = 60;
+
+struct PendingPing {
+    id: Uuid,
+    sent_at: Instant,
+}
 
 #[derive(Clone)]
 pub struct WebSocketSender {
@@ -183,51 +194,172 @@ impl RfqClient {
             info!("WebSocket writer task finished");
         });
 
-        // Handle incoming messages
-        while let Some(msg) = ws_stream.next().await {
-            match msg {
-                Ok(Message::Text(text)) => {
-                    // Try to parse as a protocol message
-                    match serde_json::from_str::<ProtocolMessage<RFQRequest>>(&text) {
-                        Ok(protocol_msg) => {
-                            let handler = self.handler.clone();
-                            let websocket_sender = websocket_tx.clone();
-                            tokio::spawn(async move {
-                                if let Some(response) = handler.handle_request(&protocol_msg).await
-                                {
-                                    let response_json = match serde_json::to_string(&response) {
-                                        Ok(json) => json,
-                                        Err(e) => {
-                                            error!("Failed to serialize response: {}", e);
-                                            return;
-                                        }
-                                    };
+        let pending_ping = Arc::new(Mutex::new(None::<PendingPing>));
+        let disconnect_notify = Arc::new(Notify::new());
 
-                                    // Send response through the fan-in channel to the writer task
-                                    if let Err(e) =
-                                        websocket_sender.send(Message::Text(response_json)).await
-                                    {
-                                        error!("Failed to queue response message: {}", e);
+        let ping_sender = websocket_tx.clone();
+        let pending_for_ping = pending_ping.clone();
+        let notify_for_ping = disconnect_notify.clone();
+        let (ping_shutdown_tx, ping_shutdown_rx) = oneshot::channel();
+        let mut ping_shutdown_rx = ping_shutdown_rx;
+        let ping_handle = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(PING_INTERVAL_SECS));
+            let mut sequence: u64 = 0;
+            let version = env!("CARGO_PKG_VERSION").to_string();
+
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let mut new_ping_id = None;
+                        let mut timed_out = false;
+                        {
+                            let guard = pending_for_ping.lock().await;
+                            if let Some(pending) = guard.as_ref() {
+                                if pending.sent_at.elapsed() >= Duration::from_secs(PING_TIMEOUT_SECS) {
+                                    timed_out = true;
+                                }
+                            } else {
+                                new_ping_id = Some(Uuid::new_v4());
+                            }
+                        }
+
+                        if timed_out {
+                            warn!(
+                                "RFQ ping watchdog detected no pong within {}s; closing connection",
+                                PING_TIMEOUT_SECS
+                            );
+                            notify_for_ping.notify_waiters();
+                            break;
+                        }
+
+                        if let Some(ping_id) = new_ping_id {
+                            let ping_message = ProtocolMessage {
+                                version: version.clone(),
+                                sequence,
+                                payload: RFQResponse::Ping {
+                                    request_id: ping_id,
+                                    timestamp: utc::now(),
+                                },
+                            };
+
+                            match serde_json::to_string(&ping_message) {
+                                Ok(json) => {
+                                    if ping_sender.send(Message::Text(json)).await.is_err() {
+                                        warn!("RFQ ping sender channel closed; stopping ping task");
+                                        notify_for_ping.notify_waiters();
+                                        break;
+                                    }
+
+                                    let mut guard = pending_for_ping.lock().await;
+                                    *guard = Some(PendingPing {
+                                        id: ping_id,
+                                        sent_at: Instant::now(),
+                                    });
+                                    sequence = sequence.wrapping_add(1);
+                                }
+                                Err(e) => {
+                                    error!("Failed to serialize RFQ ping: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    _ = &mut ping_shutdown_rx => {
+                        break;
+                    }
+                }
+            }
+        });
+
+        let message_handler = Arc::new(self.handler.clone());
+        let pending_ping_reader = pending_ping.clone();
+        let read_timeout = tokio::time::sleep(Duration::from_secs(READ_TIMEOUT_SECS));
+        tokio::pin!(read_timeout);
+
+        loop {
+            tokio::select! {
+                _ = disconnect_notify.notified() => {
+                    warn!("RFQ disconnect requested by watchdog");
+                    break;
+                }
+                _ = &mut read_timeout => {
+                    warn!(
+                        "RFQ WebSocket read timed out after {}s; disconnecting",
+                        READ_TIMEOUT_SECS
+                    );
+                    disconnect_notify.notify_waiters();
+                    break;
+                }
+                maybe_msg = ws_stream.next() => {
+                    match maybe_msg {
+                        Some(msg) => {
+                            read_timeout.as_mut().reset(Instant::now() + Duration::from_secs(READ_TIMEOUT_SECS));
+                            match msg {
+                                Ok(Message::Text(text)) => {
+                                    match serde_json::from_str::<ProtocolMessage<RFQRequest>>(&text) {
+                                        Ok(protocol_msg) => {
+                                            if let RFQRequest::Pong { request_id, .. } = &protocol_msg.payload {
+                                                let mut guard = pending_ping_reader.lock().await;
+                                                if guard
+                                                    .as_ref()
+                                                    .map(|pending| pending.id == *request_id)
+                                                    .unwrap_or(false)
+                                                {
+                                                    *guard = None;
+                                                }
+
+                                                continue;
+                                            }
+
+                                            let websocket_sender = websocket_tx.clone();
+                                            let handler = message_handler.clone();
+                                            tokio::spawn(async move {
+                                                if let Some(response) =
+                                                    handler.handle_request(&protocol_msg).await
+                                                {
+                                                    let response_json = match serde_json::to_string(&response) {
+                                                        Ok(json) => json,
+                                                        Err(e) => {
+                                                            error!("Failed to serialize response: {}", e);
+                                                            return;
+                                                        }
+                                                    };
+
+                                                    if let Err(e) = websocket_sender.send(Message::Text(response_json)).await {
+                                                        error!("Failed to queue response message: {}", e);
+                                                    }
+                                                }
+                                            });
+                                        }
+                                        Err(e) => {
+                                            error!("Failed to parse RFQ message: {}", e);
+                                        }
                                     }
                                 }
-                            });
+                                Ok(Message::Close(_)) => {
+                                    info!("RFQ server closed connection");
+                                    disconnect_notify.notify_waiters();
+                                    break;
+                                }
+                                Err(e) => {
+                                    error!("RFQ WebSocket error: {}", e);
+                                    disconnect_notify.notify_waiters();
+                                    break;
+                                }
+                                _ => {}
+                            }
                         }
-                        Err(e) => {
-                            error!("Failed to parse RFQ message: {}", e);
+                        None => {
+                            info!("RFQ WebSocket stream ended by server");
+                            disconnect_notify.notify_waiters();
+                            break;
                         }
                     }
                 }
-                Ok(Message::Close(_)) => {
-                    info!("RFQ server closed connection");
-                    break;
-                }
-                Err(e) => {
-                    error!("RFQ WebSocket error: {}", e);
-                    break;
-                }
-                _ => {}
             }
         }
+
+        let _ = ping_shutdown_tx.send(());
+        let _ = ping_handle.await;
 
         // Clean up: drop sender to signal writer task to exit
         self.sender = None;

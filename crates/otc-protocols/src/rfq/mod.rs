@@ -44,6 +44,12 @@ pub enum RFQRequest {
         request_id: Uuid,
         timestamp: DateTime<Utc>,
     },
+
+    /// Pong response to keepalive ping
+    Pong {
+        request_id: Uuid,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -69,6 +75,12 @@ pub enum RFQResponse {
 
     /// Pong response
     Pong {
+        request_id: Uuid,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Ping for keepalive initiated by market maker
+    Ping {
         request_id: Uuid,
         timestamp: DateTime<Utc>,
     },

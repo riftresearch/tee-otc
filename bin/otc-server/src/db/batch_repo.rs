@@ -64,7 +64,7 @@ impl BatchRepository {
         chain: &ChainType,
         tx_hash: &str,
     ) -> OtcServerResult<Option<(MarketMakerBatch, Vec<Uuid>)>> {
-        let chain_str = chain_type_to_db(&chain);
+        let chain_str = chain_type_to_db(chain);
 
         let row = sqlx::query(
             r#"

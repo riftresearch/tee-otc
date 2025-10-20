@@ -374,6 +374,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         match msg {
             Ok(Message::Text(text)) => {
                 let mm_registry = state.mm_registry.clone();
+                let sender_tx_task = sender_tx.clone();
                 tokio::spawn(async move {
                     match serde_json::from_str::<ProtocolMessage<RFQResponse>>(&text) {
                         Ok(msg) => match &msg.payload {
@@ -385,6 +386,37 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
                             }
                             RFQResponse::Pong { .. } => {
                                 // Handle pong for keepalive
+                            }
+                            RFQResponse::Ping { request_id, .. } => {
+                                let pong_message = ProtocolMessage {
+                                    version: msg.version.clone(),
+                                    sequence: msg.sequence,
+                                    payload: RFQRequest::Pong {
+                                        request_id: *request_id,
+                                        timestamp: utc::now(),
+                                    },
+                                };
+
+                                match serde_json::to_string(&pong_message) {
+                                    Ok(json) => {
+                                        if let Err(err) =
+                                            sender_tx_task.send(Message::Text(json)).await
+                                        {
+                                            warn!(
+                                                market_maker_id = %mm_uuid,
+                                                error = %err,
+                                                "Failed to send RFQ keepalive pong to market maker",
+                                            );
+                                        }
+                                    }
+                                    Err(err) => {
+                                        error!(
+                                            market_maker_id = %mm_uuid,
+                                            error = %err,
+                                            "Failed to serialize RFQ keepalive pong for market maker",
+                                        );
+                                    }
+                                }
                             }
                             RFQResponse::Error {
                                 error_code,
