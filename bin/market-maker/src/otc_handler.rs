@@ -132,6 +132,7 @@ impl OTCMessageHandler {
                 user_destination_address,
                 mm_nonce,
                 expected_lot,
+                user_deposit_confirmed_at,
                 ..
             } => {
                 info!(
@@ -147,6 +148,7 @@ impl OTCMessageHandler {
                         swap_id,
                         quote_id,
                         user_destination_address,
+                        *user_deposit_confirmed_at,
                         mm_nonce,
                         expected_lot,
                     )

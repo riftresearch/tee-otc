@@ -115,7 +115,7 @@ impl RfqMMRegistry {
             receivers.push((mm_id, response_rx));
         }
 
-        debug!(
+        info!(
             request_id = %request_id,
             market_makers_count = receivers.len(),
             "Broadcasted quote request to market makers"

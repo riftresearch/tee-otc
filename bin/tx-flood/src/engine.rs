@@ -528,7 +528,7 @@ fn generate_random_amount(min: U256, max: U256) -> U256 {
     let range = max - min;
 
     // For small ranges that fit in u64, use efficient u64 random generation
-    if let Some(range_u64) = range.try_into().ok().filter(|&r: &u64| r <= u64::MAX) {
+    if let Ok(range_u64) = range.try_into() {
         let random_offset = rng.gen_range(0..=range_u64);
         return min + U256::from(random_offset);
     }

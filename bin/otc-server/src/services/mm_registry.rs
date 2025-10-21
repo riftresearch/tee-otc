@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use otc_models::Lot;
 use otc_protocols::mm::{MMRequest, ProtocolMessage};
@@ -122,6 +123,7 @@ impl MMRegistry {
         user_destination_address: &str,
         mm_nonce: [u8; 16],
         expected_lot: &Lot,
+        user_deposit_confirmed_at: DateTime<Utc>,
     ) {
         if let Some(conn) = self.connections.get(market_maker_id) {
             let request = ProtocolMessage {
@@ -134,6 +136,7 @@ impl MMRegistry {
                     user_destination_address: user_destination_address.to_string(),
                     mm_nonce,
                     expected_lot: expected_lot.clone(),
+                    user_deposit_confirmed_at: user_deposit_confirmed_at.clone(),
                     timestamp: utc::now(),
                 },
             };

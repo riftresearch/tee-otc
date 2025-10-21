@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 pub const MM_NEVER_DEPOSITS_TIMEOUT: Duration = Duration::minutes(60);
 pub const MM_DEPOSIT_NEVER_CONFIRMED_TIMEOUT: Duration = Duration::minutes(60 * 24); // 24 hours
+pub const MM_DEPOSIT_RISK_WINDOW: Duration = Duration::minutes(10); // if one of the refund cases is within this window the market maker should consider this risky
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Swap {
@@ -63,6 +64,91 @@ pub struct Metadata {
 pub enum RefundSwapReason {
     MarketMakerNeverInitiatedDeposit,
     MarketMakerDepositNeverConfirmed,
+}
+
+/// Returns true if a refund eligibility timeout is approaching within the configured risk window.
+pub fn can_be_refunded_soon(
+    status: SwapStatus,
+    user_deposit_confirmed_at: Option<DateTime<Utc>>,
+    mm_deposit_detected_at: Option<DateTime<Utc>>,
+) -> bool {
+    match status {
+        SwapStatus::WaitingMMDepositInitiated => {
+            let confirmed_at = match user_deposit_confirmed_at {
+                Some(ts) => ts,
+                None => return false,
+            };
+            let elapsed = utc::now() - confirmed_at;
+            elapsed >= (MM_NEVER_DEPOSITS_TIMEOUT - MM_DEPOSIT_RISK_WINDOW)
+        }
+        SwapStatus::WaitingMMDepositConfirmed => {
+            let detected_at = match mm_deposit_detected_at {
+                Some(ts) => ts,
+                None => return false,
+            };
+            let elapsed = utc::now() - detected_at;
+            elapsed >= (MM_DEPOSIT_NEVER_CONFIRMED_TIMEOUT - MM_DEPOSIT_RISK_WINDOW)
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    #[test]
+    fn detects_near_refund_windows_for_user_deposits() {
+        let window = MM_NEVER_DEPOSITS_TIMEOUT - MM_DEPOSIT_RISK_WINDOW;
+        let now = utc::now();
+
+        let safely_before_window = now - (window - Duration::seconds(5));
+        assert!(!can_be_refunded_soon(
+            SwapStatus::WaitingMMDepositInitiated,
+            Some(safely_before_window),
+            None,
+        ));
+
+        let past_window = now - (window + Duration::seconds(5));
+        assert!(can_be_refunded_soon(
+            SwapStatus::WaitingMMDepositInitiated,
+            Some(past_window),
+            None,
+        ));
+
+        assert!(!can_be_refunded_soon(
+            SwapStatus::WaitingMMDepositInitiated,
+            None,
+            None,
+        ));
+    }
+
+    #[test]
+    fn detects_near_refund_windows_for_mm_deposits() {
+        let window = MM_DEPOSIT_NEVER_CONFIRMED_TIMEOUT - MM_DEPOSIT_RISK_WINDOW;
+        let now = utc::now();
+
+        let safely_before_window = now - (window - Duration::seconds(5));
+        assert!(!can_be_refunded_soon(
+            SwapStatus::WaitingMMDepositConfirmed,
+            None,
+            Some(safely_before_window),
+        ));
+
+        let past_window = now - (window + Duration::seconds(5));
+        assert!(can_be_refunded_soon(
+            SwapStatus::WaitingMMDepositConfirmed,
+            None,
+            Some(past_window),
+        ));
+
+        assert!(!can_be_refunded_soon(
+            SwapStatus::WaitingMMDepositConfirmed,
+            None,
+            None,
+        ));
+    }
 }
 
 impl Swap {

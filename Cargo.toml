@@ -93,4 +93,4 @@ opt-level = 3
 [patch.crates-io]
 corepc-node = { git = "https://github.com/alpinevm/corepc", rev = "2b21b2bfeb4b4c8bc71fccba87d86054a648f242" }
 sqlx-sqlite = { path = "sqlx-sqlite-shim" }
-esplora-client = {git = "https://github.com/riftresearch/rust-esplora-client" , rev = "4009ba4be0d73ed7126e91ef8d39e8f560190053", features = ["async", "tokio"]}
+esplora-client = {git = "https://github.com/riftresearch/rust-esplora-client" , rev = "4009ba4be0d73ed7126e91ef8d39e8f560190053"}
