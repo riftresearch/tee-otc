@@ -1779,7 +1779,7 @@ services:
       cadvisor:
         condition: service_started
     volumes:
-      - prometheus_data:/prometheus
+      - prometheus_data_2:/prometheus
     configs:
       - source: prometheus-config
         target: /etc/prometheus/prometheus.yml
@@ -1825,7 +1825,7 @@ volumes:
   otc_postgres_data:
   bitcoin_data:
   otc_server_config_data:
-  prometheus_data:
+  prometheus_data_2:
   reth_logs:
   eth_jwt_data:
   lighthouse_data:
