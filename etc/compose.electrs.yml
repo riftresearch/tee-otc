@@ -131,7 +131,7 @@ services:
         # Known-good commit (example from earlier)
         RUN git checkout 811a9908b52d28a7f08303b775ae7aef8ceeee07
         # Optimize for host
-        ENV RUSTFLAGS="-C target-cpu=native -C codegen-units=1 -C lto=thin"
+        ENV RUSTFLAGS="-C target-cpu=native -C codegen-units=1"
         RUN cargo build --release
 
         FROM debian:trixie
