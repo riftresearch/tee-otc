@@ -80,7 +80,6 @@ services:
       - "-txindex=1"
       - "-rpcthreads=64"
       - "-rpcworkqueue=256"
-      - "-rpctimeout=120"
       - "-dbcache=24576"
       - "-rpcbind=0.0.0.0"
       - "-rpcallowip=0.0.0.0/0"
