@@ -1616,7 +1616,7 @@ checksum = "0c9f5961444b5f51b9c3937e729a212363d0e4cde6390ded6e01e16292078df4"
 dependencies = [
  "async-trait",
  "bdk_core",
- "esplora-client 0.12.1",
+ "esplora-client",
  "futures",
 ]
 
@@ -2559,7 +2559,7 @@ dependencies = [
  "eip3009-erc20-contract",
  "eip7702-delegator-contract",
  "electrsd",
- "esplora-client 0.12.0",
+ "esplora-client",
  "eyre",
  "fs2",
  "libc",
@@ -2825,23 +2825,8 @@ dependencies = [
 
 [[package]]
 name = "esplora-client"
-version = "0.12.0"
-source = "git+https://github.com/riftresearch/rust-esplora-client?rev=5400c6fef216e731a3ed9f360b14f81a6b601a86#5400c6fef216e731a3ed9f360b14f81a6b601a86"
-dependencies = [
- "bitcoin",
- "hex-conservative 0.2.1",
- "log",
- "minreq",
- "reqwest",
- "serde",
- "tokio",
-]
-
-[[package]]
-name = "esplora-client"
 version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0af349d96a5d9ad77ba59f1437aa6f348b03c5865d4f7d6e7a662d60aedce39"
+source = "git+https://github.com/riftresearch/rust-esplora-client?rev=4009ba4be0d73ed7126e91ef8d39e8f560190053#4009ba4be0d73ed7126e91ef8d39e8f560190053"
 dependencies = [
  "bitcoin",
  "hex-conservative 0.2.1",
@@ -4126,7 +4111,7 @@ dependencies = [
  "dashmap",
  "eip3009-erc20-contract",
  "eip7702-delegator-contract",
- "esplora-client 0.12.0",
+ "esplora-client",
  "futures-util",
  "hmac",
  "metrics",
@@ -4619,7 +4604,7 @@ dependencies = [
  "blockchain-utils",
  "chrono",
  "eip3009-erc20-contract",
- "esplora-client 0.12.0",
+ "esplora-client",
  "evm-token-indexer-client",
  "getrandom 0.2.16",
  "hkdf",
