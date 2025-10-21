@@ -109,22 +109,22 @@ configs:
     content: |
       #!/bin/sh
       set -e
-      
+
       # Read database credentials from sidecar-generated secrets
       if [ ! -f /run/postgres-secrets/app_user.txt ] || [ ! -f /run/postgres-secrets/app_password.txt ]; then
         echo "ERROR: Database credentials not found in /run/postgres-secrets"
         exit 1
       fi
-      
+
       DB_USER=$$(cat /run/postgres-secrets/app_user.txt | tr -d '\n\r')
       DB_PASS=$$(cat /run/postgres-secrets/app_password.txt | tr -d '\n\r')
-      
+
       # Construct DATABASE_URL using the generated credentials
       # Note: password is hex-only so no URL encoding needed
       export DATABASE_URL="postgres://$${DB_USER}:$${DB_PASS}@postgres:5432/otc_db"
-      
+
       echo "Starting otc-server with database user: $${DB_USER}"
-      
+
       # Execute the original entrypoint/command
       exec "$@"
 
@@ -183,18 +183,17 @@ configs:
       echo "Starting Bitcoin Core with arguments: $*"
       exec bitcoind "$@"
 
-
   reth-entrypoint:
     content: |
       #!/bin/bash
       set -euo pipefail
-      
+
       # Reth snapshot configuration
       archive_url="https://downloads.merkle.io/reth-2025-09-18.tar.lz4"
       reth_data_dir="$$RETH_DATA_DIR"
-      
+
       echo "Checking Reth data directory: $$reth_data_dir"
-      
+
       # Check if the mainnet directory is empty (no db or static_files folders)
       if [[ ! -d "$$reth_data_dir/db" ]] && [[ ! -d "$$reth_data_dir/static_files" ]]; then
           echo "Reth data directory appears to be empty. Downloading Reth snapshot..."
@@ -220,10 +219,10 @@ configs:
               echo "Data directory size: $$(du -sh $$reth_data_dir | cut -f1)"
           fi
       fi
-      
+
       # Clean up any temporary files
       rm -rf /tmp/*
-      
+
       echo "Starting Reth with arguments: $*"
       exec reth "$@"
 
@@ -1426,8 +1425,7 @@ configs:
         "uid": "tee-monitoring-dev",
         "version": 1,
         "weekStart": ""
-      } 
-
+      }
 
 services:
   eth-jwt-generator:
@@ -1455,7 +1453,7 @@ services:
     restart: "no"
     networks:
       - rift-network
-  
+
   pg-secret-generator:
     container_name: tee-pg-secret-generator
     image: alpine:3.22.1
@@ -1525,7 +1523,7 @@ services:
         condition: service_completed_successfully
     networks:
       - rift-network
-  
+
   dozzle:
     container_name: tee-dozzle
     image: amir20/dozzle:latest
@@ -1618,8 +1616,8 @@ services:
     command: ["/app/otc-server", "--host", "0.0.0.0", "--port", "4422"]
     environment:
       GRANT_SUDO: yes
-      # DATABASE_URL is constructed dynamically in the entrypoint from sidecar-generated secrets
-      RUST_LOG: info 
+      # DATABASE_URL is constructed dynamically in the entrypoint from pg-sidecar
+      RUST_LOG: info
       EVM_RPC_URL: http://reth:8545
       UNTRUSTED_EVM_TOKEN_INDEXER_URL: ${UNTRUSTED_EVM_TOKEN_INDEXER_URL}
       BITCOIN_RPC_URL: http://bitcoin-core:8332
@@ -1655,21 +1653,21 @@ services:
       context: .
       dockerfile_inline: |
         FROM ghcr.io/paradigmxyz/reth:v1.8.1
-        
+
         USER root
-        
+
         RUN apt-get update && apt-get install -y \
             wget \
             lz4 \
             bash \
             coreutils \
             && rm -rf /var/lib/apt/lists/*
-        
+
         # Create reth user and data directory
         RUN useradd -m -u 1000 -s /bin/bash reth \
             && mkdir -p /root/.local/share/reth/mainnet \
             && chown -R reth:reth /root/.local/share/reth
-        
+
         ENTRYPOINT ["/usr/local/bin/reth-entrypoint.sh"]
     depends_on:
       eth-jwt-generator:
@@ -1702,7 +1700,7 @@ services:
       --http.api "eth,net,web3"
     networks:
       - rift-network
-    
+
   lighthouse:
     restart: unless-stopped
     image: sigp/lighthouse:v7.0.1
@@ -1714,7 +1712,7 @@ services:
         condition: service_started
     ports:
       #- "5052:5052/tcp" # rpc
-     # - "5053:5053/tcp"
+      # - "5053:5053/tcp"
       #- "5054:5054/tcp" # metrics
       - "9000:9000/tcp" # p2p
       - "9000:9000/udp" # p2p
@@ -1749,7 +1747,7 @@ services:
       - /sys:/host/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
     # ports:
-      # - "9100:9100"
+    # - "9100:9100"
     networks:
       - rift-network
 
@@ -1812,8 +1810,6 @@ services:
         target: /etc/grafana/provisioning/dashboards/tee-monitoring.json
     networks:
       - rift-network
-
-
 
 networks:
   rift-network:

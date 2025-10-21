@@ -37,18 +37,16 @@ app.get("/transfers/to/:address", async (c) => {
   const whereCondition =
     conditions.length > 1 ? and(...conditions) : conditions[0];
 
-  const transfers = await db
-    .select()
-    .from(transferEvent)
-    .where(whereCondition)
-    .orderBy(desc(transferEvent.timestamp))
-    .limit(limit)
-    .offset(offset);
-
-  const countResult = await db
-    .select({ total: count() })
-    .from(transferEvent)
-    .where(whereCondition);
+  const [transfers, countResult] = await Promise.all([
+    db
+      .select()
+      .from(transferEvent)
+      .where(whereCondition)
+      .orderBy(desc(transferEvent.timestamp))
+      .limit(limit)
+      .offset(offset),
+    db.select({ total: count() }).from(transferEvent).where(whereCondition),
+  ]);
 
   const total = countResult[0]?.total ?? 0;
 
