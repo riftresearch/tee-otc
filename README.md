@@ -7,7 +7,7 @@ Cross-chain OTC swap desk put inside a TEE
 - `market-maker` - Demo market making bot that responds to RFQs and fills orders
 - `rfq-server` - Server that acts as an hub for connecting market makers to users sending RFQs
 - Bitcoin full node for Bitcoin state validation
-- Helios light client for EVM chain state validation
+- Reth archive node Ethereum chain state validation
 
 ## Prerequisites
 
