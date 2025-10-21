@@ -438,7 +438,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         wallet_manager.clone(),
         payment_storage.clone(),
         batch_configs,
-        Some(otc_response_tx),
+        otc_response_tx,
         &mut join_set,
     ));
 

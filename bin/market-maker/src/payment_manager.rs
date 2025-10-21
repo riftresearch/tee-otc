@@ -41,7 +41,7 @@ impl PaymentManager {
         wallet_manager: Arc<WalletManager>,
         payment_storage: Arc<PaymentStorage>,
         batch_configs: HashMap<ChainType, BatchConfig>,
-        otc_response_tx: Option<UnboundedSender<ProtocolMessage<MMResponse>>>,
+        otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Self {
         // Create channels for each chain type
@@ -207,7 +207,7 @@ fn spawn_batch_processor(
     payment_storage: Arc<PaymentStorage>,
     mut rx: mpsc::UnboundedReceiver<MarketMakerQueuedPayment>,
     config: BatchConfig,
-    otc_response_tx: Option<UnboundedSender<ProtocolMessage<MMResponse>>>,
+    otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
     in_flight_payments: Arc<DashMap<Uuid, ()>>,
     join_set: &mut JoinSet<crate::Result<()>>,
 ) {
@@ -290,32 +290,30 @@ fn spawn_batch_processor(
                     }
 
                     // Send batch payment notification to OTC server
-                    if let Some(ref tx) = otc_response_tx {
-                        let response = MMResponse::BatchPaymentSent {
-                            request_id: Uuid::new_v4(),
-                            tx_hash: tx_hash.clone(),
-                            swap_ids: swap_ids.clone(),
-                            batch_nonce_digest,
-                            timestamp: utc::now(),
-                        };
+                    let response = MMResponse::BatchPaymentSent {
+                        request_id: Uuid::new_v4(),
+                        tx_hash: tx_hash.clone(),
+                        swap_ids: swap_ids.clone(),
+                        batch_nonce_digest,
+                        timestamp: utc::now(),
+                    };
 
-                        let protocol_msg = ProtocolMessage {
-                            version: "1.0.0".to_string(),
-                            sequence: 0, // Unsolicited message, sequence doesn't matter
-                            payload: response,
-                        };
+                    let protocol_msg = ProtocolMessage {
+                        version: "1.0.0".to_string(),
+                        sequence: 0, // Unsolicited message, sequence doesn't matter
+                        payload: response,
+                    };
 
-                        if let Err(e) = tx.send(protocol_msg) {
-                            error!(
-                                "Failed to send batch payment notification to OTC server for {:?}: swap_ids={:?}, error={}",
-                                chain_type, swap_ids, e
-                            );
-                        } else {
-                            info!(
-                                "Sent batch payment notification to OTC server for {:?}: tx_hash={}, swap_ids={:?}",
-                                chain_type, tx_hash, swap_ids
-                            );
-                        }
+                    if let Err(e) = otc_response_tx.send(protocol_msg) {
+                        error!(
+                            "Failed to send batch payment notification to OTC server for {:?}: swap_ids={:?}, error={}",
+                            chain_type, swap_ids, e
+                        );
+                    } else {
+                        info!(
+                            "Sent batch payment notification to OTC server for {:?}: tx_hash={}, swap_ids={:?}",
+                            chain_type, tx_hash, swap_ids
+                        );
                     }
                 }
                 Err(e) => {
