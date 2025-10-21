@@ -106,9 +106,6 @@ services:
         hard: 1048576
     sysctls:
       net.core.somaxconn: "4096"
-      net.core.netdev_max_backlog: "250000"
-      net.core.rmem_max: "67108864"
-      net.core.wmem_max: "67108864"
     expose:
       - "28332"   # ZMQ to electrs only (internal network)
       - "28333"
@@ -178,9 +175,6 @@ services:
         hard: 1048576
     sysctls:
       net.core.somaxconn: "4096"
-      net.core.netdev_max_backlog: "250000"
-      net.core.rmem_max: "67108864"
-      net.core.wmem_max: "67108864"
     networks:
       - bitcoin-network
     platform: linux/amd64
