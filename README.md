@@ -11,21 +11,22 @@ Cross-chain OTC swap desk put inside a TEE
 
 ## Prerequisites
 
-- [Rust](https://www.rust-lang.org/tools/install)
-- [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/)
 - [Docker](https://www.docker.com/get-started/)
-- [pnpm](https://pnpm.io/installation)
+- [Rust](https://www.rust-lang.org/tools/install)
 - [Foundry](https://getfoundry.sh/introduction/installation/)
+- [cargo-nextest](https://nexte.st/docs/installation/pre-built-binaries/)
+- [pnpm](https://pnpm.io/installation)
+- [just](https://just.systems/man/en/packages.html)
 
 ## Tests
 
 On your first run:
 ```bash
 cd evm-token-indexer && pnpm i && cd ..
-make cache-devnet
+just cache-devnet
 ```
 
 Then on subsequent runs, just run:
 ```bash
-make test
+just test
 ```
