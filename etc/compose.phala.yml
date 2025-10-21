@@ -318,8 +318,8 @@ configs:
                   "axisLabel": "",
                   "axisPlacement": "auto",
                   "barAlignment": 0,
-                  "drawStyle": "bars",
-                  "fillOpacity": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 20,
                   "gradientMode": "none",
                   "hideFrom": {
                     "legend": false,
@@ -328,7 +328,7 @@ configs:
                   },
                   "insertNulls": false,
                   "lineInterpolation": "linear",
-                  "lineWidth": 10,
+                  "lineWidth": 1,
                   "pointSize": 5,
                   "scaleDistribution": {
                     "type": "linear"
@@ -448,7 +448,7 @@ configs:
                 },
                 "disableTextWrap": false,
                 "editorMode": "builder",
-                "expr": "rate(otc_swap_volume_total{job=\"otc-server\"}[$$__rate_interval])",
+                "expr": "otc_swap_volume_total{job=\"otc-server\"}",
                 "fullMetaSearch": false,
                 "includeNullMetadata": false,
                 "instant": false,
@@ -458,7 +458,7 @@ configs:
                 "useBackend": false
               }
             ],
-            "title": "Volume (sats)",
+            "title": "Cumulative Volume (sats)",
             "transformations": [
               {
                 "id": "renameByRegex",
@@ -487,8 +487,8 @@ configs:
                   "axisLabel": "",
                   "axisPlacement": "auto",
                   "barAlignment": 0,
-                  "drawStyle": "bars",
-                  "fillOpacity": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 20,
                   "gradientMode": "none",
                   "hideFrom": {
                     "legend": false,
@@ -497,7 +497,7 @@ configs:
                   },
                   "insertNulls": false,
                   "lineInterpolation": "linear",
-                  "lineWidth": 10,
+                  "lineWidth": 1,
                   "pointSize": 5,
                   "scaleDistribution": {
                     "type": "linear"
@@ -586,8 +586,8 @@ configs:
                   "uid": "PBFA97CFB590B2093"
                 },
                 "disableTextWrap": false,
-                "editorMode": "code",
-                "expr": "rate(otc_swap_fees_total{instance=\"otc-server:9000\"}[$$__rate_interval])",
+                "editorMode": "builder",
+                "expr": "otc_swap_fees_total{instance=\"otc-server:9000\"}",
                 "fullMetaSearch": false,
                 "includeNullMetadata": false,
                 "instant": false,
@@ -597,7 +597,7 @@ configs:
                 "useBackend": false
               }
             ],
-            "title": "Fees (sats)",
+            "title": "Cumulative Fees (sats)",
             "transformations": [
               {
                 "id": "renameByRegex",
@@ -1417,8 +1417,8 @@ configs:
           "list": []
         },
         "time": {
-          "from": "2025-10-20T20:37:22.651Z",
-          "to": "2025-10-20T20:47:13.331Z"
+          "from": "2025-10-21T01:26:32.461Z",
+          "to": "2025-10-21T05:26:32.461Z"
         },
         "timepicker": {},
         "timezone": "",
@@ -1426,7 +1426,8 @@ configs:
         "uid": "tee-monitoring-dev",
         "version": 1,
         "weekStart": ""
-      }
+      } 
+
 
 services:
   eth-jwt-generator:
