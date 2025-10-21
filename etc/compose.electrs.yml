@@ -45,139 +45,150 @@ configs:
       exec bitcoind "$@"
 
 services:
-    bitcoin-core:
-      container_name: bitcoin-core
-      build:
-        context: .
-        platforms:
-          - linux/amd64
-        dockerfile_inline: |
-          FROM debian:trixie
-          RUN apt-get update \
-            && apt-get install -y --no-install-recommends \
-              ca-certificates \
-              curl \
-              tar \
-              bash \
-              lz4 \
-              wget \
-              aria2 \
-            && rm -rf /var/lib/apt/lists/*
+  bitcoin-core:
+    container_name: bitcoin-core
+    build:
+      context: .
+      platforms:
+        - linux/amd64
+      dockerfile_inline: |
+        FROM debian:trixie
+        RUN apt-get update \
+          && apt-get install -y --no-install-recommends \
+            ca-certificates curl tar bash lz4 wget aria2 \
+          && rm -rf /var/lib/apt/lists/*
+        RUN useradd -m -u 1000 -s /bin/bash bitcoin \
+          && mkdir -p /home/bitcoin/.bitcoin \
+          && chown -R bitcoin:bitcoin /home/bitcoin/.bitcoin
+        WORKDIR /opt/bitcoin
+        RUN curl -fsSL "https://bitcoincore.org/bin/bitcoin-core-29.0/bitcoin-29.0-x86_64-linux-gnu.tar.gz" -o bitcoin.tar.gz \
+          && tar -xzf bitcoin.tar.gz --strip-components=1 \
+          && install -m 0755 -o root -g root -t /usr/local/bin bin/* \
+          && rm -rf /opt/bitcoin
+        EXPOSE 8332 8333 28332 28333
+        VOLUME ["/home/bitcoin/.bitcoin"]
+        USER bitcoin
+        WORKDIR /home/bitcoin
+        ENTRYPOINT ["/usr/local/bin/bitcoin-entrypoint.sh"]
+    environment:
+      BITCOIN_DATA_DIR: /home/bitcoin/.bitcoin
+    ports:
+      - "8332:8332"   # RPC (if you want remote access; otherwise remove)
+      - "8333:8333"   # P2P
+    command:
+      - "-server=1"
+      - "-txindex=1"
+      - "-rpcthreads=64"
+      - "-rpcworkqueue=256"
+      - "-rpctimeout=120"
+      - "-dbcache=24576"
+      - "-rpcbind=0.0.0.0"
+      - "-rpcallowip=0.0.0.0/0"
+      - "-datadir=/home/bitcoin/.bitcoin"
+      - "-fallbackfee=0.0002"
+      - "-zmqpubrawblock=tcp://0.0.0.0:28332"
+      - "-zmqpubrawtx=tcp://0.0.0.0:28333"
+    volumes:
+      - bitcoind_data:/home/bitcoin/.bitcoin    # stored on NVMe via named volumes (as configured on your host)
+    configs:
+      - source: bitcoin-entrypoint
+        target: /usr/local/bin/bitcoin-entrypoint.sh
+        mode: 0755
+    healthcheck:
+      test: ["CMD-SHELL","bitcoin-cli -datadir=/home/bitcoin/.bitcoin getblockchaininfo > /dev/null || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    sysctls:
+      net.core.somaxconn: "4096"
+      net.core.netdev_max_backlog: "250000"
+      net.core.rmem_max: "67108864"
+      net.core.wmem_max: "67108864"
+    expose:
+      - "28332"   # ZMQ to electrs only (internal network)
+      - "28333"
+    networks:
+      - bitcoin-network
+    platform: linux/amd64
 
-          RUN useradd -m -u 1000 -s /bin/bash bitcoin \
-            && mkdir -p /home/bitcoin/.bitcoin \
-            && chown -R bitcoin:bitcoin /home/bitcoin/.bitcoin
-          WORKDIR /opt/bitcoin
-          RUN curl -fsSL "https://bitcoincore.org/bin/bitcoin-core-29.0/bitcoin-29.0-x86_64-linux-gnu.tar.gz" -o bitcoin.tar.gz \
-            && tar -xzf bitcoin.tar.gz --strip-components=1 \
-            && install -m 0755 -o root -g root -t /usr/local/bin bin/* \
-            && rm -rf /opt/bitcoin
+  electrs:
+    container_name: electrs
+    build:
+      context: .
+      dockerfile_inline: |
+        FROM rust:1.75 AS builder
+        WORKDIR /app
+        RUN apt-get update && apt-get install -y --no-install-recommends \
+            clang llvm-dev libclang-dev pkg-config cmake build-essential libssl-dev git ca-certificates \
+          && rm -rf /var/lib/apt/lists/*
+        RUN git clone https://github.com/Blockstream/electrs.git
+        WORKDIR /app/electrs
+        # Known-good commit (example from earlier)
+        RUN git checkout 811a9908b52d28a7f08303b775ae7aef8ceeee07
+        # Optimize for host
+        ENV RUSTFLAGS="-C target-cpu=native -C codegen-units=1 -C lto=thin"
+        RUN cargo build --release
 
-          EXPOSE 8332 8333
-          VOLUME ["/home/bitcoin/.bitcoin"]
-          USER bitcoin
-          WORKDIR /home/bitcoin
-          ENTRYPOINT ["/usr/local/bin/bitcoin-entrypoint.sh"]
-      environment:
-        BITCOIN_DATA_DIR: /home/bitcoin/.bitcoin
-      ports:
-        - "8332:8332"
-        - "8333:8333"
-      command:
-        - "-server=1"
-        - "-txindex=1"
-        - "-rpcbind=0.0.0.0"
-        - "-rpcallowip=0.0.0.0/0"
-        - "-datadir=/home/bitcoin/.bitcoin"
-        - "-fallbackfee=0.0002"
-      volumes:
-        - bitcoind_data:/home/bitcoin/.bitcoin
-      configs:
-        - source: bitcoin-entrypoint
-          target: /usr/local/bin/bitcoin-entrypoint.sh
-          mode: 0755
-      healthcheck:
-        test:
-          [
-            "CMD-SHELL",
-            "bitcoin-cli -datadir=/home/bitcoin/.bitcoin getblockchaininfo > /dev/null || exit 1",
-          ]
-        interval: 20s
-        timeout: 10s
-        retries: 10
-        start_period: 30s
-      networks:
-        - bitcoin-network
-      platform: linux/amd64
-    electrs:
-      container_name: electrs
-      build:
-        context: .
-        dockerfile_inline: |
-          FROM rust:1.75 AS builder
-          WORKDIR /app
-
-          # Build deps for bindgen + rocksdb
-          RUN apt-get update && apt-get install -y --no-install-recommends \
-              clang \
-              llvm-dev \
-              libclang-dev \
-              pkg-config \
-              cmake \
-              build-essential \
-              libssl-dev \
-              git \
-              ca-certificates \
-            && rm -rf /var/lib/apt/lists/*
-
-          # (Optional but robust) make libclang discoverable for bindgen
-          # If bindgen still can't find libclang, uncomment the next two lines:
-          # RUN echo "LIBCLANG_PATH=$(llvm-config --libdir)" >> /etc/environment
-          # ENV LIBCLANG_PATH=/usr/lib/llvm-15/lib
-
-          RUN git clone https://github.com/Blockstream/electrs.git
-          WORKDIR /app/electrs
-          RUN git checkout 811a9908b52d28a7f08303b775ae7aef8ceeee07
-
-          # Build release
-          RUN cargo build --release
-
-          FROM debian:trixie
-          RUN apt-get update && apt-get install -y --no-install-recommends \
-              ca-certificates \
-            && rm -rf /var/lib/apt/lists/*
-
-          WORKDIR /app
-          COPY --from=builder /app/electrs/target/release/electrs /app/
-          EXPOSE 3000
-          CMD ["./electrs"]
-      command:
-        - "./electrs"
-        - "--daemon-rpc-addr"
-        - "bitcoin-core:8332"
-        - "--daemon-dir"
-        - "/home/bitcoin/.bitcoin"
-        - "--db-dir"
-        - "/var/lib/electrs"
-        - "-vvvvv"
-        - "--http-addr"
-        - "0.0.0.0:3000"
-        - "--utxos-limit"
-        - "100000"
-      ports:
-        - "3000:3000"
-      volumes:
-        - bitcoind_data:/home/bitcoin/.bitcoin
-        - electrs_data:/var/lib/electrs
-      depends_on:
-        bitcoin-core:
-          condition: service_healthy
-      networks:
-        - bitcoin-network
+        FROM debian:trixie
+        RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates \
+          && rm -rf /var/lib/apt/lists/*
+        WORKDIR /app
+        COPY --from=builder /app/electrs/target/release/electrs /app/
+        EXPOSE 3000
+        CMD ["./electrs"]
+    command:
+      - "./electrs"
+      - "--daemon-rpc-addr"
+      - "bitcoin-core:8332"
+      - "--daemon-dir"
+      - "/home/bitcoin/.bitcoin"
+      - "--db-dir"
+      - "/var/lib/electrs"
+      - "--http-addr"
+      - "0.0.0.0:3000"
+      - "--utxos-limit"
+      - "100000"
+      - "--db-parallelism"
+      - "8"
+      - "--daemon-parallelism"
+      - "8"
+      - "--db-block-cache-mb"
+      - "4096"
+      - "--db-write-buffer-size-mb"
+      - "1024"
+      - "--zmq-addr"
+      - "bitcoin-core:28332"
+      # leave --initial-sync-compaction OFF for speed
+    ports:
+      - "3000:3000"
+    volumes:
+      - bitcoind_data:/home/bitcoin/.bitcoin   # read Core datadir
+      - electrs_data:/var/lib/electrs          # RocksDB on NVMe named volume
+    depends_on:
+      bitcoin-core:
+        condition: service_healthy
+    ulimits:
+      nofile:
+        soft: 1048576
+        hard: 1048576
+    sysctls:
+      net.core.somaxconn: "4096"
+      net.core.netdev_max_backlog: "250000"
+      net.core.rmem_max: "67108864"
+      net.core.wmem_max: "67108864"
+    networks:
+      - bitcoin-network
+    platform: linux/amd64
 
 networks:
   bitcoin-network:
     driver: bridge
+
 
 volumes:
   bitcoind_data:
