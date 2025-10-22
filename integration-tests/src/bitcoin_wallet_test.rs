@@ -433,7 +433,9 @@ async fn test_bitcoin_wallet_spend_from_deposit_storage(
             deposit_vault_descriptor,
             deposit_lot.clone(),
             prefund_txid.clone(),
-        ))
+        ),
+        utc::now()
+     )
         .await
         .expect("store deposit in key storage");
 
@@ -587,7 +589,9 @@ async fn test_bitcoin_wallet_cancel_tx(
             deposit_vault_descriptor,
             deposit_lot.clone(),
             prefund_txid.clone(),
-        ))
+        ),
+        utc::now()
+    )
         .await
         .expect("store deposit in key storage");
 

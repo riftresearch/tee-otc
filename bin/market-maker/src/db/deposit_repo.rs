@@ -1,4 +1,5 @@
 use alloy::primitives::U256;
+use chrono::{DateTime, Utc};
 use otc_models::{Currency, Lot};
 use snafu::prelude::*;
 use sqlx::{postgres::PgRow, PgPool, Row};
@@ -33,7 +34,8 @@ pub type DepositRepositoryResult<T, E = DepositRepositoryError> = std::result::R
 pub trait DepositStore {
     async fn balance(&self, currency: &Currency) -> DepositRepositoryResult<U256>;
     async fn take_deposits_that_fill_lot(&self, lot: &Lot) -> DepositRepositoryResult<FillStatus>;
-    async fn store_deposit(&self, deposit: &Deposit) -> DepositRepositoryResult<()>;
+    async fn store_deposit(&self, deposit: &Deposit, swap_settlement_timestamp: DateTime<Utc>) -> DepositRepositoryResult<()>;
+    async fn get_latest_deposit_vault_timestamp(&self) -> DepositRepositoryResult<Option<DateTime<Utc>>>;
 }
 
 #[derive(Clone)]
@@ -107,6 +109,19 @@ impl DepositStore for DepositRepository {
         let amount = U256::from_str_radix(&amount_str, 10)
             .map_err(|_| DepositRepositoryError::InvalidU256 { value: amount_str })?;
         Ok(amount)
+    }
+
+    async fn get_latest_deposit_vault_timestamp(&self) -> DepositRepositoryResult<Option<DateTime<Utc>>> {
+        let row: Option<(DateTime<Utc>,)> = sqlx::query_as(
+            r#"
+            SELECT MAX(created_at)
+            FROM mm_deposits
+            "#,
+        )
+        .fetch_optional(&self.pool)
+        .await.context(DatabaseSnafu)?;
+
+        Ok(row.map(|t| t.0))
     }
 
     async fn take_deposits_that_fill_lot(&self, lot: &Lot) -> DepositRepositoryResult<FillStatus> {
@@ -188,10 +203,10 @@ impl DepositStore for DepositRepository {
         }
     }
 
-    async fn store_deposit(&self, deposit: &Deposit) -> DepositRepositoryResult<()> {
+    async fn store_deposit(&self, deposit: &Deposit, swap_settlement_timestamp: DateTime<Utc>) -> DepositRepositoryResult<()> {
         let (chain, token, decimals) = Self::serialize_currency(&deposit.holdings.currency);
         let amount = deposit.holdings.amount.to_string();
-        let now = utc::now();
+        let created_at = swap_settlement_timestamp;
 
         sqlx::query(
             r#"
@@ -207,7 +222,7 @@ impl DepositStore for DepositRepository {
         .bind(decimals)
         .bind(&amount)
         .bind(&deposit.funding_tx_hash)
-        .bind(now)
+        .bind(created_at)
         .execute(&self.pool)
         .await
         .context(DatabaseSnafu)?;

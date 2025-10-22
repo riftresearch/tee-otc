@@ -60,7 +60,13 @@ pub enum MMRequest {
         lot: Lot,
         /// Final settlement details
         user_deposit_tx_hash: String,
+        swap_settlement_timestamp: DateTime<Utc>,
         timestamp: DateTime<Utc>,
+    },
+
+    /// Ask the MM to tell us the swap_settlement_timestamp of their newest deposit vault
+    LatestDepositVaultTimestamp { 
+        request_id: Uuid,
     },
 
     /// Request MM status/health check
@@ -88,6 +94,14 @@ pub enum MMResponse {
         accepted: bool,
         /// Optional reason if rejected
         rejection_reason: Option<String>,
+        timestamp: DateTime<Utc>,
+    },
+    
+    /// Response to `LatestDepositVaultTimestamp`
+    /// Will give us the swap_settlement_timestamp of their newest deposit vault
+    LatestDepositVaultTimestampResponse {
+        request_id: Uuid,
+        swap_settlement_timestamp: Option<DateTime<Utc>>,
         timestamp: DateTime<Utc>,
     },
 

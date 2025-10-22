@@ -33,6 +33,41 @@ impl OTCMessageHandler {
         msg: &ProtocolMessage<MMRequest>,
     ) -> Option<ProtocolMessage<MMResponse>> {
         match &msg.payload {
+            MMRequest::LatestDepositVaultTimestamp {
+                request_id,
+                ..
+            } => {
+                info!(
+                    "Received latest deposit vault timestamp request",
+                );
+                let swap_settlement_timestamp_res = self.deposit_repository.get_latest_deposit_vault_timestamp().await;
+                let response = match swap_settlement_timestamp_res {
+                    Ok(swap_settlement_timestamp) => {
+                        MMResponse::LatestDepositVaultTimestampResponse  {
+                            request_id: *request_id,
+                            swap_settlement_timestamp,
+                            timestamp: utc::now(),
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to get latest deposit vault timestamp: {}",
+                            e
+                        );
+                        MMResponse::Error {
+                            request_id: *request_id,
+                            error_code: otc_protocols::mm::MMErrorCode::InternalError,
+                            message: "Failed to get latest deposit vault timestamp".to_string(),
+                            timestamp: utc::now(),
+                        }
+                    }
+                };
+                Some(ProtocolMessage {
+                    version: msg.version.clone(),
+                    sequence: msg.sequence + 1,
+                    payload: response,
+                })
+            }
             MMRequest::ValidateQuote {
                 request_id,
                 quote_id,
@@ -171,6 +206,7 @@ impl OTCMessageHandler {
                 user_deposit_private_key,
                 lot,
                 user_deposit_tx_hash,
+                swap_settlement_timestamp,
                 ..
             } => {
                 tracing::info!(message = "Swap complete, received user's private key", swap_id = %swap_id, user_deposit_tx_hash = %user_deposit_tx_hash);
@@ -181,7 +217,7 @@ impl OTCMessageHandler {
                         private_key: user_deposit_private_key.to_string(),
                         holdings: lot.clone(),
                         funding_tx_hash: user_deposit_tx_hash.to_string(),
-                    })
+                    }, *swap_settlement_timestamp)
                     .await
                 {
                     Ok(_) => {}

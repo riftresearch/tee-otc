@@ -115,6 +115,43 @@ impl MMRegistry {
         }
     }
 
+    pub async fn request_latest_deposit_vault_timestamp(
+        &self,
+        market_maker_id: &Uuid,
+    ) -> Result<()> {
+        let (protocol_version, sender) = {
+            let connection = self.connections.get(market_maker_id).ok_or_else(|| {
+                MMRegistryError::MarketMakerNotConnected {
+                    market_maker_id: market_maker_id.to_string(),
+                }
+            })?;
+
+            (
+                connection.protocol_version.clone(),
+                connection.sender.clone(),
+            )
+        };
+
+        let request = ProtocolMessage {
+            version: protocol_version,
+            sequence: 0,
+            payload: MMRequest::LatestDepositVaultTimestamp {
+                request_id: Uuid::new_v4(),
+            },
+        };
+
+        sender
+            .send(request)
+            .await
+            .map_err(|e| MMRegistryError::MessageSendError { source: e })?;
+
+        info!(
+            market_maker_id = %market_maker_id,
+            "Requested latest deposit vault timestamp from market maker"
+        );
+
+        Ok(())
+    }
     pub async fn notify_user_deposit_confirmed(
         &self,
         market_maker_id: &Uuid,
@@ -166,6 +203,7 @@ impl MMRegistry {
         user_deposit_private_key: &str,
         lot: &Lot,
         user_deposit_tx_hash: &str,
+        swap_settlement_timestamp: &DateTime<Utc>,
     ) {
         if let Some(conn) = self.connections.get(market_maker_id) {
             let request = ProtocolMessage {
@@ -177,6 +215,7 @@ impl MMRegistry {
                     user_deposit_private_key: user_deposit_private_key.to_string(),
                     lot: lot.clone(),
                     user_deposit_tx_hash: user_deposit_tx_hash.to_string(),
+                    swap_settlement_timestamp: *swap_settlement_timestamp,
                     timestamp: utc::now(),
                 },
             };

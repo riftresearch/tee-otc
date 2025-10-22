@@ -414,7 +414,7 @@ impl SwapMonitoringService {
         Ok(())
     }
 
-    /// Market maker's send notification of batch payments directly to us, so we can track the batch payment
+    /// Market makers send notifications of batch payments directly to us, so we can track the batch payment
     /// this method will validate the expected nonce and fee amounts along with minifying the data necessary to verify this batch of payments
     /// once the transaction is confirmed later on
     pub async fn track_batch_payment(
@@ -627,7 +627,7 @@ impl SwapMonitoringService {
                     );
 
                     // Transition all swaps to settled state atomically
-                    self.db
+                    let swap_settlement_timestamp = self.db
                         .swaps()
                         .batch_mm_deposit_confirmed(&swap_ids)
                         .await
@@ -669,6 +669,7 @@ impl SwapMonitoringService {
                                     &private_key,
                                     &lot,
                                     &user_deposit_tx_hash,
+                                    &swap_settlement_timestamp,
                                 )
                                 .await;
                         });

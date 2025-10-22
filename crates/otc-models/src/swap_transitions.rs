@@ -1,5 +1,6 @@
 use crate::{MMDepositStatus, SettlementStatus, Swap, SwapStatus, UserDepositStatus};
 use alloy::primitives::U256;
+use chrono::{DateTime, Utc};
 use snafu::{ensure, Snafu};
 
 #[derive(Debug, Snafu)]
@@ -128,7 +129,7 @@ impl Swap {
     }
 
     /// Transition when MM deposit is confirmed
-    pub fn mm_deposit_confirmed(&mut self) -> TransitionResult {
+    pub fn mm_deposit_confirmed(&mut self, swap_settlement_timestamp: &DateTime<Utc>) -> TransitionResult {
         ensure!(
             self.status == SwapStatus::WaitingMMDepositConfirmed,
             InvalidTransitionSnafu {
@@ -145,7 +146,7 @@ impl Swap {
         );
 
         self.status = SwapStatus::Settled;
-        self.updated_at = utc::now();
+        self.updated_at = *swap_settlement_timestamp;
 
         Ok(())
     }
@@ -358,7 +359,7 @@ mod tests {
         assert_eq!(swap.status, SwapStatus::WaitingMMDepositConfirmed);
 
         // MM deposit confirmed
-        swap.mm_deposit_confirmed().unwrap();
+        swap.mm_deposit_confirmed(&utc::now()).unwrap();
         assert_eq!(swap.status, SwapStatus::Settled);
 
         // Record settlement

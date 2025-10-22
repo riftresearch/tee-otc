@@ -104,7 +104,7 @@ impl BroadcastedTransactionRepository {
                 absolute_fee = EXCLUDED.absolute_fee
             "#,
         )
-        .bind(&txid)
+        .bind(txid)
         .bind(chain_to_db(&chain))
         .bind(txdata)
         .bind(foreign_utxos_json)

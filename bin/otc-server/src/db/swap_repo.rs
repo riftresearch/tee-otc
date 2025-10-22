@@ -42,6 +42,7 @@ pub struct SettledSwapNotification {
     pub user_deposit_tx_hash: String,
     pub lot: Lot,
     pub deposit_chain: ChainType,
+    pub swap_settlement_timestamp: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -461,6 +462,7 @@ impl SwapRepository {
     pub async fn get_settled_swaps_for_market_maker(
         &self,
         market_maker_id: Uuid,
+        last_seen_settlement_timestamp: Option<DateTime<Utc>>,
     ) -> OtcServerResult<Vec<SettledSwapNotification>> {
         let rows = sqlx::query(
             r#"
@@ -468,6 +470,7 @@ impl SwapRepository {
                 s.id AS swap_id,
                 s.user_deposit_salt,
                 s.user_deposit_status,
+                s.updated_at,
                 q.from_chain,
                 q.from_token,
                 q.from_amount,
@@ -481,10 +484,12 @@ impl SwapRepository {
             WHERE s.market_maker_id = $1
               AND s.status = $2
               AND s.user_deposit_status IS NOT NULL
+              AND s.updated_at > $3
             "#,
         )
         .bind(market_maker_id)
         .bind(SwapStatus::Settled)
+        .bind(last_seen_settlement_timestamp.unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap()))
         .fetch_all(&self.pool)
         .await?;
 
@@ -505,6 +510,8 @@ impl SwapRepository {
             let deposit_status_json: serde_json::Value = row.try_get("user_deposit_status")?;
             let deposit_status = user_deposit_status_from_json(deposit_status_json)?;
 
+            let swap_settlement_timestamp: DateTime<Utc> = row.try_get("updated_at")?;
+
             let lot = lot_from_db(
                 row.try_get::<String, _>("from_chain")?,
                 row.try_get::<serde_json::Value, _>("from_token")?,
@@ -518,6 +525,7 @@ impl SwapRepository {
                 user_deposit_tx_hash: deposit_status.tx_hash,
                 lot,
                 deposit_chain,
+                swap_settlement_timestamp,
             });
         }
 
@@ -884,17 +892,19 @@ impl SwapRepository {
     }
 
     /// Mark multiple swaps as MM deposit confirmed (settled) in a batch
-    pub async fn batch_mm_deposit_confirmed(&self, swap_ids: &[Uuid]) -> OtcServerResult<()> {
+    pub async fn batch_mm_deposit_confirmed(&self, swap_ids: &[Uuid]) -> OtcServerResult<DateTime<Utc>> {
         if swap_ids.is_empty() {
-            return Ok(());
+            return Ok(utc::now());
         }
 
         // Get all swaps
         let mut swaps = self.get_swaps(swap_ids).await?;
 
+        let swap_settlement_timestamp = utc::now();
+
         // Apply state transitions to each swap
         for swap in &mut swaps {
-            swap.mm_deposit_confirmed()
+            swap.mm_deposit_confirmed(&swap_settlement_timestamp)
                 .map_err(|e| OtcServerError::InvalidState {
                     message: format!("State transition failed for swap {}: {}", swap.id, e),
                 })?;
@@ -962,7 +972,7 @@ impl SwapRepository {
 
         tx.commit().await?;
 
-        Ok(())
+        Ok(swap_settlement_timestamp)
     }
 
     /// Update user deposit confirmations

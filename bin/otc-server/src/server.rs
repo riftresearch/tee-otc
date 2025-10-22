@@ -679,69 +679,18 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         }
     }
 
-    // TODO: The following guarantees that a market maker will be given all their settled swaps' private keys - but this strategy is highly inefficient.
-    // instead use a set reconciliation mechanism to efficiently allow the market maker to know exactly which keys they do not have.
-    match state
-        .db
-        .swaps()
-        .get_settled_swaps_for_market_maker(mm_uuid)
-        .await
-    {
-        Ok(settled_swaps) => {
-            if !settled_swaps.is_empty() {
-                let master_key = state.swap_manager.master_key_bytes();
-
-                for swap in settled_swaps {
-                    let Some(chain_ops) = state.chain_registry.get(&swap.deposit_chain) else {
-                        error!(
-                            market_maker_id = %mm_id,
-                            swap_id = %swap.swap_id,
-                            deposit_chain = ?swap.deposit_chain,
-                            "Failed to load chain operations for settled swap notification"
-                        );
-                        continue;
-                    };
-
-                    let wallet = match chain_ops.derive_wallet(&master_key, &swap.user_deposit_salt)
-                    {
-                        Ok(wallet) => wallet,
-                        Err(err) => {
-                            error!(
-                                market_maker_id = %mm_id,
-                                swap_id = %swap.swap_id,
-                                error = %err,
-                                "Failed to derive user deposit wallet for settled swap notification"
-                            );
-                            continue;
-                        }
-                    };
-
-                    let private_key = wallet.private_key().to_string();
-
-                    state
-                        .mm_registry
-                        .notify_swap_complete(
-                            &mm_uuid,
-                            &swap.swap_id,
-                            &private_key,
-                            &swap.lot,
-                            &swap.user_deposit_tx_hash,
-                        )
-                        .await;
-                }
-            }
+    match state.mm_registry.request_latest_deposit_vault_timestamp(&mm_uuid).await {
+        Ok(()) => {
+            info!("Requested latest deposit vault timestamp from market maker {}", mm_id);
         }
         Err(err) => {
-            error!(
-                market_maker_id = %mm_id,
-                error = %err,
-                "Failed to fetch settled swaps for notification"
-            );
+            error!(market_maker_id = %mm_id, error = %err, "Failed to request latest deposit vault timestamp from market maker");
         }
     }
 
     // Handle incoming messages
     let mm_id_clone = mm_id.clone();
+    let mm_registry = state.mm_registry.clone();
     while let Some(msg) = receiver.next().await {
         match msg {
             Ok(Message::Text(text)) => {
@@ -763,9 +712,80 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
                                     accepted = %accepted,
                                     "Market maker validated quote",
                                 );
-                                state
-                                    .mm_registry
-                                    .handle_validation_response(&mm_uuid, &quote_id, accepted);
+                                mm_registry
+                                .handle_validation_response(&mm_uuid, &quote_id, accepted);
+                            }
+                            MMResponse::LatestDepositVaultTimestampResponse {
+                                swap_settlement_timestamp,
+                                ..
+                            } => {
+                                info!(
+                                    market_maker_id = %mm_id_clone,
+                                    "Received latest deposit vault timestamp from MM",
+                                );
+                                let state = state.clone();
+                                let mm_uuid = mm_uuid;
+                                tokio::spawn(async move {
+                                    match state
+                                        .db
+                                        .swaps()
+                                        .get_settled_swaps_for_market_maker(mm_uuid, swap_settlement_timestamp)
+                                        .await
+                                    {
+                                        Ok(settled_swaps) => {
+                                            if !settled_swaps.is_empty() {
+                                                let master_key = state.swap_manager.master_key_bytes();
+
+                                                for swap in settled_swaps {
+                                                    let Some(chain_ops) = state.chain_registry.get(&swap.deposit_chain) else {
+                                                        error!(
+                                                            market_maker_id = %mm_uuid,
+                                                            swap_id = %swap.swap_id,
+                                                            deposit_chain = ?swap.deposit_chain,
+                                                            "Failed to load chain operations for settled swap notification"
+                                                        );
+                                                        continue;
+                                                    };
+
+                                                    let wallet = match chain_ops.derive_wallet(&master_key, &swap.user_deposit_salt)
+                                                    {
+                                                        Ok(wallet) => wallet,
+                                                        Err(err) => {
+                                                            error!(
+                                                                market_maker_id = %mm_uuid,
+                                                                swap_id = %swap.swap_id,
+                                                                error = %err,
+                                                                "Failed to derive user deposit wallet for settled swap notification"
+                                                            );
+                                                            continue;
+                                                        }
+                                                    };
+
+                                                    let private_key = wallet.private_key().to_string();
+
+                                                    state
+                                                        .mm_registry
+                                                        .notify_swap_complete(
+                                                            &mm_uuid,
+                                                            &swap.swap_id,
+                                                            &private_key,
+                                                            &swap.lot,
+                                                            &swap.user_deposit_tx_hash,
+                                                            &swap.swap_settlement_timestamp,
+                                                        )
+                                                        .await;
+                                                }
+                                            }
+                                        }
+                                        Err(err) => {
+                                            error!(
+                                                market_maker_id = %mm_uuid,
+                                                error = %err,
+                                                "Failed to fetch settled swaps for notification"
+                                            );
+                                        }
+                                    }
+                                });
                             }
                             MMResponse::Ping { request_id, .. } => {
                                 let pong_message = ProtocolMessage {
