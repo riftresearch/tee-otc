@@ -4,7 +4,7 @@ use bitcoincore_rpc_async::{json::GetRawTransactionVerbose, RpcApi};
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::{
     bitcoin_wallet::BitcoinWallet,
-    deposit_key_storage::{Deposit, DepositKeyStorage, DepositKeyStorageTrait},
+    db::{Database, Deposit, DepositStore},
     wallet::Wallet,
 };
 use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
@@ -402,10 +402,11 @@ async fn test_bitcoin_wallet_spend_from_deposit_storage(
 
     // Create and seed a deposit key storage with the recipient's descriptor
     // so the wallet can sign the foreign UTXO.
-    let deposit_key_storage = Arc::new(
-        DepositKeyStorage::new(&connect_options.to_database_url(), 10, 2)
+    let deposit_repository = Arc::new(
+        Database::connect(&connect_options.to_database_url(), 10, 2)
             .await
-            .expect("create deposit key storage"),
+            .expect("create deposit repository")
+            .deposits(),
     );
 
     let deposit_vault_descriptor = format!(
@@ -425,7 +426,7 @@ async fn test_bitcoin_wallet_spend_from_deposit_storage(
         amount: U256::from(lot_amount_sats),
     };
 
-    deposit_key_storage
+    deposit_repository
         .store_deposit(&Deposit::new(
             deposit_vault_descriptor,
             deposit_lot.clone(),
@@ -442,7 +443,7 @@ async fn test_bitcoin_wallet_spend_from_deposit_storage(
         &mm_account.bitcoin_wallet.descriptor(),
         Network::Regtest,
         devnet.bitcoin.esplora_url.as_ref().unwrap(),
-        Some(deposit_key_storage.clone()),
+        Some(deposit_repository.clone()),
         &mut join_set,
     )
     .await

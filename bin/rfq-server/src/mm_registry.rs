@@ -4,7 +4,7 @@ use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse};
 use snafu::Snafu;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Snafu)]

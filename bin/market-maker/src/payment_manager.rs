@@ -15,7 +15,7 @@ use tokio::{
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::{payment_storage::PaymentStorage, wallet::WalletManager};
+use crate::{db::PaymentRepository, wallet::WalletManager};
 use otc_protocols::mm::ProtocolMessage;
 
 // For tests
@@ -27,19 +27,19 @@ trait BatchPaymentRecorder: Send + Sync {
         txid: String,
         chain: ChainType,
         batch_nonce_digest: [u8; 32],
-    ) -> crate::payment_storage::Result<()>;
+    ) -> crate::db::PaymentRepositoryResult<()>;
 }
 
 #[async_trait]
-impl BatchPaymentRecorder for PaymentStorage {
+impl BatchPaymentRecorder for PaymentRepository {
     async fn record_batch_payment(
         &self,
         swap_ids: Vec<Uuid>,
         txid: String,
         chain: ChainType,
         batch_nonce_digest: [u8; 32],
-    ) -> crate::payment_storage::Result<()> {
-        PaymentStorage::set_batch_payment(self, swap_ids, txid, chain, batch_nonce_digest).await
+    ) -> crate::db::PaymentRepositoryResult<()> {
+        PaymentRepository::set_batch_payment(self, swap_ids, txid, chain, batch_nonce_digest).await
     }
 }
 
@@ -54,7 +54,7 @@ pub struct BatchConfig {
 
 pub struct PaymentManager {
     wallet_manager: Arc<WalletManager>,
-    payment_storage: Arc<PaymentStorage>,
+    payment_repository: Arc<PaymentRepository>,
     /// Channels for queuing payments per chain
     bitcoin_tx: UnboundedSender<MarketMakerQueuedPayment>,
     ethereum_tx: UnboundedSender<MarketMakerQueuedPayment>,
@@ -66,7 +66,7 @@ pub struct PaymentManager {
 impl PaymentManager {
     pub fn new(
         wallet_manager: Arc<WalletManager>,
-        payment_storage: Arc<PaymentStorage>,
+        payment_repository: Arc<PaymentRepository>,
         batch_configs: HashMap<ChainType, BatchConfig>,
         otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
         join_set: &mut JoinSet<crate::Result<()>>,
@@ -84,7 +84,7 @@ impl PaymentManager {
                 spawn_batch_processor(
                     ChainType::Bitcoin,
                     wallet,
-                    payment_storage.clone(),
+                    payment_repository.clone(),
                     bitcoin_rx,
                     config.clone(),
                     otc_response_tx.clone(),
@@ -100,7 +100,7 @@ impl PaymentManager {
                 spawn_batch_processor(
                     ChainType::Ethereum,
                     wallet,
-                    payment_storage.clone(),
+                    payment_repository.clone(),
                     ethereum_rx,
                     config.clone(),
                     otc_response_tx.clone(),
@@ -112,7 +112,7 @@ impl PaymentManager {
 
         Self {
             wallet_manager,
-            payment_storage,
+            payment_repository,
             bitcoin_tx,
             ethereum_tx,
             in_flight_payments,
@@ -142,7 +142,11 @@ impl PaymentManager {
         }
 
         // Check if payment has already been broadcast to blockchain
-        match self.payment_storage.has_payment_been_made(*swap_id).await {
+        match self
+            .payment_repository
+            .has_payment_been_made(*swap_id)
+            .await
+        {
             Ok(Some(txid)) => {
                 return MMResponse::Error {
                     request_id: *request_id,
@@ -224,8 +228,8 @@ impl PaymentManager {
         }
     }
 
-    pub fn payment_storage(&self) -> Arc<PaymentStorage> {
-        self.payment_storage.clone()
+    pub fn payment_repository(&self) -> Arc<PaymentRepository> {
+        self.payment_repository.clone()
     }
 }
 
@@ -233,7 +237,7 @@ impl PaymentManager {
 fn spawn_batch_processor(
     chain_type: ChainType,
     wallet: Arc<dyn crate::wallet::Wallet>,
-    payment_storage: Arc<dyn BatchPaymentRecorder>,
+    payment_recorder: Arc<dyn BatchPaymentRecorder>,
     mut rx: mpsc::UnboundedReceiver<MarketMakerQueuedPayment>,
     config: BatchConfig,
     otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
@@ -326,7 +330,7 @@ fn spawn_batch_processor(
                     );
 
                     // Store all payments with the same tx_hash
-                    if let Err(e) = payment_storage
+                    if let Err(e) = payment_recorder
                         .record_batch_payment(
                             swap_ids.clone(),
                             tx_hash.clone(),
@@ -417,7 +421,7 @@ mod tests {
             _txid: String,
             _chain: ChainType,
             _batch_nonce_digest: [u8; 32],
-        ) -> crate::payment_storage::Result<()> {
+        ) -> crate::db::PaymentRepositoryResult<()> {
             self.recorded.lock().unwrap().push(swap_ids);
             Ok(())
         }

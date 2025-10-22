@@ -1,97 +1,51 @@
-use std::time::Duration;
-
 use chrono::{DateTime, Utc};
 use otc_models::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
 use serde_json;
 use snafu::prelude::*;
-use sqlx::{
-    migrate::Migrator,
-    postgres::{PgPool, PgPoolOptions, PgRow},
-    Row,
-};
+use sqlx::{postgres::PgRow, PgPool, Row};
 use tokio::{task::JoinSet, time};
 use tracing::{error, info};
 use uuid::Uuid;
 
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
-
 #[derive(Debug, Snafu)]
-pub enum QuoteStorageError {
-    #[snafu(display("Database error: {}", source))]
+pub enum QuoteRepositoryError {
+    #[snafu(display("Database error: {source}"))]
     Database { source: sqlx::Error },
 
-    #[snafu(display("Migration error: {}", source))]
-    Migration { source: sqlx::migrate::MigrateError },
-
-    #[snafu(display("Invalid chain type: {}", chain))]
+    #[snafu(display("Invalid chain type: {chain}"))]
     InvalidChainType { chain: String },
 
     #[snafu(display("Invalid token identifier"))]
     InvalidTokenIdentifier,
 
-    #[snafu(display("Invalid U256 value: {}", value))]
+    #[snafu(display("Invalid U256 value: {value}"))]
     InvalidU256 { value: String },
 
-    #[snafu(display("Invalid fee schedule: {}", source))]
+    #[snafu(display("Invalid fee schedule: {source}"))]
     InvalidFeeSchedule { source: serde_json::Error },
 }
 
-pub type Result<T> = std::result::Result<T, QuoteStorageError>;
+pub type QuoteRepositoryResult<T, E = QuoteRepositoryError> = std::result::Result<T, E>;
 
 #[derive(Clone)]
-pub struct QuoteStorage {
+pub struct QuoteRepository {
     pool: PgPool,
 }
 
-impl QuoteStorage {
-    pub async fn new(
-        database_url: &str,
-        db_max_connections: u32,
-        db_min_connections: u32,
-        join_set: &mut JoinSet<crate::Result<()>>,
-    ) -> Result<Self> {
-        info!("Connecting to market maker database...");
-
-        let pool = PgPoolOptions::new()
-            .max_connections(db_max_connections)
-            .min_connections(db_min_connections)
-            .acquire_timeout(Duration::from_secs(5))
-            .idle_timeout(Duration::from_secs(600))
-            .after_connect(|conn, _meta| {
-                Box::pin(async move {
-                    // Scope this pool to the quote_storage schema so unqualified SQL stays isolated
-                    sqlx::query("SET search_path TO quote_storage, public")
-                        .execute(conn)
-                        .await
-                        .map(|_| ())
-                })
-            })
-            .connect(database_url)
-            .await
-            .context(DatabaseSnafu)?;
-
-        info!("Running market maker database migrations...");
-        MIGRATOR.run(&pool).await.context(MigrationSnafu)?;
-        info!("Market maker database initialization complete");
-
-        Self::from_pool(pool, join_set).await
+impl QuoteRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
-    pub async fn from_pool(
-        pool: PgPool,
-        join_set: &mut JoinSet<crate::Result<()>>,
-    ) -> Result<Self> {
-        let storage = Self { pool };
-
-        let cleanup_storage = storage.clone();
+    pub fn start_cleanup_task(&self, join_set: &mut JoinSet<crate::Result<()>>) {
+        let cleanup_repo = self.clone();
         join_set.spawn(async move {
-            cleanup_storage.run_cleanup_task().await;
+            cleanup_repo.run_cleanup_task().await;
             Ok(())
         });
-        Ok(storage)
     }
 
-    pub async fn store_quote(&self, quote: &Quote) -> Result<()> {
+    pub async fn store_quote(&self, quote: &Quote) -> QuoteRepositoryResult<()> {
         let (from_chain, from_token, from_decimals) =
             self.serialize_currency(&quote.from.currency)?;
         let (to_chain, to_token, to_decimals) = self.serialize_currency(&quote.to.currency)?;
@@ -142,7 +96,7 @@ impl QuoteStorage {
         Ok(())
     }
 
-    pub async fn get_quote(&self, id: Uuid) -> Result<Quote> {
+    pub async fn get_quote(&self, id: Uuid) -> QuoteRepositoryResult<Quote> {
         let row = sqlx::query(
             r#"
             SELECT 
@@ -171,7 +125,10 @@ impl QuoteStorage {
         self.deserialize_quote(&row)
     }
 
-    pub async fn get_active_quotes(&self, market_maker_id: Uuid) -> Result<Vec<Quote>> {
+    pub async fn get_active_quotes(
+        &self,
+        market_maker_id: Uuid,
+    ) -> QuoteRepositoryResult<Vec<Quote>> {
         let now = utc::now();
 
         let rows = sqlx::query(
@@ -210,7 +167,7 @@ impl QuoteStorage {
         Ok(quotes)
     }
 
-    pub async fn mark_sent_to_rfq(&self, id: Uuid) -> Result<()> {
+    pub async fn mark_sent_to_rfq(&self, id: Uuid) -> QuoteRepositoryResult<()> {
         sqlx::query(
             r#"
             UPDATE mm_quotes
@@ -226,7 +183,7 @@ impl QuoteStorage {
         Ok(())
     }
 
-    pub async fn mark_sent_to_otc(&self, id: Uuid) -> Result<()> {
+    pub async fn mark_sent_to_otc(&self, id: Uuid) -> QuoteRepositoryResult<()> {
         sqlx::query(
             r#"
             UPDATE mm_quotes
@@ -242,7 +199,7 @@ impl QuoteStorage {
         Ok(())
     }
 
-    pub async fn delete_expired_quotes(&self) -> Result<u64> {
+    pub async fn delete_expired_quotes(&self) -> QuoteRepositoryResult<u64> {
         let now = utc::now();
 
         let result = sqlx::query(
@@ -260,7 +217,7 @@ impl QuoteStorage {
     }
 
     async fn run_cleanup_task(&self) {
-        let mut interval = time::interval(time::Duration::from_secs(600)); // 10 minutes
+        let mut interval = time::interval(time::Duration::from_secs(600));
 
         loop {
             interval.tick().await;
@@ -278,7 +235,10 @@ impl QuoteStorage {
         }
     }
 
-    fn serialize_currency(&self, currency: &Currency) -> Result<(String, serde_json::Value, i16)> {
+    fn serialize_currency(
+        &self,
+        currency: &Currency,
+    ) -> QuoteRepositoryResult<(String, serde_json::Value, i16)> {
         let chain = match currency.chain {
             ChainType::Bitcoin => "bitcoin".to_string(),
             ChainType::Ethereum => "ethereum".to_string(),
@@ -294,7 +254,7 @@ impl QuoteStorage {
         Ok((chain, token, currency.decimals as i16))
     }
 
-    fn deserialize_quote(&self, row: &PgRow) -> Result<Quote> {
+    fn deserialize_quote(&self, row: &PgRow) -> QuoteRepositoryResult<Quote> {
         let id: Uuid = row.get("id");
         let market_maker_id: Uuid = row.get("market_maker_id");
 
@@ -316,13 +276,13 @@ impl QuoteStorage {
 
         let from_amount =
             alloy::primitives::U256::from_str_radix(&from_amount, 10).map_err(|_| {
-                QuoteStorageError::InvalidU256 {
+                QuoteRepositoryError::InvalidU256 {
                     value: from_amount.clone(),
                 }
             })?;
 
         let to_amount = alloy::primitives::U256::from_str_radix(&to_amount, 10).map_err(|_| {
-            QuoteStorageError::InvalidU256 {
+            QuoteRepositoryError::InvalidU256 {
                 value: to_amount.clone(),
             }
         })?;
@@ -354,12 +314,15 @@ impl QuoteStorage {
         chain: &str,
         token: serde_json::Value,
         decimals: i16,
-    ) -> Result<Currency> {
+    ) -> QuoteRepositoryResult<Currency> {
         let chain_type = match chain {
             "bitcoin" => ChainType::Bitcoin,
             "ethereum" => ChainType::Ethereum,
             _ => {
-                return InvalidChainTypeSnafu { chain }.fail();
+                return InvalidChainTypeSnafu {
+                    chain: chain.to_string(),
+                }
+                .fail();
             }
         };
 

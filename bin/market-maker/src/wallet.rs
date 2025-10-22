@@ -22,9 +22,9 @@ pub enum WalletError {
         loc: Location,
     },
 
-    #[snafu(display("Deposit key storage error: {}", source))]
-    DepositKeyStorageError {
-        source: crate::deposit_key_storage::Error,
+    #[snafu(display("Deposit repository error: {}", source))]
+    DepositRepositoryError {
+        source: crate::db::DepositRepositoryError,
         #[snafu(implicit)]
         loc: Location,
     },

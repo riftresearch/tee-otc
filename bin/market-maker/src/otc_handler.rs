@@ -1,26 +1,25 @@
-use crate::deposit_key_storage::{Deposit, DepositKeyStorage, DepositKeyStorageTrait};
+use crate::db::{Deposit, DepositRepository, DepositStore, QuoteRepository};
 use crate::payment_manager::PaymentManager;
-use crate::quote_storage::QuoteStorage;
 use otc_protocols::mm::{MMRequest, MMResponse, MMStatus, ProtocolMessage};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
 #[derive(Clone)]
 pub struct OTCMessageHandler {
-    quote_storage: Arc<QuoteStorage>,
-    deposit_key_storage: Arc<DepositKeyStorage>,
+    quote_repository: Arc<QuoteRepository>,
+    deposit_repository: Arc<DepositRepository>,
     payment_manager: Arc<PaymentManager>,
 }
 
 impl OTCMessageHandler {
     pub fn new(
-        quote_storage: Arc<QuoteStorage>,
-        deposit_key_storage: Arc<DepositKeyStorage>,
+        quote_repository: Arc<QuoteRepository>,
+        deposit_repository: Arc<DepositRepository>,
         payment_manager: Arc<PaymentManager>,
     ) -> Self {
         Self {
-            quote_storage,
-            deposit_key_storage,
+            quote_repository,
+            deposit_repository,
             payment_manager,
         }
     }
@@ -48,7 +47,7 @@ impl OTCMessageHandler {
 
                 // Verify the quote exists in our database
                 let (accepted, rejection_reason) =
-                    match self.quote_storage.get_quote(*quote_id).await {
+                    match self.quote_repository.get_quote(*quote_id).await {
                         Ok(quote) => {
                             let stored_hash = quote.hash();
                             info!(
@@ -177,7 +176,7 @@ impl OTCMessageHandler {
                 tracing::info!(message = "Swap complete, received user's private key", swap_id = %swap_id, user_deposit_tx_hash = %user_deposit_tx_hash);
 
                 match self
-                    .deposit_key_storage
+                    .deposit_repository
                     .store_deposit(&Deposit {
                         private_key: user_deposit_private_key.to_string(),
                         holdings: lot.clone(),

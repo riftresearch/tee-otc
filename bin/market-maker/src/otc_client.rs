@@ -1,8 +1,7 @@
 use crate::config::Config;
-use crate::deposit_key_storage::DepositKeyStorage;
+use crate::db::{DepositRepository, QuoteRepository};
 use crate::otc_handler::OTCMessageHandler;
 use crate::payment_manager::PaymentManager;
-use crate::quote_storage::QuoteStorage;
 use futures_util::{SinkExt, StreamExt};
 use otc_protocols::mm::{MMRequest, MMResponse, MMStatus, ProtocolMessage};
 use snafu::prelude::*;
@@ -67,12 +66,12 @@ pub struct OtcFillClient {
 impl OtcFillClient {
     pub fn new(
         config: Config,
-        quote_storage: Arc<QuoteStorage>,
-        deposit_key_storage: Arc<DepositKeyStorage>,
+        quote_repository: Arc<QuoteRepository>,
+        deposit_repository: Arc<DepositRepository>,
         payment_manager: Arc<PaymentManager>,
         otc_response_rx: mpsc::UnboundedReceiver<ProtocolMessage<MMResponse>>,
     ) -> Self {
-        let handler = OTCMessageHandler::new(quote_storage, deposit_key_storage, payment_manager);
+        let handler = OTCMessageHandler::new(quote_repository, deposit_repository, payment_manager);
         let (websocket_tx_watch, mut websocket_tx_watch_rx) =
             watch::channel::<Option<mpsc::Sender<WebSocketMessage>>>(None);
 
@@ -122,7 +121,7 @@ impl OtcFillClient {
 
     async fn replay_sent_batches(&self, websocket_sender: &mpsc::Sender<WebSocketMessage>) {
         let payment_manager = self.handler.payment_manager();
-        let storage = payment_manager.payment_storage();
+        let storage = payment_manager.payment_repository();
 
         let batches = match storage.list_batches().await {
             Ok(batches) => batches,

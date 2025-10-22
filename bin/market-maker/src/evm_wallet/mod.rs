@@ -25,7 +25,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, info};
 
 use crate::{
-    deposit_key_storage::{Deposit, DepositKeyStorage, DepositKeyStorageTrait, FillStatus},
+    db::{Deposit, DepositRepository, DepositStore, FillStatus},
     wallet::{Wallet, WalletBalance},
     WalletError, WalletResult,
 };
@@ -33,7 +33,7 @@ use crate::{
 pub struct EVMWallet {
     pub tx_broadcaster: transaction_broadcaster::EVMTransactionBroadcaster,
     pub provider: Arc<WebsocketWalletProvider>,
-    deposit_key_storage: Option<Arc<DepositKeyStorage>>,
+    deposit_repository: Option<Arc<DepositRepository>>,
 }
 
 impl EVMWallet {
@@ -41,7 +41,7 @@ impl EVMWallet {
         provider: Arc<WebsocketWalletProvider>,
         debug_rpc_url: String,
         confirmations: u64,
-        deposit_key_storage: Option<Arc<DepositKeyStorage>>,
+        deposit_repository: Option<Arc<DepositRepository>>,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Self {
         let tx_broadcaster = transaction_broadcaster::EVMTransactionBroadcaster::new(
@@ -54,7 +54,7 @@ impl EVMWallet {
         Self {
             tx_broadcaster,
             provider,
-            deposit_key_storage,
+            deposit_repository,
         }
     }
     pub async fn ensure_eip7702_delegation(
@@ -174,7 +174,7 @@ impl Wallet for EVMWallet {
             &self.provider,
             payments,
             mm_payment_validation,
-            self.deposit_key_storage.clone(),
+            self.deposit_repository.clone(),
         )
         .await?;
 
@@ -236,8 +236,8 @@ impl Wallet for EVMWallet {
 
                 let mut net_deposit_key_balance = U256::from(0);
 
-                if let Some(deposit_key_storage) = &self.deposit_key_storage {
-                    let deposit_key_bal = deposit_key_storage
+                if let Some(deposit_repository) = &self.deposit_repository {
+                    let deposit_key_bal = deposit_repository
                         .balance(&Currency {
                             chain: ChainType::Ethereum,
                             token: token.clone(),
@@ -329,15 +329,15 @@ async fn get_erc20_balance(
 /// Attempts to acquire funding executions from deposit key storage to cover the lot.
 /// Returns executions that transfer funds from deposit keys to the sender address.
 async fn get_funding_executions_from_deposits(
-    deposit_key_storage: &Arc<DepositKeyStorage>,
+    deposit_repository: &Arc<DepositRepository>,
     lot: &Lot,
     provider: &Arc<WebsocketWalletProvider>,
     sender: &Address,
 ) -> Result<Vec<Execution>, WalletError> {
-    let fill_status = deposit_key_storage
+    let fill_status = deposit_repository
         .take_deposits_that_fill_lot(lot)
         .await
-        .map_err(|e| WalletError::DepositKeyStorageError {
+        .map_err(|e| WalletError::DepositRepositoryError {
             source: e,
             loc: location!(),
         })?;
@@ -432,7 +432,7 @@ pub async fn create_evm_transfer_transaction(
     provider: &Arc<WebsocketWalletProvider>,
     payments: Vec<Payment>,
     mm_payment_validation: Option<MarketMakerPaymentVerification>,
-    deposit_key_storage: Option<Arc<DepositKeyStorage>>,
+    deposit_repository: Option<Arc<DepositRepository>>,
 ) -> Result<TransactionRequest, WalletError> {
     // TODO: Temporary requirement that all tokens are the same in a batch
     for (i, payment) in payments.iter().enumerate() {
@@ -483,7 +483,7 @@ pub async fn create_evm_transfer_transaction(
             }
 
             // Acquire funding executions from deposit storage if available
-            let funding_executions = match &deposit_key_storage {
+            let funding_executions = match &deposit_repository {
                 Some(storage) => {
                     let mut executions = Vec::new();
                     for payment in payments {
