@@ -15,9 +15,19 @@ pub enum PaymentRepositoryError {
 
     #[snafu(display("Unknown chain value: {value}"))]
     UnknownChain { value: String },
+
+    #[snafu(display("Unknown batch status value: {value}"))]
+    UnknownBatchStatus { value: String },
 }
 
 pub type PaymentRepositoryResult<T, E = PaymentRepositoryError> = std::result::Result<T, E>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchStatus {
+    Created,
+    Confirmed,
+    Cancelled,
+}
 
 #[derive(Clone)]
 pub struct PaymentRepository {
@@ -31,6 +41,7 @@ pub struct StoredBatch {
     pub swap_ids: Vec<Uuid>,
     pub batch_nonce_digest: [u8; 32],
     pub created_at: DateTime<Utc>,
+    pub status: BatchStatus,
 }
 
 impl PaymentRepository {
@@ -91,22 +102,27 @@ impl PaymentRepository {
         let txid = txid.into();
 
         let mut transaction = self.pool.begin().await.context(DatabaseSnafu)?;
+        let created_at = utc::now();
 
         sqlx::query(
             r#"
-            INSERT INTO mm_batches (txid, chain, swap_ids, batch_nonce_digest)
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO mm_batches (txid, chain, swap_ids, batch_nonce_digest, status, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6)
             ON CONFLICT (txid)
             DO UPDATE SET
                 chain = EXCLUDED.chain,
                 swap_ids = EXCLUDED.swap_ids,
-                batch_nonce_digest = EXCLUDED.batch_nonce_digest
+                batch_nonce_digest = EXCLUDED.batch_nonce_digest,
+                status = EXCLUDED.status,
+                created_at = EXCLUDED.created_at
             "#,
         )
         .bind(&txid)
         .bind(chain_to_db(&chain))
         .bind(&swap_ids)
         .bind(batch_nonce_digest.as_slice())
+        .bind(batch_status_to_db(&BatchStatus::Created))
+        .bind(created_at)
         .execute(&mut *transaction)
         .await
         .context(DatabaseSnafu)?;
@@ -132,10 +148,51 @@ impl PaymentRepository {
         Ok(())
     }
 
+    pub async fn update_batch_status(
+        &self,
+        txid: &str,
+        status: BatchStatus,
+    ) -> PaymentRepositoryResult<()> {
+        sqlx::query(
+            r#"
+            UPDATE mm_batches
+            SET status = $1
+            WHERE txid = $2
+            "#,
+        )
+        .bind(batch_status_to_db(&status))
+        .bind(txid)
+        .execute(&self.pool)
+        .await
+        .context(DatabaseSnafu)?;
+
+        Ok(())
+    }
+
+    pub async fn get_batches_by_status(
+        &self,
+        status: BatchStatus,
+    ) -> PaymentRepositoryResult<Vec<StoredBatch>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT txid, chain, swap_ids, batch_nonce_digest, created_at, status
+            FROM mm_batches
+            WHERE status = $1
+            ORDER BY created_at ASC
+            "#,
+        )
+        .bind(batch_status_to_db(&status))
+        .fetch_all(&self.pool)
+        .await
+        .context(DatabaseSnafu)?;
+
+        self.parse_batch_rows(rows)
+    }
+
     pub async fn list_batches(&self) -> PaymentRepositoryResult<Vec<StoredBatch>> {
         let rows = sqlx::query(
             r#"
-            SELECT txid, chain, swap_ids, batch_nonce_digest, created_at
+            SELECT txid, chain, swap_ids, batch_nonce_digest, created_at, status
             FROM mm_batches
             ORDER BY created_at ASC
             "#,
@@ -144,6 +201,13 @@ impl PaymentRepository {
         .await
         .context(DatabaseSnafu)?;
 
+        self.parse_batch_rows(rows)
+    }
+
+    fn parse_batch_rows(
+        &self,
+        rows: Vec<sqlx::postgres::PgRow>,
+    ) -> PaymentRepositoryResult<Vec<StoredBatch>> {
         let mut batches = Vec::with_capacity(rows.len());
         for row in rows {
             let txid: String = row.try_get("txid").context(DatabaseSnafu)?;
@@ -151,6 +215,7 @@ impl PaymentRepository {
             let swap_ids: Vec<Uuid> = row.try_get("swap_ids").context(DatabaseSnafu)?;
             let digest: Vec<u8> = row.try_get("batch_nonce_digest").context(DatabaseSnafu)?;
             let created_at: DateTime<Utc> = row.try_get("created_at").context(DatabaseSnafu)?;
+            let status: String = row.try_get("status").context(DatabaseSnafu)?;
 
             if digest.len() != 32 {
                 return Err(PaymentRepositoryError::InvalidDigest { len: digest.len() });
@@ -164,6 +229,7 @@ impl PaymentRepository {
                 swap_ids,
                 batch_nonce_digest,
                 created_at,
+                status: batch_status_from_db(&status)?,
             });
         }
 
@@ -183,6 +249,25 @@ fn chain_from_db(value: &str) -> PaymentRepositoryResult<ChainType> {
         "bitcoin" => Ok(ChainType::Bitcoin),
         "ethereum" => Ok(ChainType::Ethereum),
         other => Err(PaymentRepositoryError::UnknownChain {
+            value: other.to_string(),
+        }),
+    }
+}
+
+fn batch_status_to_db(status: &BatchStatus) -> &'static str {
+    match status {
+        BatchStatus::Created => "created",
+        BatchStatus::Confirmed => "confirmed",
+        BatchStatus::Cancelled => "cancelled",
+    }
+}
+
+fn batch_status_from_db(value: &str) -> PaymentRepositoryResult<BatchStatus> {
+    match value {
+        "created" => Ok(BatchStatus::Created),
+        "confirmed" => Ok(BatchStatus::Confirmed),
+        "cancelled" => Ok(BatchStatus::Cancelled),
+        other => Err(PaymentRepositoryError::UnknownBatchStatus {
             value: other.to_string(),
         }),
     }

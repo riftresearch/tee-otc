@@ -121,6 +121,12 @@ pub enum WalletError {
         #[snafu(implicit)]
         loc: Location,
     },
+    #[snafu(display("Failed to cancel transaction: {message} at {loc:#?}"))]
+    CancelError {
+        message: String,
+        #[snafu(implicit)]
+        loc: Location,
+    },
 }
 
 pub type WalletResult<T, E = WalletError> = std::result::Result<T, E>;
@@ -166,6 +172,12 @@ pub trait Wallet: Send + Sync {
     async fn balance(&self, token: &TokenIdentifier) -> WalletResult<WalletBalance>;
 
     fn receive_address(&self, token: &TokenIdentifier) -> String;
+
+    async fn cancel_tx(&self, tx_hash: &str) -> WalletResult<String>;
+
+    /// Check the number of confirmations for a given transaction.
+    /// Returns 0 if the transaction is not confirmed or not found.
+    async fn check_tx_confirmations(&self, tx_hash: &str) -> WalletResult<u64>;
 
     /// Get the chain type of the wallet
     fn chain_type(&self) -> ChainType;
@@ -259,6 +271,14 @@ mod tests {
                 native_balance: U256::from(1000000000000000000u64),
                 deposit_key_balance: U256::from(0),
             })
+        }
+
+        async fn cancel_tx(&self, _tx_hash: &str) -> WalletResult<String> {
+            Ok("mock_txid_123".to_string())
+        }
+
+        async fn check_tx_confirmations(&self, _tx_hash: &str) -> WalletResult<u64> {
+            Ok(6) // Mock: always 6 confirmations
         }
     }
 

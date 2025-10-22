@@ -149,6 +149,16 @@ impl EVMWallet {
 
 #[async_trait]
 impl Wallet for EVMWallet {
+    async fn cancel_tx(&self, _tx_hash: &str) -> WalletResult<String> {
+        unimplemented!()
+    }
+
+    async fn check_tx_confirmations(&self, _tx_hash: &str) -> WalletResult<u64> {
+        // Mock implementation - always return that the transaction is confirmed
+        // This is acceptable since Ethereum batches aren't relevant for the batch monitor
+        Ok(u64::MAX)
+    }
+
     async fn create_batch_payment(
         &self,
         payments: Vec<Payment>,

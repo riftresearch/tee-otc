@@ -1,6 +1,8 @@
+use std::collections::HashSet;
 use std::{str::FromStr, sync::Arc};
 
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
+use bdk_wallet::bitcoin::{FeeRate, Sequence};
 use bdk_wallet::chain::spk_client::{FullScanRequestBuilder, FullScanResponse};
 use bdk_wallet::KeychainKind;
 use bdk_wallet::{
@@ -8,8 +10,10 @@ use bdk_wallet::{
     signer::SignOptions,
     CreateParams, PersistedWallet, Wallet,
 };
+use esplora_client::OutPoint;
 use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
 use otc_models::ChainType;
+use serde::{Deserialize, Serialize};
 use snafu::ResultExt;
 use tokio::sync::{mpsc, oneshot, Mutex};
 use tokio::task::JoinSet;
@@ -21,6 +25,7 @@ use crate::bitcoin_wallet::{
     BuildTransactionSnafu, ExtractTransactionSnafu, PersistWalletSnafu, PsbtNotFinalizedSnafu,
     ReceiverFailedSnafu, SignTransactionSnafu, SyncWalletSnafu,
 };
+use crate::db::BroadcastedTransactionRepository;
 
 use super::{BitcoinWalletError, PARALLEL_REQUESTS};
 
@@ -29,6 +34,7 @@ pub struct TransactionRequest {
     pub foreign_utxos: Vec<ForeignUtxo>,
     pub mm_payment_validation: Option<MarketMakerPaymentVerification>,
     pub response_tx: oneshot::Sender<Result<String, BitcoinWalletError>>,
+    pub explicit_absolute_fee: Option<u64>,
 }
 
 pub struct BitcoinTransactionBroadcaster {
@@ -38,12 +44,15 @@ pub struct BitcoinTransactionBroadcaster {
 impl BitcoinTransactionBroadcaster {
     pub fn new(
         wallet: Arc<Mutex<PersistedWallet<bdk_wallet::rusqlite::Connection>>>,
+        wallet_descriptor: &str,
         connection: Arc<Mutex<bdk_wallet::rusqlite::Connection>>,
         esplora_client: Arc<esplora_client::AsyncClient>,
         network: bitcoin::Network,
+        broadcasted_transaction_repository: Option<Arc<BroadcastedTransactionRepository>>,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Self {
         let (request_tx, mut request_rx) = mpsc::unbounded_channel::<TransactionRequest>();
+        let main_wallet_descriptor = wallet_descriptor.to_string();
         join_set.spawn(async move {
             info!("Bitcoin transaction broadcaster started");
             full_scan_wallet(&wallet, &connection, &esplora_client)
@@ -53,10 +62,13 @@ impl BitcoinTransactionBroadcaster {
             while let Some(request) = request_rx.recv().await {
                 let result = process_transaction(
                     &wallet,
+                    &main_wallet_descriptor,
                     &connection,
                     &esplora_client,
                     network,
+                    &broadcasted_transaction_repository,
                     request.payments,
+                    request.explicit_absolute_fee,
                     request.foreign_utxos,
                     request.mm_payment_validation,
                 )
@@ -79,6 +91,7 @@ impl BitcoinTransactionBroadcaster {
         payments: Vec<Payment>,
         foreign_utxos: Vec<ForeignUtxo>,
         mm_payment_validation: Option<MarketMakerPaymentVerification>,
+        explicit_absolute_fee: Option<u64>,
     ) -> Result<String, BitcoinWalletError> {
         let (response_tx, response_rx) = oneshot::channel();
 
@@ -87,6 +100,7 @@ impl BitcoinTransactionBroadcaster {
             foreign_utxos,
             mm_payment_validation,
             response_tx,
+            explicit_absolute_fee,
         };
 
         self.request_tx
@@ -97,7 +111,7 @@ impl BitcoinTransactionBroadcaster {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ForeignUtxo {
     pub outpoint: bdk_esplora::esplora_client::OutPoint,
     pub psbt_input: bdk_wallet::bitcoin::psbt::Input,
@@ -105,27 +119,36 @@ pub struct ForeignUtxo {
     pub foreign_descriptor: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn process_transaction(
     wallet: &Arc<Mutex<PersistedWallet<bdk_wallet::rusqlite::Connection>>>,
+    main_wallet_descriptor: &str,
     connection: &Arc<Mutex<bdk_wallet::rusqlite::Connection>>,
     esplora_client: &Arc<esplora_client::AsyncClient>,
     network: bitcoin::Network,
+    broadcasted_transaction_repository: &Option<Arc<BroadcastedTransactionRepository>>,
     payments: Vec<Payment>,
+    explicit_absolute_fee: Option<u64>,
     foreign_utxos: Vec<ForeignUtxo>,
     mm_payment_validation: Option<MarketMakerPaymentVerification>,
 ) -> Result<String, BitcoinWalletError> {
     let start_time = Instant::now();
 
-    if payments.len() > 1 {
+    let is_consolidation_tx = if payments.len() > 1 {
         info!("Processing batch bitcoin payments to {:?}", payments);
-    } else {
+        false
+    } else if payments.len() == 1 {
         info!("Processing bitcoin payment to {:?}", payments[0]);
-    }
+        false
+    } else {
+        info!("Processing a consolidation transaction");
+        true
+    };
 
     // Parse the recipient address
     let mut payment_tuple: Vec<(Address, Amount)> = vec![];
 
-    for payment in payments {
+    for payment in &payments {
         let address = Address::from_str(&payment.to_address)
             .map_err(|e| BitcoinWalletError::InvalidAddress {
                 reason: e.to_string(),
@@ -145,6 +168,9 @@ async fn process_transaction(
 
     // Lock wallet for transaction creation and persist immediately after building
     let mut wallet_guard = wallet.lock().await;
+    let script_pubkey = wallet_guard
+        .next_unused_address(KeychainKind::External)
+        .script_pubkey();
 
     // Check balance
     let balance = wallet_guard.balance();
@@ -153,7 +179,27 @@ async fn process_transaction(
     // Build transaction
     let mut tx_builder = wallet_guard.build_tx();
 
+    if is_consolidation_tx {
+        tx_builder.drain_to(script_pubkey);
+    }
+
+    if let Some(explicit_absolute_fee) = explicit_absolute_fee {
+        tx_builder.fee_absolute(Amount::from_sat(explicit_absolute_fee));
+    } else {
+        let fee_estimates = esplora_client
+            .get_fee_estimates()
+            .await
+            .map_err(Box::new)
+            .context(SyncWalletSnafu)?;
+        let explicit_fee_rate = *fee_estimates.get(&1).unwrap_or(&1.1) as f64;
+        info!("Using fee rate: {:?} sats/vbyte", explicit_fee_rate);
+        let fee_rate = from_sat_per_vb_f64(explicit_fee_rate).unwrap();
+        tx_builder.fee_rate(fee_rate);
+    }
+
     tx_builder.ordering(bdk_wallet::TxOrdering::Untouched);
+    tx_builder.nlocktime(crate::bitcoin::absolute::LockTime::ZERO);
+    tx_builder.set_exact_sequence(Sequence::ENABLE_RBF_NO_LOCKTIME);
 
     // Add foreign UTXOs first
     for foreign_utxo in &foreign_utxos {
@@ -190,11 +236,10 @@ async fn process_transaction(
         tx_builder.add_recipient(op_return_script, Amount::ZERO);
     }
 
-    tx_builder.nlocktime(crate::bitcoin::absolute::LockTime::ZERO);
-
     // Create and sign the transaction
     let build_start = Instant::now();
     let mut psbt = tx_builder.finish().context(BuildTransactionSnafu)?;
+
     info!("Transaction built in {:?}", build_start.elapsed());
 
     // CRITICAL: Persist immediately after building to lock UTXOs
@@ -214,14 +259,15 @@ async fn process_transaction(
 
     // Now loop through all the private keys we have and sign the psbt with each
     let mut fully_finalized = finalized;
-    for foreign_utxo in foreign_utxos {
+    for foreign_utxo in &foreign_utxos {
         info!(
             "Signing transaction with foreign descriptor: {:?}",
             foreign_utxo.foreign_descriptor
         );
-        let temp_wallet =
-            Wallet::create_with_params(CreateParams::new_single(foreign_utxo.foreign_descriptor))
-                .expect("valid wallet");
+        let temp_wallet = Wallet::create_with_params(CreateParams::new_single(
+            foreign_utxo.foreign_descriptor.clone(),
+        ))
+        .expect("valid wallet");
         fully_finalized = temp_wallet
             .sign(&mut psbt, SignOptions::default())
             .context(SignTransactionSnafu)?;
@@ -237,8 +283,15 @@ async fn process_transaction(
         }
         PsbtNotFinalizedSnafu.fail()?
     } else {
-        // Extract transaction
-        let tx = psbt.extract_tx().context(ExtractTransactionSnafu)?;
+        let absolute_fee = psbt.fee().unwrap().to_sat();
+
+        let (tx, fully_qualified_foreign_utxos) = build_tx_and_get_fully_qualified_foreign_utxos(
+            &psbt,
+            &foreign_utxos,
+            main_wallet_descriptor,
+        )
+        .map_err(|e| *e)?;
+
         let txid = tx.compute_txid().to_string();
 
         // Broadcast the transaction with retry logic for mempool chain errors
@@ -276,6 +329,19 @@ async fn process_transaction(
 
         info!("Transaction broadcast in {:?}", broadcast_start.elapsed());
 
+        if let Some(broadcasted_transaction_repository) = broadcasted_transaction_repository {
+            broadcasted_transaction_repository
+                .set_broadcasted_transaction(
+                    &txid,
+                    ChainType::Bitcoin,
+                    bitcoin::consensus::serialize(&tx),
+                    Some(fully_qualified_foreign_utxos),
+                    absolute_fee,
+                )
+                .await
+                .context(crate::bitcoin_wallet::BroadcastedTransactionRepositorySnafu)?;
+        }
+
         // Sync after broadcast to update wallet state
         light_sync_wallet(wallet, connection, esplora_client).await?;
 
@@ -287,6 +353,49 @@ async fn process_transaction(
 
         Ok(txid)
     }
+}
+
+fn build_tx_and_get_fully_qualified_foreign_utxos(
+    psbt: &bdk_wallet::bitcoin::psbt::Psbt,
+    objectively_foreign_utxos: &[ForeignUtxo],
+    main_wallet_descriptor: &str,
+) -> Result<(bitcoin::Transaction, Vec<ForeignUtxo>), Box<BitcoinWalletError>> {
+    // Extract transaction
+    let tx = psbt
+        .clone()
+        .extract_tx()
+        .context(ExtractTransactionSnafu)
+        .map_err(Box::new)?;
+
+    let objectively_foreign_utxos_set: HashSet<OutPoint> = objectively_foreign_utxos
+        .iter()
+        .map(|utxo| utxo.outpoint)
+        .collect();
+    let main_wallet_utxos = psbt
+        .inputs
+        .iter()
+        .zip(tx.input.iter())
+        .filter(|(_, txin)| !objectively_foreign_utxos_set.contains(&txin.previous_output))
+        .map(|(input, txin)| {
+            let satisfaction_weight = bdk_wallet::bitcoin::Weight::from_wu(108);
+            let psbt_input = bdk_wallet::bitcoin::psbt::Input {
+                witness_utxo: input.witness_utxo.clone(),
+                non_witness_utxo: input.non_witness_utxo.clone(),
+                ..Default::default()
+            };
+            ForeignUtxo {
+                outpoint: txin.previous_output,
+                psbt_input,
+                satisfaction_weight,
+                foreign_descriptor: main_wallet_descriptor.to_string(),
+            }
+        })
+        .collect::<Vec<ForeignUtxo>>();
+
+    let mut total_utxos = main_wallet_utxos;
+    total_utxos.extend(objectively_foreign_utxos.iter().cloned());
+
+    Ok((tx, total_utxos))
 }
 
 async fn full_scan_wallet(
@@ -312,6 +421,15 @@ async fn full_scan_wallet(
         .context(PersistWalletSnafu)?;
 
     Ok(())
+}
+fn from_sat_per_vb_f64(sat_vb: f64) -> Option<FeeRate> {
+    if sat_vb.is_finite() && sat_vb >= 0.0 {
+        let kwu = (sat_vb * 250.0).round();
+        if kwu <= u64::MAX as f64 {
+            return Some(FeeRate::from_sat_per_kwu(kwu as u64));
+        }
+    }
+    None
 }
 
 async fn light_sync_wallet(

@@ -66,7 +66,28 @@ pub enum RefundSwapReason {
     MarketMakerDepositNeverConfirmed,
 }
 
+/// Returns true if a refund is approaching because the market maker never initiated their deposit.
+/// This checks against the user deposit confirmation time.
+pub fn can_be_refunded_soon_bc_mm_not_initiated(
+    user_deposit_confirmed_at: Option<DateTime<Utc>>,
+) -> bool {
+    let confirmed_at = match user_deposit_confirmed_at {
+        Some(ts) => ts,
+        None => return false,
+    };
+    let elapsed = utc::now() - confirmed_at;
+    elapsed >= (MM_NEVER_DEPOSITS_TIMEOUT - MM_DEPOSIT_RISK_WINDOW)
+}
+
+/// Returns true if a refund is approaching because the market maker's deposit was never confirmed.
+/// This checks against the MM deposit detection time (or batch creation time as a proxy).
+pub fn can_be_refunded_soon_bc_mm_not_confirmed(mm_deposit_detected_at: DateTime<Utc>) -> bool {
+    let elapsed = utc::now() - mm_deposit_detected_at;
+    elapsed >= (MM_DEPOSIT_NEVER_CONFIRMED_TIMEOUT - MM_DEPOSIT_RISK_WINDOW)
+}
+
 /// Returns true if a refund eligibility timeout is approaching within the configured risk window.
+/// This is a wrapper that checks both refund scenarios based on swap status.
 pub fn can_be_refunded_soon(
     status: SwapStatus,
     user_deposit_confirmed_at: Option<DateTime<Utc>>,
@@ -74,21 +95,12 @@ pub fn can_be_refunded_soon(
 ) -> bool {
     match status {
         SwapStatus::WaitingMMDepositInitiated => {
-            let confirmed_at = match user_deposit_confirmed_at {
-                Some(ts) => ts,
-                None => return false,
-            };
-            let elapsed = utc::now() - confirmed_at;
-            elapsed >= (MM_NEVER_DEPOSITS_TIMEOUT - MM_DEPOSIT_RISK_WINDOW)
+            can_be_refunded_soon_bc_mm_not_initiated(user_deposit_confirmed_at)
         }
-        SwapStatus::WaitingMMDepositConfirmed => {
-            let detected_at = match mm_deposit_detected_at {
-                Some(ts) => ts,
-                None => return false,
-            };
-            let elapsed = utc::now() - detected_at;
-            elapsed >= (MM_DEPOSIT_NEVER_CONFIRMED_TIMEOUT - MM_DEPOSIT_RISK_WINDOW)
-        }
+        SwapStatus::WaitingMMDepositConfirmed => match mm_deposit_detected_at {
+            Some(ts) => can_be_refunded_soon_bc_mm_not_confirmed(ts),
+            None => false,
+        },
         _ => false,
     }
 }

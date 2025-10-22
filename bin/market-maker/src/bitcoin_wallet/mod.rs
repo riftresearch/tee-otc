@@ -7,9 +7,9 @@ use alloy::primitives::U256;
 use async_trait::async_trait;
 use bdk_esplora::{esplora_client, EsploraAsyncExt};
 use bdk_wallet::bitcoin::secp256k1::Secp256k1;
-use bdk_wallet::descriptor;
 use bdk_wallet::keys::DescriptorPublicKey;
 use bdk_wallet::rusqlite::Connection;
+use bdk_wallet::{bitcoin, descriptor};
 use bdk_wallet::{
     bitcoin::Network, error::CreateTxError, signer::SignerError, AddForeignUtxoError, CreateParams,
     KeychainKind, LoadParams, LoadWithPersistError, PersistedWallet,
@@ -23,7 +23,7 @@ use tokio::task::JoinSet;
 use tracing::{info, warn};
 
 use crate::bitcoin_wallet::transaction_broadcaster::{ForeignUtxo, TransactionRequest};
-use crate::db::{DepositRepository, DepositStore, FillStatus};
+use crate::db::{BroadcastedTransactionRepository, DepositRepository, DepositStore, FillStatus};
 use crate::wallet::{self, Wallet as WalletTrait, WalletBalance, WalletError};
 use crate::WalletResult;
 
@@ -31,6 +31,15 @@ const PARALLEL_REQUESTS: usize = 5;
 
 #[derive(Debug, Snafu)]
 pub enum BitcoinWalletError {
+    #[snafu(display(
+        "Failed to interact with broadcasted transaction repository: {source} at {loc:#?}"
+    ))]
+    BroadcastedTransactionRepositoryError {
+        source: crate::db::broadcasted_transaction_repo::BroadcastedTransactionRepositoryError,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
     #[snafu(display("Transaction broadcaster stopped, {source} at {loc:#?}"))]
     BroadcasterFailed {
         source: tokio::sync::mpsc::error::SendError<TransactionRequest>,
@@ -104,6 +113,13 @@ pub enum BitcoinWalletError {
         loc: Location,
     },
 
+    #[snafu(display("Failed to add UTXO: {source} at {loc:#?}"))]
+    AddUtxo {
+        source: bdk_wallet::AddUtxoError,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
     #[snafu(display("Failed to extract transaction: {}", source))]
     ExtractTransaction {
         source: bdk_wallet::bitcoin::psbt::ExtractTxError,
@@ -116,6 +132,13 @@ pub enum BitcoinWalletError {
 
     #[snafu(display("Invalid Bitcoin address: {reason}"))]
     InvalidAddress { reason: String },
+
+    #[snafu(display("Failed to parse txid: {reason} at {loc:#?}"))]
+    ParseTxid {
+        reason: String,
+        #[snafu(implicit)]
+        loc: Location,
+    },
 
     #[snafu(display("Failed to sign transaction: at {loc:#?}"))]
     PsbtNotFinalized {
@@ -134,6 +157,7 @@ pub struct BitcoinWallet {
     esplora_client: Arc<esplora_client::AsyncClient>,
     receive_address: String,
     deposit_repository: Option<Arc<DepositRepository>>,
+    broadcasted_transaction_repository: Option<Arc<BroadcastedTransactionRepository>>,
 }
 
 impl BitcoinWallet {
@@ -143,6 +167,7 @@ impl BitcoinWallet {
         network: Network,
         esplora_url: &str,
         deposit_repository: Option<Arc<DepositRepository>>,
+        broadcasted_transaction_repository: Option<Arc<BroadcastedTransactionRepository>>,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Result<Self, BitcoinWalletError> {
         let mut conn = Connection::open(db_file).context(OpenDatabaseSnafu)?;
@@ -199,9 +224,11 @@ impl BitcoinWallet {
 
         let tx_broadcaster = transaction_broadcaster::BitcoinTransactionBroadcaster::new(
             wallet.clone(),
+            external_descriptor,
             connection.clone(),
             esplora_client.clone(),
             network,
+            broadcasted_transaction_repository.clone(),
             join_set,
         );
 
@@ -212,6 +239,7 @@ impl BitcoinWallet {
             esplora_client,
             receive_address,
             deposit_repository,
+            broadcasted_transaction_repository,
         })
     }
 
@@ -242,10 +270,118 @@ impl BitcoinWallet {
     }
 }
 
+impl BitcoinWallet {
+    async fn check_tx_confirmations_internal(
+        &self,
+        tx_hash: &str,
+    ) -> Result<u64, BitcoinWalletError> {
+        let txid = Txid::from_str(tx_hash).map_err(|e| BitcoinWalletError::ParseTxid {
+            reason: e.to_string(),
+            loc: location!(),
+        })?;
+
+        let status = self
+            .esplora_client
+            .get_tx_status(&txid)
+            .await
+            .map_err(|e| BitcoinWalletError::SyncWallet {
+                source: Box::new(e),
+                loc: location!(),
+            })?;
+
+        if status.confirmed {
+            if let Some(block_height) = status.block_height {
+                let current_height = self.esplora_client.get_height().await.map_err(|e| {
+                    BitcoinWalletError::SyncWallet {
+                        source: Box::new(e),
+                        loc: location!(),
+                    }
+                })?;
+
+                let confirmations = (current_height as u64)
+                    .saturating_sub(block_height as u64)
+                    .saturating_add(1);
+                Ok(confirmations)
+            } else {
+                // Confirmed but no block height? Should not happen
+                Ok(0)
+            }
+        } else {
+            // Not confirmed yet
+            Ok(0)
+        }
+    }
+}
+
 #[async_trait]
 impl WalletTrait for BitcoinWallet {
     fn chain_type(&self) -> ChainType {
         ChainType::Bitcoin
+    }
+
+    async fn cancel_tx(&self, tx_hash: &str) -> WalletResult<String> {
+        let broadcasted_transaction = self
+            .broadcasted_transaction_repository
+            .as_ref()
+            .unwrap()
+            .get_broadcasted_transaction(tx_hash)
+            .await
+            .map_err(|e| WalletError::BitcoinWalletClient {
+                source: BitcoinWalletError::BroadcastedTransactionRepositoryError {
+                    source: e,
+                    loc: location!(),
+                },
+                loc: location!(),
+            })?;
+        if broadcasted_transaction.is_none() {
+            Err(WalletError::CancelError {
+                message: "Transaction not found in broadcasted transaction repository".to_string(),
+                loc: location!(),
+            })?;
+        }
+        let broadcasted_transaction = broadcasted_transaction.unwrap();
+        let tx: bitcoin::Transaction =
+            bitcoin::consensus::deserialize(&broadcasted_transaction.txdata).unwrap();
+
+        // Calculate proper RBF fee: original fee + (tx_vsize * min_relay_fee_rate)
+        // Use 2 sat/vB to ensure it passes (covers 1 sat/vB min relay + margin)
+        let vsize = tx.vsize() as u64;
+        let min_additional_fee = vsize * 2;
+        let replacement_fee = broadcasted_transaction.absolute_fee + min_additional_fee;
+
+        if broadcasted_transaction.bitcoin_tx_foreign_utxos.is_none() {
+            return Err(WalletError::CancelError {
+                message: "Transaction has no foreign UTXOs to attempt to replace".to_string(),
+                loc: location!(),
+            });
+        }
+
+        let replacement_txid = self
+            .tx_broadcaster
+            .broadcast_transaction(
+                vec![],
+                broadcasted_transaction
+                    .bitcoin_tx_foreign_utxos
+                    .unwrap_or(vec![]),
+                None,
+                Some(replacement_fee),
+            )
+            .await
+            .map_err(|e| WalletError::BitcoinWalletClient {
+                source: e,
+                loc: location!(),
+            })?;
+
+        Ok(replacement_txid)
+    }
+
+    async fn check_tx_confirmations(&self, tx_hash: &str) -> WalletResult<u64> {
+        self.check_tx_confirmations_internal(tx_hash)
+            .await
+            .map_err(|e| WalletError::BitcoinWalletClient {
+                source: e,
+                loc: location!(),
+            })
     }
 
     async fn guarantee_confirmations(
@@ -410,7 +546,7 @@ impl WalletTrait for BitcoinWallet {
         );
         // Send transaction request to the broadcaster
         self.tx_broadcaster
-            .broadcast_transaction(payments, foreign_utxos, mm_payment_validation)
+            .broadcast_transaction(payments, foreign_utxos, mm_payment_validation, None)
             .await
             .map_err(|e| WalletError::BitcoinWalletClient {
                 source: e,

@@ -7,6 +7,15 @@ pub enum ChainType {
     Ethereum,
 }
 
+impl ChainType {
+    pub fn to_db_string(&self) -> &'static str {
+        match self {
+            ChainType::Bitcoin => "bitcoin",
+            ChainType::Ethereum => "ethereum",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum TxStatus {
     NotFound,

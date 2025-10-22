@@ -1,13 +1,18 @@
+pub mod broadcasted_transaction_repo;
 pub mod deposit_repo;
 pub mod payment_repo;
 pub mod quote_repo;
 
+pub use broadcasted_transaction_repo::{
+    BroadcastedTransactionRepository, BroadcastedTransactionRepositoryError,
+    BroadcastedTransactionRepositoryResult,
+};
 pub use deposit_repo::{
     Deposit, DepositRepository, DepositRepositoryError, DepositRepositoryResult, DepositStore,
     FillStatus,
 };
 pub use payment_repo::{
-    PaymentRepository, PaymentRepositoryError, PaymentRepositoryResult, StoredBatch,
+    BatchStatus, PaymentRepository, PaymentRepositoryError, PaymentRepositoryResult, StoredBatch,
 };
 pub use quote_repo::{QuoteRepository, QuoteRepositoryError, QuoteRepositoryResult};
 
@@ -82,5 +87,12 @@ impl Database {
     #[must_use]
     pub fn payments(&self) -> PaymentRepository {
         PaymentRepository::new(self.pool())
+    }
+
+    #[must_use]
+    pub fn broadcasted_transactions(
+        &self,
+    ) -> broadcasted_transaction_repo::BroadcastedTransactionRepository {
+        broadcasted_transaction_repo::BroadcastedTransactionRepository::new(self.pool())
     }
 }

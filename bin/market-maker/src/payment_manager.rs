@@ -453,6 +453,14 @@ mod tests {
 
     #[async_trait]
     impl crate::wallet::Wallet for RecordingWallet {
+        async fn cancel_tx(&self, _tx_hash: &str) -> crate::wallet::WalletResult<String> {
+            Ok("mock_txid_123".to_string())
+        }
+
+        async fn check_tx_confirmations(&self, _tx_hash: &str) -> crate::wallet::WalletResult<u64> {
+            Ok(6) // Mock: always 6 confirmations
+        }
+
         async fn create_batch_payment(
             &self,
             payments: Vec<Payment>,

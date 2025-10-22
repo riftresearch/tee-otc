@@ -423,7 +423,10 @@ async fn create_bitcoin_payment_with_retry(
             to_address: recipient.to_string(),
             lot: lot.clone(),
         }];
-        match wallet.broadcast_transaction(payments, vec![], None).await {
+        match wallet
+            .broadcast_transaction(payments, vec![], None, None)
+            .await
+        {
             Ok(txid) => {
                 if attempt > 1 {
                     debug!(attempt = attempt, "bitcoin payment succeeded after retry");
@@ -786,6 +789,7 @@ async fn init_bitcoin_wallet(
         cfg.network,
         &cfg.esplora_url,
         None,
+        None,
         join_set,
     )
     .await
@@ -895,6 +899,7 @@ async fn create_bitcoin_dedicated_wallets_count(
                     cfg.network,
                     &cfg.esplora_url,
                     None,
+                    None,
                     &mut join_set,
                 )
                 .await
@@ -979,7 +984,7 @@ async fn fund_bitcoin_wallets_dedicated(
     }
 
     let txid = broadcaster
-        .broadcast_transaction(payments, vec![], None)
+        .broadcast_transaction(payments, vec![], None, None)
         .await
         .map_err(|err| {
             map_wallet_error(WalletError::BitcoinWalletClient {

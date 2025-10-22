@@ -59,6 +59,7 @@ async fn test_refund_from_bitcoin_user_deposit(
         bitcoin::Network::Regtest,
         &devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
         None,
+        None,
         &mut wallet_join_set,
     )
     .await

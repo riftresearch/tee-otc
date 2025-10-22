@@ -136,7 +136,7 @@ impl MMRegistry {
                     user_destination_address: user_destination_address.to_string(),
                     mm_nonce,
                     expected_lot: expected_lot.clone(),
-                    user_deposit_confirmed_at: user_deposit_confirmed_at.clone(),
+                    user_deposit_confirmed_at,
                     timestamp: utc::now(),
                 },
             };

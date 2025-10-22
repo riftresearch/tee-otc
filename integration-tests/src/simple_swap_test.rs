@@ -31,37 +31,9 @@ use crate::utils::{
     build_bitcoin_wallet_descriptor, build_mm_test_args, build_otc_server_test_args,
     build_rfq_server_test_args, build_test_user_ethereum_wallet, build_tmp_bitcoin_wallet_db_file,
     get_free_port, wait_for_market_maker_to_connect_to_rfq_server, wait_for_otc_server_to_be_ready,
-    wait_for_rfq_server_to_be_ready, wait_for_swap_to_be_settled, PgConnectOptionsExt,
+    wait_for_rfq_server_to_be_ready, wait_for_swap_status, wait_for_swap_to_be_settled,
+    PgConnectOptionsExt,
 };
-
-async fn wait_for_swap_status(
-    client: &reqwest::Client,
-    otc_port: u16,
-    swap_id: Uuid,
-    expected_status: &str,
-) -> SwapResponse {
-    let timeout = Duration::from_secs(crate::utils::INTEGRATION_TEST_TIMEOUT_SECS);
-    let start = Instant::now();
-    let poll_interval = Duration::from_millis(500);
-    let url = format!("http://localhost:{otc_port}/api/v1/swaps/{swap_id}");
-
-    loop {
-        let response = client.get(&url).send().await.unwrap();
-        let response_json: SwapResponse = response.json().await.unwrap();
-
-        if response_json.status == expected_status {
-            return response_json;
-        }
-
-        if start.elapsed() > timeout {
-            panic!(
-                "Timeout waiting for swap {swap_id} status to become {expected_status}, last response: {response_json:#?}"
-            );
-        }
-
-        tokio::time::sleep(poll_interval).await;
-    }
-}
 
 #[sqlx::test]
 async fn test_swap_from_bitcoin_to_ethereum(
@@ -87,6 +59,7 @@ async fn test_swap_from_bitcoin_to_ethereum(
         &build_bitcoin_wallet_descriptor(&user_account.bitcoin_wallet.private_key),
         bitcoin::Network::Regtest,
         &devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
+        None,
         None,
         &mut wallet_join_set,
     )
@@ -293,6 +266,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
         &build_bitcoin_wallet_descriptor(&user_account.bitcoin_wallet.private_key),
         bitcoin::Network::Regtest,
         &devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
+        None,
         None,
         &mut wallet_join_set,
     )

@@ -37,3 +37,6 @@ mod refund_test;
 
 #[cfg(test)]
 mod metrics_export_test;
+
+#[cfg(test)]
+mod timeout_triggers_cancel_test;

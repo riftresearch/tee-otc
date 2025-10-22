@@ -3,6 +3,7 @@ use std::{
     net::{IpAddr, Ipv4Addr},
     sync::Arc,
     time::Duration,
+    time::Instant,
 };
 
 use alloy::{
@@ -99,6 +100,35 @@ pub fn get_whitelist_file_path() -> String {
 
     let whitelist_file_path = current_dir.join(TEST_MM_WHITELIST_FILE);
     whitelist_file_path.to_string_lossy().to_string()
+}
+
+pub async fn wait_for_swap_status(
+    client: &reqwest::Client,
+    otc_port: u16,
+    swap_id: Uuid,
+    expected_status: &str,
+) -> SwapResponse {
+    let timeout = Duration::from_secs(crate::utils::INTEGRATION_TEST_TIMEOUT_SECS);
+    let start = Instant::now();
+    let poll_interval = Duration::from_millis(500);
+    let url = format!("http://localhost:{otc_port}/api/v1/swaps/{swap_id}");
+
+    loop {
+        let response = client.get(&url).send().await.unwrap();
+        let response_json: SwapResponse = response.json().await.unwrap();
+
+        if response_json.status == expected_status {
+            return response_json;
+        }
+
+        if start.elapsed() > timeout {
+            panic!(
+                "Timeout waiting for swap {swap_id} status to become {expected_status}, last response: {response_json:#?}"
+            );
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
 }
 
 pub async fn wait_for_otc_server_to_be_ready(otc_port: u16) {
@@ -268,6 +298,7 @@ pub async fn build_mm_test_args(
         coinbase_exchange_api_secret: "".to_string(),
         auto_manage_inventory: false,
         metrics_listen_addr: None,
+        batch_monitor_interval_secs: 5,
     }
 }
 

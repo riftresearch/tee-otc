@@ -1,4 +1,5 @@
 mod balance_strat;
+mod batch_monitor;
 pub mod bitcoin_wallet;
 pub mod cb_bitcoin_converter;
 mod config;
@@ -288,6 +289,10 @@ pub struct MarketMakerArgs {
     /// Ethereum batch payment size (max payments per batch)
     #[arg(long, env = "ETHEREUM_BATCH_SIZE", default_value = "392")]
     pub ethereum_batch_size: usize,
+
+    /// Batch monitor polling interval in seconds
+    #[arg(long, env = "BATCH_MONITOR_INTERVAL_SECS", default_value = "600")]
+    pub batch_monitor_interval_secs: u64,
 }
 
 fn parse_hex_string(s: &str) -> std::result::Result<[u8; 32], String> {
@@ -332,6 +337,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     quote_repository.start_cleanup_task(&mut join_set);
 
     let deposit_repository = Arc::new(database.deposits());
+    let broadcasted_transaction_repository = Arc::new(database.broadcasted_transactions());
 
     let esplora_client = esplora_client::Builder::new(&args.bitcoin_wallet_esplora_url)
         .build_async()
@@ -344,6 +350,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
             args.bitcoin_wallet_network,
             &args.bitcoin_wallet_esplora_url,
             Some(deposit_repository.clone()),
+            Some(broadcasted_transaction_repository.clone()),
             &mut join_set,
         )
         .await
@@ -395,6 +402,14 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     ));
 
     let payment_repository = Arc::new(database.payments());
+
+    // Spawn batch monitor to track and cancel at-risk batches
+    batch_monitor::spawn_batch_monitor(
+        wallet_manager.clone(),
+        payment_repository.clone(),
+        args.batch_monitor_interval_secs,
+        &mut join_set,
+    );
 
     // Configure batch payment processing for each chain
     let mut batch_configs = std::collections::HashMap::new();
