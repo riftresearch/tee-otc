@@ -24,6 +24,8 @@ export const transferEvent = onchainTable(
   }),
   (table) => ({
     fromIdx: index("from_index").on(table.from),
+    toIdx: index("to_index").on(table.to),
+    toTimestampIdx: index("to_timestamp_index").on(table.to, table.timestamp),
   })
 );
 

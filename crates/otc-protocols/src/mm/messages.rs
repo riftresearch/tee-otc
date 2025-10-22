@@ -47,6 +47,7 @@ pub enum MMRequest {
         mm_nonce: [u8; 16],
         /// Expected payment details
         expected_lot: Lot,
+        user_deposit_confirmed_at: DateTime<Utc>,
         timestamp: DateTime<Utc>,
     },
 

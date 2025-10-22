@@ -2,14 +2,12 @@ mod balance_strat;
 pub mod bitcoin_wallet;
 pub mod cb_bitcoin_converter;
 mod config;
-pub mod deposit_key_storage;
+pub mod db;
 pub mod evm_wallet;
 mod otc_client;
 mod otc_handler;
 pub mod payment_manager;
-pub mod payment_storage;
 pub mod price_oracle;
-pub mod quote_storage;
 mod rfq_client;
 mod rfq_handler;
 pub mod wallet;
@@ -39,13 +37,11 @@ use tokio::net::TcpListener;
 use uuid::Uuid;
 
 use crate::payment_manager::PaymentManager;
-use crate::payment_storage::PaymentStorage;
 use crate::{
     bitcoin_wallet::BitcoinWallet,
     cb_bitcoin_converter::{coinbase_client::CoinbaseClient, run_rebalancer, BandsParams},
-    deposit_key_storage::DepositKeyStorage,
+    db::Database,
     evm_wallet::EVMWallet,
-    quote_storage::QuoteStorage,
     wallet::WalletManager,
     wrapped_bitcoin_quoter::WrappedBitcoinQuoter,
 };
@@ -86,21 +82,22 @@ pub enum Error {
         source: wrapped_bitcoin_quoter::WrappedBitcoinQuoterError,
     },
 
-    #[snafu(display("Deposit key storage error: {}", source))]
-    DepositKeyStorage { source: deposit_key_storage::Error },
+    #[snafu(display("Database error: {}", source))]
+    Database { source: db::DatabaseError },
+
+    #[snafu(display("Deposit repository error: {}", source))]
+    DepositRepository { source: db::DepositRepositoryError },
 
     #[snafu(display("Background thread error: {}", source))]
     BackgroundThread {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
-    #[snafu(display("Quote storage error: {}", source))]
-    QuoteStorage {
-        source: quote_storage::QuoteStorageError,
-    },
+    #[snafu(display("Quote repository error: {}", source))]
+    QuoteRepository { source: db::QuoteRepositoryError },
 
-    #[snafu(display("Payment storage error: {}", source))]
-    PaymentStorage { source: payment_storage::Error },
+    #[snafu(display("Payment repository error: {}", source))]
+    PaymentRepository { source: db::PaymentRepositoryError },
 
     #[snafu(display("Coinbase client error: {}", source))]
     CoinbaseClientError {
@@ -321,27 +318,20 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         setup_metrics(&mut join_set, addr)?;
     }
 
-    // Initialize quote storage
-    let quote_storage = Arc::new(
-        QuoteStorage::new(
+    let database = Arc::new(
+        Database::connect(
             &args.database_url,
             args.db_max_connections,
             args.db_min_connections,
-            &mut join_set,
         )
         .await
-        .context(QuoteStorageSnafu)?,
+        .context(DatabaseSnafu)?,
     );
 
-    let deposit_key_storage = Arc::new(
-        DepositKeyStorage::new(
-            &args.database_url,
-            args.db_max_connections,
-            args.db_min_connections,
-        )
-        .await
-        .context(DepositKeyStorageSnafu)?,
-    );
+    let quote_repository = Arc::new(database.quotes());
+    quote_repository.start_cleanup_task(&mut join_set);
+
+    let deposit_repository = Arc::new(database.deposits());
 
     let esplora_client = esplora_client::Builder::new(&args.bitcoin_wallet_esplora_url)
         .build_async()
@@ -353,7 +343,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
             &args.bitcoin_wallet_descriptor,
             args.bitcoin_wallet_network,
             &args.bitcoin_wallet_esplora_url,
-            Some(deposit_key_storage.clone()),
+            Some(deposit_repository.clone()),
             &mut join_set,
         )
         .await
@@ -371,7 +361,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         provider.clone(),
         args.ethereum_rpc_ws_url,
         args.ethereum_confirmations,
-        Some(deposit_key_storage.clone()),
+        Some(deposit_repository.clone()),
         &mut join_set,
     ));
 
@@ -404,15 +394,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         &mut join_set,
     ));
 
-    let payment_storage = Arc::new(
-        PaymentStorage::new(
-            &args.database_url,
-            args.db_max_connections,
-            args.db_min_connections,
-        )
-        .await
-        .context(PaymentStorageSnafu)?,
-    );
+    let payment_repository = Arc::new(database.payments());
 
     // Configure batch payment processing for each chain
     let mut batch_configs = std::collections::HashMap::new();
@@ -436,7 +418,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
 
     let payment_manager = Arc::new(PaymentManager::new(
         wallet_manager.clone(),
-        payment_storage.clone(),
+        payment_repository.clone(),
         batch_configs,
         otc_response_tx,
         &mut join_set,
@@ -450,8 +432,8 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
             reconnect_interval_secs: 5,
             max_reconnect_attempts: 250,
         },
-        quote_storage.clone(),
-        deposit_key_storage.clone(),
+        quote_repository.clone(),
+        deposit_repository.clone(),
         payment_manager.clone(),
         otc_response_rx,
     );
@@ -460,7 +442,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     let rfq_handler = rfq_handler::RFQMessageHandler::new(
         market_maker_id,
         wrapped_bitcoin_quoter.clone(),
-        quote_storage,
+        quote_repository,
     );
 
     // Add RFQ client for handling quote requests

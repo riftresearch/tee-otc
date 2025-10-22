@@ -665,6 +665,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
                         swap.user_destination_address.as_str(),
                         swap.mm_nonce,
                         &swap.expected_lot,
+                        swap.user_deposit_confirmed_at,
                     )
                     .await;
             }

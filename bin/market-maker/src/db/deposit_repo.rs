@@ -1,14 +1,8 @@
 use alloy::primitives::U256;
 use otc_models::{Currency, Lot};
-use snafu::{prelude::*, Snafu};
-use sqlx::{
-    migrate::Migrator,
-    postgres::{PgPool, PgPoolOptions, PgRow},
-    Row,
-};
+use snafu::prelude::*;
+use sqlx::{postgres::PgRow, PgPool, Row};
 use uuid::Uuid;
-
-static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Debug, Clone)]
 pub struct Deposit {
@@ -25,66 +19,31 @@ pub enum FillStatus {
 }
 
 #[derive(Debug, Snafu)]
-pub enum Error {
-    #[snafu(display("Database error: {}", source))]
+pub enum DepositRepositoryError {
+    #[snafu(display("Database error: {source}"))]
     Database { source: sqlx::Error },
 
-    #[snafu(display("Migration error: {}", source))]
-    Migration { source: sqlx::migrate::MigrateError },
-
-    #[snafu(display("Invalid U256 value: {}", value))]
+    #[snafu(display("Invalid U256 value: {value}"))]
     InvalidU256 { value: String },
 }
 
-type Result<T, E = Error> = std::result::Result<T, E>;
+pub type DepositRepositoryResult<T, E = DepositRepositoryError> = std::result::Result<T, E>;
 
 #[allow(async_fn_in_trait)]
-pub trait DepositKeyStorageTrait {
-    /// Get the balance of all keys in the vault for a given currency
-    /// This should be a sum of all the balances of the keys in the vault for a given currency
-    /// Should be summed at a database level (ideally)
-    async fn balance(&self, currency: &Currency) -> Result<U256>;
-
-    /// Will collect as many deposits as possible that sum up to at LEAST the lot amount
-    /// If there are not enough deposits to fill the lot, it will return as many as possible
-    async fn take_deposits_that_fill_lot(&self, lot: &Lot) -> Result<FillStatus>;
-
-    /// Store a deposit in the vault
-    async fn store_deposit(&self, deposit: &Deposit) -> Result<()>;
+pub trait DepositStore {
+    async fn balance(&self, currency: &Currency) -> DepositRepositoryResult<U256>;
+    async fn take_deposits_that_fill_lot(&self, lot: &Lot) -> DepositRepositoryResult<FillStatus>;
+    async fn store_deposit(&self, deposit: &Deposit) -> DepositRepositoryResult<()>;
 }
 
 #[derive(Clone)]
-pub struct DepositKeyStorage {
+pub struct DepositRepository {
     pool: PgPool,
 }
 
-impl DepositKeyStorage {
-    pub async fn new(
-        database_url: &str,
-        db_max_connections: u32,
-        db_min_connections: u32,
-    ) -> Result<Self> {
-        let pool = PgPoolOptions::new()
-            .max_connections(db_max_connections)
-            .min_connections(db_min_connections)
-            .acquire_timeout(std::time::Duration::from_secs(5))
-            .idle_timeout(std::time::Duration::from_secs(600))
-            .after_connect(|conn, _meta| {
-                Box::pin(async move {
-                    // Scope this pool to the deposit_key_storage schema so unqualified SQL stays isolated
-                    sqlx::query("SET search_path TO deposit_key_storage, public")
-                        .execute(conn)
-                        .await
-                        .map(|_| ())
-                })
-            })
-            .connect(database_url)
-            .await
-            .context(DatabaseSnafu)?;
-
-        MIGRATOR.run(&pool).await.context(MigrationSnafu)?;
-
-        Ok(Self { pool })
+impl DepositRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
     }
 
     fn serialize_currency(currency: &Currency) -> (String, serde_json::Value, i16) {
@@ -123,11 +82,10 @@ impl Deposit {
     }
 }
 
-impl DepositKeyStorageTrait for DepositKeyStorage {
-    async fn balance(&self, currency: &Currency) -> Result<U256> {
+impl DepositStore for DepositRepository {
+    async fn balance(&self, currency: &Currency) -> DepositRepositoryResult<U256> {
         let (chain, token, decimals) = Self::serialize_currency(currency);
 
-        // Sum only available deposits at the database level
         let row: Option<(String,)> = sqlx::query_as(
             r#"
             SELECT COALESCE(SUM(amount)::TEXT, '0')
@@ -147,17 +105,16 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
 
         let amount_str = row.map(|t| t.0).unwrap_or_else(|| "0".to_string());
         let amount = U256::from_str_radix(&amount_str, 10)
-            .map_err(|_| Error::InvalidU256 { value: amount_str })?;
+            .map_err(|_| DepositRepositoryError::InvalidU256 { value: amount_str })?;
         Ok(amount)
     }
 
-    async fn take_deposits_that_fill_lot(&self, lot: &Lot) -> Result<FillStatus> {
+    async fn take_deposits_that_fill_lot(&self, lot: &Lot) -> DepositRepositoryResult<FillStatus> {
         let (chain, token, decimals) = Self::serialize_currency(&lot.currency);
         let target = lot.amount.to_string();
         let reservation_id = Uuid::new_v4();
         let now = utc::now();
 
-        // Greedy prefix-sum reservation under concurrency
         let rows: Vec<PgRow> = sqlx::query(
             r#"
             WITH ordered AS (
@@ -208,7 +165,7 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
             let private_key: String = row.get("private_key");
             let amount_str: String = row.get("amount");
             let amount = U256::from_str_radix(&amount_str, 10)
-                .map_err(|_| Error::InvalidU256 { value: amount_str })?;
+                .map_err(|_| DepositRepositoryError::InvalidU256 { value: amount_str })?;
 
             let funding_tx_hash: String = row.get("funding_tx_hash");
 
@@ -231,12 +188,11 @@ impl DepositKeyStorageTrait for DepositKeyStorage {
         }
     }
 
-    async fn store_deposit(&self, deposit: &Deposit) -> Result<()> {
+    async fn store_deposit(&self, deposit: &Deposit) -> DepositRepositoryResult<()> {
         let (chain, token, decimals) = Self::serialize_currency(&deposit.holdings.currency);
         let amount = deposit.holdings.amount.to_string();
         let now = utc::now();
 
-        // Use ON CONFLICT DO NOTHING to make this idempotent - if the private_key already exists,
         sqlx::query(
             r#"
             INSERT INTO mm_deposits (

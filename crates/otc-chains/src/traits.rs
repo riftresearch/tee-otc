@@ -2,6 +2,7 @@ use crate::Result;
 use alloy::primitives::U256;
 use async_trait::async_trait;
 use blockchain_utils::FeeCalcFromLot;
+use chrono::{DateTime, Utc};
 use otc_models::{Lot, Swap, TokenIdentifier, TransferInfo, TxStatus, Wallet};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -33,6 +34,7 @@ pub struct MarketMakerQueuedPayment {
     pub lot: Lot,
     pub destination_address: String,
     pub mm_nonce: [u8; 16],
+    pub user_deposit_confirmed_at: Option<DateTime<Utc>>,
 }
 
 // we can derive a MarketMakerQueuedPayment from a Swap
@@ -44,6 +46,10 @@ impl From<&Swap> for MarketMakerQueuedPayment {
             lot: swap.quote.to.clone(), // to is what the MM is sending to the user always
             destination_address: swap.user_destination_address.clone(),
             mm_nonce: swap.mm_nonce,
+            user_deposit_confirmed_at: swap
+                .user_deposit_status
+                .as_ref()
+                .and_then(|status| status.confirmed_at),
         }
     }
 }

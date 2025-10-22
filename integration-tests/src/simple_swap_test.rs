@@ -7,8 +7,8 @@ use bitcoincore_rpc_async::RpcApi;
 use devnet::bitcoin_devnet::MiningMode;
 use devnet::{MultichainAccount, RiftDevnet};
 use evm_token_indexer_client::TokenIndexerClient;
+use market_maker::db::Database;
 use market_maker::evm_wallet::EVMWallet;
-use market_maker::payment_storage::PaymentStorage;
 use market_maker::wallet::Wallet;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, MarketMakerArgs};
 use otc_chains::traits::Payment;
@@ -724,8 +724,9 @@ async fn test_swap_from_ethereum_to_bitcoin(
     info!("Tx status: {:#?}", get_tx_status);
     wait_for_swap_to_be_settled(otc_port, response_json.swap_id).await;
 
-    let payment_storage = PaymentStorage::new(&mm_db_url, 10, 2).await.unwrap();
-    payment_storage
+    let database = Database::connect(&mm_db_url, 10, 2).await.unwrap();
+    database
+        .payments()
         .has_payment_been_made(response_json.swap_id)
         .await
         .unwrap()

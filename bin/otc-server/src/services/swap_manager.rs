@@ -16,7 +16,7 @@ use tokio::time::{timeout, Duration};
 use tracing::{info, warn};
 use uuid::Uuid;
 
-const MARKET_MAKER_VALIDATION_TIMEOUT: Duration = Duration::from_secs(5);
+const MARKET_MAKER_VALIDATION_TIMEOUT: Duration = Duration::from_secs(60);
 
 #[derive(Debug, Snafu)]
 pub enum SwapError {

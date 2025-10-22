@@ -23,7 +23,7 @@ use tokio::task::JoinSet;
 use tracing::{info, warn};
 
 use crate::bitcoin_wallet::transaction_broadcaster::{ForeignUtxo, TransactionRequest};
-use crate::deposit_key_storage::{DepositKeyStorage, DepositKeyStorageTrait, FillStatus};
+use crate::db::{DepositRepository, DepositStore, FillStatus};
 use crate::wallet::{self, Wallet as WalletTrait, WalletBalance, WalletError};
 use crate::WalletResult;
 
@@ -133,7 +133,7 @@ pub struct BitcoinWallet {
     connection: Arc<Mutex<Connection>>,
     esplora_client: Arc<esplora_client::AsyncClient>,
     receive_address: String,
-    deposit_key_storage: Option<Arc<DepositKeyStorage>>,
+    deposit_repository: Option<Arc<DepositRepository>>,
 }
 
 impl BitcoinWallet {
@@ -142,7 +142,7 @@ impl BitcoinWallet {
         external_descriptor: &str,
         network: Network,
         esplora_url: &str,
-        deposit_key_storage: Option<Arc<DepositKeyStorage>>,
+        deposit_repository: Option<Arc<DepositRepository>>,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Result<Self, BitcoinWalletError> {
         let mut conn = Connection::open(db_file).context(OpenDatabaseSnafu)?;
@@ -211,7 +211,7 @@ impl BitcoinWallet {
             connection,
             esplora_client,
             receive_address,
-            deposit_key_storage,
+            deposit_repository,
         })
     }
 
@@ -303,13 +303,13 @@ impl WalletTrait for BitcoinWallet {
         }
 
         let mut foreign_utxos = Vec::new();
-        if let Some(deposit_key_storage) = self.deposit_key_storage.clone() {
+        if let Some(deposit_repository) = self.deposit_repository.clone() {
             for payment in &payments {
                 let lot = payment.lot.clone();
-                match deposit_key_storage
+                match deposit_repository
                     .take_deposits_that_fill_lot(&lot)
                     .await
-                    .map_err(|e| WalletError::DepositKeyStorageError {
+                    .map_err(|e| WalletError::DepositRepositoryError {
                         source: e,
                         loc: location!(),
                     })? {
@@ -435,8 +435,8 @@ impl WalletTrait for BitcoinWallet {
 
         let mut net_deposit_key_balance = U256::from(0);
 
-        if let Some(deposit_key_storage) = &self.deposit_key_storage {
-            let deposit_key_bal = deposit_key_storage
+        if let Some(deposit_repository) = &self.deposit_repository {
+            let deposit_key_bal = deposit_repository
                 .balance(&Currency {
                     chain: ChainType::Bitcoin,
                     token: token.clone(),

@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Instant};
 use tracing::{error, info};
 use uuid::Uuid;
 
-use crate::quote_storage::QuoteStorage;
+use crate::db::QuoteRepository;
 use crate::wrapped_bitcoin_quoter::WrappedBitcoinQuoter;
 use crate::QUOTE_LATENCY_METRIC;
 
@@ -11,19 +11,19 @@ use crate::QUOTE_LATENCY_METRIC;
 pub struct RFQMessageHandler {
     market_maker_id: Uuid,
     wrapped_bitcoin_quoter: Arc<WrappedBitcoinQuoter>,
-    quote_storage: Arc<QuoteStorage>,
+    quote_repository: Arc<QuoteRepository>,
 }
 
 impl RFQMessageHandler {
     pub fn new(
         market_maker_id: Uuid,
         wrapped_bitcoin_quoter: Arc<WrappedBitcoinQuoter>,
-        quote_storage: Arc<QuoteStorage>,
+        quote_repository: Arc<QuoteRepository>,
     ) -> Self {
         Self {
             market_maker_id,
             wrapped_bitcoin_quoter,
-            quote_storage,
+            quote_repository,
         }
     }
 
@@ -76,11 +76,11 @@ impl RFQMessageHandler {
                         "Generated quote: id={}, from_chain={:?}, from_amount={}, to_chain={:?}, to_amount={}",
                         quote.id, quote.from.currency.chain, quote.from.amount, quote.to.currency.chain , quote.to.amount
                     );
-                    if let Err(e) = self.quote_storage.store_quote(&quote).await {
+                    if let Err(e) = self.quote_repository.store_quote(&quote).await {
                         error!("Failed to store quote {}: {}", quote.id, e);
                     } else {
                         info!("Stored quote {} in database", quote.id);
-                        if let Err(e) = self.quote_storage.mark_sent_to_rfq(quote.id).await {
+                        if let Err(e) = self.quote_repository.mark_sent_to_rfq(quote.id).await {
                             error!("Failed to mark quote {} as sent to RFQ: {}", quote.id, e);
                         }
                     }
@@ -108,7 +108,7 @@ impl RFQMessageHandler {
                     quote_id, request_id
                 );
                 // Mark the quote as sent to OTC since it was selected
-                if let Err(e) = self.quote_storage.mark_sent_to_otc(*quote_id).await {
+                if let Err(e) = self.quote_repository.mark_sent_to_otc(*quote_id).await {
                     error!("Failed to mark quote {} as sent to OTC: {}", quote_id, e);
                 }
                 None

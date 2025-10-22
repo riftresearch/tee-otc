@@ -4,7 +4,7 @@ use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse};
 use snafu::Snafu;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Snafu)]
@@ -115,7 +115,7 @@ impl RfqMMRegistry {
             receivers.push((mm_id, response_rx));
         }
 
-        debug!(
+        info!(
             request_id = %request_id,
             market_makers_count = receivers.len(),
             "Broadcasted quote request to market makers"

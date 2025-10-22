@@ -239,8 +239,11 @@ impl SwapMonitoringService {
             SwapStatus::Settled => {
                 // Settlement already complete, nothing to monitor
             }
-            _ => {
-                // Other states don't need monitoring
+            SwapStatus::RefundingUser => {
+                // Refunding user, nothing to monitor
+            }
+            SwapStatus::Failed => {
+                // Failed, nothing to monitor
             }
         }
 
@@ -369,7 +372,8 @@ impl SwapMonitoringService {
                     );
 
                     // Transition to waiting for MM deposit
-                    self.db
+                    let user_deposit_confirmed_at = self
+                        .db
                         .swaps()
                         .user_deposit_confirmed(swap.id)
                         .await
@@ -393,6 +397,7 @@ impl SwapMonitoringService {
                                 &user_destination_address,
                                 mm_nonce,
                                 &expected_currency,
+                                user_deposit_confirmed_at,
                             )
                             .await;
                     });

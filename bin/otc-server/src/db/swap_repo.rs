@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use metrics::counter;
 use otc_models::{
     ChainType, LatestRefund, Lot, MMDepositStatus, SettlementStatus, Swap, SwapStatus,
@@ -31,6 +32,7 @@ pub struct PendingMMDepositSwap {
     pub user_destination_address: String,
     pub mm_nonce: [u8; 16],
     pub expected_lot: Lot,
+    pub user_deposit_confirmed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -399,6 +401,7 @@ impl SwapRepository {
                 s.quote_id,
                 s.user_destination_address,
                 s.mm_nonce,
+                s.user_deposit_status,
                 q.to_chain,
                 q.to_token,
                 q.to_amount,
@@ -407,6 +410,7 @@ impl SwapRepository {
             JOIN quotes q ON s.quote_id = q.id
             WHERE s.market_maker_id = $1
               AND s.status = $2
+              AND s.user_deposit_status IS NOT NULL
             "#,
         )
         .bind(market_maker_id)
@@ -432,12 +436,22 @@ impl SwapRepository {
                 row.try_get::<i16, _>("to_decimals")? as u8,
             )?;
 
+            let deposit_status_json: serde_json::Value = row.try_get("user_deposit_status")?;
+            let deposit_status = user_deposit_status_from_json(deposit_status_json)?;
+            let user_deposit_confirmed_at =
+                deposit_status
+                    .confirmed_at
+                    .ok_or_else(|| OtcServerError::InvalidData {
+                        message: "user_deposit_status.confirmed_at missing".to_string(),
+                    })?;
+
             swaps.push(PendingMMDepositSwap {
                 swap_id: row.try_get("swap_id")?,
                 quote_id: row.try_get("quote_id")?,
                 user_destination_address: row.try_get("user_destination_address")?,
                 mm_nonce,
                 expected_lot,
+                user_deposit_confirmed_at,
             });
         }
 
@@ -967,14 +981,19 @@ impl SwapRepository {
     }
 
     /// Update swap when user deposit is confirmed
-    pub async fn user_deposit_confirmed(&self, swap_id: Uuid) -> OtcServerResult<()> {
+    pub async fn user_deposit_confirmed(&self, swap_id: Uuid) -> OtcServerResult<DateTime<Utc>> {
         let mut swap = self.get(swap_id).await?;
         swap.user_deposit_confirmed()
             .map_err(|e| OtcServerError::InvalidState {
                 message: format!("State transition failed: {e}"),
             })?;
         self.update(&swap).await?;
-        Ok(())
+        Ok(swap
+            .user_deposit_status
+            .as_ref()
+            .unwrap()
+            .confirmed_at
+            .unwrap())
     }
 
     /// Mark private key as sent to MM

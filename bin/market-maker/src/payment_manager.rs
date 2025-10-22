@@ -2,9 +2,11 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use dashmap::{mapref::entry::Entry, DashMap};
 use otc_chains::traits::{MarketMakerQueuedPayment, MarketMakerQueuedPaymentExt};
-use otc_models::{ChainType, Lot};
+use otc_models::{can_be_refunded_soon, ChainType, Lot};
 use otc_protocols::mm::{MMErrorCode, MMResponse};
 use tokio::{
     sync::mpsc::{self, UnboundedSender},
@@ -13,8 +15,33 @@ use tokio::{
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::{payment_storage::PaymentStorage, wallet::WalletManager};
+use crate::{db::PaymentRepository, wallet::WalletManager};
 use otc_protocols::mm::ProtocolMessage;
+
+// For tests
+#[async_trait]
+trait BatchPaymentRecorder: Send + Sync {
+    async fn record_batch_payment(
+        &self,
+        swap_ids: Vec<Uuid>,
+        txid: String,
+        chain: ChainType,
+        batch_nonce_digest: [u8; 32],
+    ) -> crate::db::PaymentRepositoryResult<()>;
+}
+
+#[async_trait]
+impl BatchPaymentRecorder for PaymentRepository {
+    async fn record_batch_payment(
+        &self,
+        swap_ids: Vec<Uuid>,
+        txid: String,
+        chain: ChainType,
+        batch_nonce_digest: [u8; 32],
+    ) -> crate::db::PaymentRepositoryResult<()> {
+        PaymentRepository::set_batch_payment(self, swap_ids, txid, chain, batch_nonce_digest).await
+    }
+}
 
 /// Configuration for batch payment processing
 #[derive(Debug, Clone)]
@@ -27,7 +54,7 @@ pub struct BatchConfig {
 
 pub struct PaymentManager {
     wallet_manager: Arc<WalletManager>,
-    payment_storage: Arc<PaymentStorage>,
+    payment_repository: Arc<PaymentRepository>,
     /// Channels for queuing payments per chain
     bitcoin_tx: UnboundedSender<MarketMakerQueuedPayment>,
     ethereum_tx: UnboundedSender<MarketMakerQueuedPayment>,
@@ -39,7 +66,7 @@ pub struct PaymentManager {
 impl PaymentManager {
     pub fn new(
         wallet_manager: Arc<WalletManager>,
-        payment_storage: Arc<PaymentStorage>,
+        payment_repository: Arc<PaymentRepository>,
         batch_configs: HashMap<ChainType, BatchConfig>,
         otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
         join_set: &mut JoinSet<crate::Result<()>>,
@@ -57,7 +84,7 @@ impl PaymentManager {
                 spawn_batch_processor(
                     ChainType::Bitcoin,
                     wallet,
-                    payment_storage.clone(),
+                    payment_repository.clone(),
                     bitcoin_rx,
                     config.clone(),
                     otc_response_tx.clone(),
@@ -73,7 +100,7 @@ impl PaymentManager {
                 spawn_batch_processor(
                     ChainType::Ethereum,
                     wallet,
-                    payment_storage.clone(),
+                    payment_repository.clone(),
                     ethereum_rx,
                     config.clone(),
                     otc_response_tx.clone(),
@@ -85,7 +112,7 @@ impl PaymentManager {
 
         Self {
             wallet_manager,
-            payment_storage,
+            payment_repository,
             bitcoin_tx,
             ethereum_tx,
             in_flight_payments,
@@ -98,7 +125,8 @@ impl PaymentManager {
         request_id: &Uuid,
         swap_id: &Uuid,
         quote_id: &Uuid,
-        user_destination_address: &String,
+        user_destination_address: &str,
+        user_deposit_confirmed_at: DateTime<Utc>,
         mm_nonce: &[u8; 16],
         expected_lot: &Lot,
     ) -> MMResponse {
@@ -114,7 +142,11 @@ impl PaymentManager {
         }
 
         // Check if payment has already been broadcast to blockchain
-        match self.payment_storage.has_payment_been_made(*swap_id).await {
+        match self
+            .payment_repository
+            .has_payment_been_made(*swap_id)
+            .await
+        {
             Ok(Some(txid)) => {
                 return MMResponse::Error {
                     request_id: *request_id,
@@ -166,8 +198,9 @@ impl PaymentManager {
             swap_id: *swap_id,
             quote_id: *quote_id,
             lot: expected_lot.clone(),
-            destination_address: user_destination_address.clone(),
+            destination_address: user_destination_address.to_string(),
             mm_nonce: *mm_nonce,
+            user_deposit_confirmed_at: Some(user_deposit_confirmed_at),
         };
 
         // Send to appropriate chain's channel
@@ -195,8 +228,8 @@ impl PaymentManager {
         }
     }
 
-    pub fn payment_storage(&self) -> Arc<PaymentStorage> {
-        self.payment_storage.clone()
+    pub fn payment_repository(&self) -> Arc<PaymentRepository> {
+        self.payment_repository.clone()
     }
 }
 
@@ -204,7 +237,7 @@ impl PaymentManager {
 fn spawn_batch_processor(
     chain_type: ChainType,
     wallet: Arc<dyn crate::wallet::Wallet>,
-    payment_storage: Arc<PaymentStorage>,
+    payment_recorder: Arc<dyn BatchPaymentRecorder>,
     mut rx: mpsc::UnboundedReceiver<MarketMakerQueuedPayment>,
     config: BatchConfig,
     otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
@@ -241,18 +274,46 @@ fn spawn_batch_processor(
                     interval.tick().await;
                 }
             }
-            // If we have a full batch, process immediately without waiting
+
+            // Split queued payments into eligible and ineligible (near refund window)
+            let (eligible_payments, ineligible_payments): (Vec<_>, Vec<_>) = queued_payments
+                .into_iter()
+                .partition(|p| {
+                    !can_be_refunded_soon(
+                        otc_models::SwapStatus::WaitingMMDepositInitiated,
+                        p.user_deposit_confirmed_at,
+                        None,
+                    )
+                });
+
+            for swap_id in ineligible_payments.iter().map(|p| p.swap_id) {
+                in_flight_payments.remove(&swap_id);
+            }
+
+            if !ineligible_payments.is_empty() {
+                info!(
+                    skipped = ineligible_payments.len(),
+                    "Skipping ineligible payments that are near refund window"
+                );
+            }
+
+            if eligible_payments.is_empty() {
+                interval.tick().await;
+                continue;
+            }
+
 
             info!(
                 "Processing batch of {} payments for {:?}",
-                queued_payments.len(),
+                eligible_payments.len(),
                 chain_type
             );
 
-            let payment_batch = match queued_payments.to_market_maker_batch() {
+
+            let payment_batch = match eligible_payments.to_market_maker_batch() {
                 Some(payment_batch) => payment_batch,
                 None => {
-                    error!("No market maker batch cloud be created for {:?}: queued_payments={:?}", chain_type, queued_payments);
+                    error!("No market maker batch could be created for {:?}: queued_payments={:?}", chain_type, eligible_payments);
                     continue;
                 }
             };
@@ -262,15 +323,15 @@ fn spawn_batch_processor(
             // Execute the batch payment
             match wallet.create_batch_payment(payment_batch.ordered_payments, Some(payment_batch.payment_verification)).await {
                 Ok(tx_hash) => {
-                    let swap_ids: Vec<Uuid> = queued_payments.iter().map(|qp| qp.swap_id).collect();
+                    let swap_ids: Vec<Uuid> = eligible_payments.iter().map(|qp| qp.swap_id).collect();
                     info!(
                         "Batch payment successful for {:?}: tx_hash={}, swap_ids={:?}",
                         chain_type, tx_hash, swap_ids
                     );
 
                     // Store all payments with the same tx_hash
-                    if let Err(e) = payment_storage
-                        .set_batch_payment(
+                    if let Err(e) = payment_recorder
+                        .record_batch_payment(
                             swap_ids.clone(),
                             tx_hash.clone(),
                             chain_type,
@@ -317,7 +378,7 @@ fn spawn_batch_processor(
                     }
                 }
                 Err(e) => {
-                    let swap_ids: Vec<Uuid> = queued_payments.iter().map(|qp| qp.swap_id).collect();
+                    let swap_ids: Vec<Uuid> = eligible_payments.iter().map(|qp| qp.swap_id).collect();
                     error!(
                         "Batch payment failed for {:?}: swap_ids={:?}, error={}",
                         chain_type, swap_ids, e
@@ -331,4 +392,192 @@ fn spawn_batch_processor(
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy::primitives::U256;
+    use chrono::Duration as ChronoDuration;
+    use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
+    use otc_models::{
+        Currency, Lot, TokenIdentifier, MM_DEPOSIT_RISK_WINDOW, MM_NEVER_DEPOSITS_TIMEOUT,
+    };
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::mpsc;
+    use tokio::task::{yield_now, JoinSet};
+    use tokio::time::sleep;
+
+    #[derive(Default)]
+    struct RecordingBatchStore {
+        recorded: Mutex<Vec<Vec<Uuid>>>,
+    }
+
+    #[async_trait]
+    impl BatchPaymentRecorder for RecordingBatchStore {
+        async fn record_batch_payment(
+            &self,
+            swap_ids: Vec<Uuid>,
+            _txid: String,
+            _chain: ChainType,
+            _batch_nonce_digest: [u8; 32],
+        ) -> crate::db::PaymentRepositoryResult<()> {
+            self.recorded.lock().unwrap().push(swap_ids);
+            Ok(())
+        }
+    }
+
+    impl RecordingBatchStore {
+        fn swap_ids(&self) -> Vec<Vec<Uuid>> {
+            self.recorded.lock().unwrap().clone()
+        }
+    }
+
+    struct RecordingWallet {
+        chain: ChainType,
+        calls: Mutex<Vec<Vec<Payment>>>,
+    }
+
+    impl RecordingWallet {
+        fn new(chain: ChainType) -> Self {
+            Self {
+                chain,
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn calls(&self) -> Vec<Vec<Payment>> {
+            self.calls.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl crate::wallet::Wallet for RecordingWallet {
+        async fn create_batch_payment(
+            &self,
+            payments: Vec<Payment>,
+            _mm_payment_validation: Option<MarketMakerPaymentVerification>,
+        ) -> crate::wallet::WalletResult<String> {
+            self.calls.lock().unwrap().push(payments);
+            Ok("mock_tx".to_string())
+        }
+
+        async fn guarantee_confirmations(
+            &self,
+            _tx_hash: &str,
+            _confirmations: u64,
+        ) -> crate::wallet::WalletResult<()> {
+            Ok(())
+        }
+
+        async fn balance(
+            &self,
+            _token: &TokenIdentifier,
+        ) -> crate::wallet::WalletResult<crate::wallet::WalletBalance> {
+            Ok(crate::wallet::WalletBalance {
+                total_balance: U256::ZERO,
+                native_balance: U256::ZERO,
+                deposit_key_balance: U256::ZERO,
+            })
+        }
+
+        fn receive_address(&self, _token: &TokenIdentifier) -> String {
+            "mock_address".to_string()
+        }
+
+        fn chain_type(&self) -> ChainType {
+            self.chain
+        }
+    }
+
+    #[tokio::test]
+    async fn filters_payments_close_to_refund_window() {
+        let chain_type = ChainType::Bitcoin;
+        let wallet_inner = Arc::new(RecordingWallet::new(chain_type));
+        let wallet: Arc<dyn crate::wallet::Wallet> = wallet_inner.clone();
+        let storage_inner = Arc::new(RecordingBatchStore::default());
+        let storage: Arc<dyn BatchPaymentRecorder> = storage_inner.clone();
+        let (tx, rx) = mpsc::unbounded_channel();
+        let (otc_tx, mut otc_rx) = mpsc::unbounded_channel();
+        let in_flight = Arc::new(DashMap::new());
+        let mut join_set = JoinSet::new();
+
+        spawn_batch_processor(
+            chain_type,
+            wallet,
+            storage,
+            rx,
+            BatchConfig {
+                interval_secs: 1,
+                batch_size: 10,
+            },
+            otc_tx,
+            in_flight.clone(),
+            &mut join_set,
+        );
+
+        let payment_currency = Currency {
+            chain: chain_type,
+            token: TokenIdentifier::Native,
+            decimals: 8,
+        };
+
+        let lot = Lot {
+            currency: payment_currency.clone(),
+            amount: U256::from(1u64),
+        };
+
+        let threshold = MM_NEVER_DEPOSITS_TIMEOUT - MM_DEPOSIT_RISK_WINDOW;
+        let now = utc::now();
+
+        let eligible_swap = Uuid::new_v4();
+        let eligible_payment = MarketMakerQueuedPayment {
+            swap_id: eligible_swap,
+            quote_id: Uuid::new_v4(),
+            lot: lot.clone(),
+            destination_address: "dest_a".to_string(),
+            mm_nonce: [1u8; 16],
+            user_deposit_confirmed_at: Some(now - (threshold - ChronoDuration::seconds(5))),
+        };
+
+        let ineligible_swap = Uuid::new_v4();
+        let ineligible_payment = MarketMakerQueuedPayment {
+            swap_id: ineligible_swap,
+            quote_id: Uuid::new_v4(),
+            lot,
+            destination_address: "dest_b".to_string(),
+            mm_nonce: [2u8; 16],
+            user_deposit_confirmed_at: Some(now - (threshold + ChronoDuration::seconds(5))),
+        };
+
+        in_flight.insert(eligible_swap, ());
+        in_flight.insert(ineligible_swap, ());
+
+        tx.send(eligible_payment).unwrap();
+        tx.send(ineligible_payment).unwrap();
+
+        sleep(std::time::Duration::from_millis(50)).await;
+        yield_now().await;
+
+        let wallet_calls = wallet_inner.calls();
+        assert_eq!(wallet_calls.len(), 1);
+        assert_eq!(wallet_calls[0].len(), 1);
+        assert_eq!(wallet_calls[0][0].to_address, "dest_a");
+
+        assert_eq!(storage_inner.swap_ids(), vec![vec![eligible_swap]]);
+
+        assert!(in_flight.get(&ineligible_swap).is_none());
+        assert!(in_flight.get(&eligible_swap).is_none());
+
+        let response = otc_rx.recv().await.expect("batch response sent");
+        match response.payload {
+            MMResponse::BatchPaymentSent { swap_ids, .. } => {
+                assert_eq!(swap_ids, vec![eligible_swap]);
+            }
+            other => panic!("unexpected response: {:?}", other),
+        }
+
+        join_set.abort_all();
+        while join_set.join_next().await.is_some() {}
+    }
 }

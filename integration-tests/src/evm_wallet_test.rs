@@ -5,7 +5,7 @@ use alloy::{
 };
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::{
-    deposit_key_storage::DepositKeyStorageTrait,
+    db::{Database, Deposit, DepositStore},
     evm_wallet::{self, EVMWallet},
     wallet::Wallet,
 };
@@ -639,15 +639,12 @@ async fn test_evm_wallet_spend_from_deposit_storage(
         .await
         .unwrap();
 
-    // Create and link a deposit key storage, then store the deposit wallet's private key/holdings
-    let deposit_key_storage = Arc::new(
-        market_maker::deposit_key_storage::DepositKeyStorage::new(
-            &connect_options.to_database_url(),
-            10,
-            2,
-        )
-        .await
-        .expect("create deposit key storage"),
+    // Create and link a deposit repository, then store the deposit wallet's private key/holdings
+    let deposit_repository = Arc::new(
+        Database::connect(&connect_options.to_database_url(), 10, 2)
+            .await
+            .expect("create deposit repository")
+            .deposits(),
     );
 
     let deposit_private_key_hex = format!("0x{}", alloy::hex::encode(deposit_account.secret_bytes));
@@ -660,12 +657,8 @@ async fn test_evm_wallet_spend_from_deposit_storage(
         amount: two_cbbtc,
     };
 
-    deposit_key_storage
-        .store_deposit(&market_maker::deposit_key_storage::Deposit::new(
-            deposit_private_key_hex,
-            deposit_lot,
-            "tx1",
-        ))
+    deposit_repository
+        .store_deposit(&Deposit::new(deposit_private_key_hex, deposit_lot, "tx1"))
         .await
         .expect("store deposit in key storage");
 
@@ -675,7 +668,7 @@ async fn test_evm_wallet_spend_from_deposit_storage(
         provider.clone(),
         http_url,
         1, // confirmations
-        Some(deposit_key_storage.clone()),
+        Some(deposit_repository.clone()),
         &mut join_set,
     );
 

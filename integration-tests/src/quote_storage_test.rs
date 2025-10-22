@@ -1,9 +1,8 @@
 use alloy::primitives::U256;
 use chrono::{Duration, Utc};
-use market_maker::quote_storage::QuoteStorage;
+use market_maker::db::Database;
 use otc_models::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
-use tokio::task::JoinSet;
 use uuid::Uuid;
 
 use crate::utils::PgConnectOptionsExt;
@@ -13,10 +12,10 @@ async fn test_quote_storage_round_trip(
     _: PoolOptions<sqlx::Postgres>,
     connect_options: PgConnectOptions,
 ) -> sqlx::Result<()> {
-    let mut join_set = JoinSet::new();
-    let storage = QuoteStorage::new(&connect_options.to_database_url(), 10, 2, &mut join_set)
+    let database = Database::connect(&connect_options.to_database_url(), 10, 2)
         .await
-        .expect("Failed to create storage");
+        .expect("Failed to connect to database");
+    let storage = database.quotes();
 
     let original_quote = Quote {
         id: Uuid::new_v4(),
