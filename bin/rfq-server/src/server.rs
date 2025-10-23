@@ -545,3 +545,4 @@ async fn get_connected_market_makers(
     let market_makers = state.mm_registry.get_connected_market_makers();
     Json(ConnectedMarketMakersResponse { market_makers })
 }
+

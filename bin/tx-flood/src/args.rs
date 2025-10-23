@@ -153,6 +153,18 @@ pub struct Args {
     /// Recipient EVM address for receiving swaps
     #[arg(long, env = "RECIPIENT_EVM_ADDRESS", default_value = DEFAULT_RECIPIENT_EVM_ADDRESS)]
     pub recipient_evm_address: String,
+
+    /// Enable payment batching (multiple swaps in single transaction)
+    #[arg(long, env = "ENABLE_BATCHING", default_value_t = false)]
+    pub enable_batching: bool,
+
+    /// Batch interval for Ethereum payments
+    #[arg(long, env = "BATCH_INTERVAL_ETHEREUM", default_value = "5s", value_parser = parse_duration)]
+    pub batch_interval_ethereum: Duration,
+
+    /// Batch interval for Bitcoin payments
+    #[arg(long, env = "BATCH_INTERVAL_BITCOIN", default_value = "5s", value_parser = parse_duration)]
+    pub batch_interval_bitcoin: Duration,
 }
 
 #[derive(Debug, Clone)]
@@ -181,6 +193,9 @@ pub struct Config {
     pub dedicated_wallets: DedicatedWalletsConfig,
     pub recipient_bitcoin_address: String,
     pub recipient_evm_address: String,
+    pub enable_batching: bool,
+    pub batch_interval_ethereum: Duration,
+    pub batch_interval_bitcoin: Duration,
     pub _bitcoin_wallet_db_dir: Arc<TempDir>,
 }
 
@@ -235,6 +250,9 @@ impl Args {
             dedicated_wallet_evm_fee_reserve_wei,
             recipient_bitcoin_address,
             recipient_evm_address,
+            enable_batching,
+            batch_interval_ethereum,
+            batch_interval_bitcoin,
         } = self;
 
         if total_swaps == 0 {
@@ -246,6 +264,13 @@ impl Args {
         if min_amount > max_amount {
             return Err(anyhow!(
                 "min_amount must be less than or equal to max_amount"
+            ));
+        }
+        
+        // Invariant: batching and dedicated wallets are mutually exclusive
+        if enable_batching && dedicated_wallets {
+            return Err(anyhow!(
+                "batching and dedicated wallets cannot both be enabled (batching requires shared wallets)"
             ));
         }
 
@@ -354,6 +379,9 @@ impl Args {
             dedicated_wallets,
             recipient_bitcoin_address,
             recipient_evm_address,
+            enable_batching,
+            batch_interval_ethereum,
+            batch_interval_bitcoin,
             _bitcoin_wallet_db_dir: Arc::new(bitcoin_wallet_db_dir),
         })
     }

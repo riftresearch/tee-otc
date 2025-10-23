@@ -1,4 +1,5 @@
 mod args;
+mod batch_coordinator;
 mod engine;
 mod status;
 mod tui;
@@ -64,6 +65,22 @@ async fn main() -> Result<()> {
         tui::spawn_tui(update_rx, config.total_swaps, payment_wallets.chain_type());
     let mut exit_rx = Some(exit_rx_handle);
 
+    // Initialize batch coordinator if batching is enabled
+    let batch_coordinator = if config.enable_batching {
+        info!(
+            ethereum_interval = ?config.batch_interval_ethereum,
+            bitcoin_interval = ?config.batch_interval_bitcoin,
+            "payment batching enabled"
+        );
+        Some(batch_coordinator::BatchCoordinator::new(
+            payment_wallets.clone(),
+            config.batch_interval_ethereum,
+            config.batch_interval_bitcoin,
+        ))
+    } else {
+        None
+    };
+
     enum LoadOutcome {
         Completed(engine::RunSummary),
         Cancelled,
@@ -73,6 +90,7 @@ async fn main() -> Result<()> {
     let mut load_test = std::pin::Pin::from(Box::new(engine::run_load_test(
         config.clone(),
         payment_wallets,
+        batch_coordinator,
         update_tx.clone(),
     )));
 

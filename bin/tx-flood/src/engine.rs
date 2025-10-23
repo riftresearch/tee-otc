@@ -14,6 +14,7 @@ use uuid::Uuid;
 
 use crate::{
     args::{Config, SwapMode},
+    batch_coordinator::BatchCoordinator,
     status::{SwapStage, SwapUpdate, UiEvent},
     wallets::PaymentWallets,
 };
@@ -26,6 +27,7 @@ pub struct RunSummary {
 pub async fn run_load_test(
     config: Arc<Config>,
     wallets: PaymentWallets,
+    batch_coordinator: Option<BatchCoordinator>,
     update_tx: UnboundedSender<UiEvent>,
 ) -> Result<RunSummary> {
     let client = Client::builder()
@@ -51,6 +53,7 @@ pub async fn run_load_test(
             create_swap_url: create_swap_url.clone(),
             swap_status_base: swap_status_base.clone(),
             wallets: wallets.clone(),
+            batch_coordinator: batch_coordinator.clone(),
             update_tx: update_tx.clone(),
             index: idx,
         };
@@ -92,6 +95,7 @@ struct SwapContext {
     create_swap_url: Url,
     swap_status_base: Url,
     wallets: PaymentWallets,
+    batch_coordinator: Option<BatchCoordinator>,
     update_tx: UnboundedSender<UiEvent>,
     index: usize,
 }
@@ -104,6 +108,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
         create_swap_url,
         swap_status_base,
         wallets,
+        batch_coordinator,
         update_tx,
         index,
     } = ctx;
@@ -255,23 +260,47 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
     let deposit_lot =
         lot_from_response(&swap_response).context("invalid deposit lot in response")?;
 
-    let (tx_hash, sender_address) = match wallets
-        .create_payment(index, &deposit_lot, &swap_response.deposit_address)
-        .await
-    {
-        Ok(result) => result,
-        Err(err) => {
-            send_update(
-                &update_tx,
-                SwapUpdate::new(
-                    index,
-                    SwapStage::PaymentFailed {
-                        swap_id: Some(swap_id),
-                        reason: err.to_string(),
-                    },
-                ),
-            );
-            return Err(err);
+    let (tx_hash, sender_address) = if let Some(ref coordinator) = batch_coordinator {
+        // Use batch coordinator
+        match coordinator
+            .submit_payment(index, &deposit_lot, &swap_response.deposit_address)
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                send_update(
+                    &update_tx,
+                    SwapUpdate::new(
+                        index,
+                        SwapStage::PaymentFailed {
+                            swap_id: Some(swap_id),
+                            reason: err.to_string(),
+                        },
+                    ),
+                );
+                return Err(err);
+            }
+        }
+    } else {
+        // Direct wallet payment (non-batching mode)
+        match wallets
+            .create_payment(index, &deposit_lot, &swap_response.deposit_address)
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                send_update(
+                    &update_tx,
+                    SwapUpdate::new(
+                        index,
+                        SwapStage::PaymentFailed {
+                            swap_id: Some(swap_id),
+                            reason: err.to_string(),
+                        },
+                    ),
+                );
+                return Err(err);
+            }
         }
     };
 

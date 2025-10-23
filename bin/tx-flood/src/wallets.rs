@@ -287,6 +287,177 @@ impl PaymentWallets {
         }
     }
 
+    /// Create a batch payment (multiple payments in a single transaction)
+    pub async fn create_batch_payment(
+        &self,
+        lots: &[&Lot],
+        recipients: &[&str],
+    ) -> Result<(String, String)> {
+        if lots.is_empty() {
+            return Err(anyhow::anyhow!("cannot create batch payment with zero lots"));
+        }
+        
+        if lots.len() != recipients.len() {
+            return Err(anyhow::anyhow!(
+                "lots and recipients length mismatch: {} vs {}",
+                lots.len(),
+                recipients.len()
+            ));
+        }
+
+        // All lots must be on the same chain
+        let chain = lots[0].currency.chain;
+        for lot in lots.iter() {
+            if lot.currency.chain != chain {
+                return Err(anyhow::anyhow!(
+                    "all lots in a batch must be on the same chain"
+                ));
+            }
+        }
+
+        match self.mode.as_ref() {
+            PaymentWalletMode::Shared(wallet) => {
+                self.create_batch_payment_shared(wallet, lots, recipients)
+                    .await
+            }
+            PaymentWalletMode::DualShared {
+                bitcoin,
+                bitcoin_address,
+                ethereum,
+                ..
+            } => match chain {
+                ChainType::Bitcoin => {
+                    self.create_batch_payment_bitcoin(bitcoin, bitcoin_address, lots, recipients)
+                        .await
+                }
+                ChainType::Ethereum => {
+                    self.create_batch_payment_ethereum(&ethereum.0, &ethereum.1, lots, recipients)
+                        .await
+                }
+            },
+            PaymentWalletMode::Dedicated { .. } | PaymentWalletMode::DualDedicated { .. } => {
+                Err(anyhow::anyhow!(
+                    "batch payments are not supported with dedicated wallets"
+                ))
+            }
+        }
+    }
+
+    async fn create_batch_payment_shared(
+        &self,
+        wallet: &SinglePaymentWallet,
+        lots: &[&Lot],
+        recipients: &[&str],
+    ) -> Result<(String, String)> {
+        match wallet {
+            SinglePaymentWallet::Bitcoin(broadcaster, sender_address) => {
+                self.create_batch_payment_bitcoin(broadcaster, sender_address, lots, recipients)
+                    .await
+            }
+            SinglePaymentWallet::Ethereum(broadcaster, provider) => {
+                self.create_batch_payment_ethereum(broadcaster, provider, lots, recipients)
+                    .await
+            }
+        }
+    }
+
+    async fn create_batch_payment_bitcoin(
+        &self,
+        broadcaster: &Arc<BitcoinTransactionBroadcaster>,
+        sender_address: &str,
+        lots: &[&Lot],
+        recipients: &[&str],
+    ) -> Result<(String, String)> {
+        let payments: Vec<Payment> = lots
+            .iter()
+            .zip(recipients.iter())
+            .map(|(lot, recipient)| Payment {
+                to_address: (*recipient).to_string(),
+                lot: (*lot).clone(),
+            })
+            .collect();
+
+        let tx_hash = create_bitcoin_payment_with_retry_batch(broadcaster, payments).await?;
+        Ok((tx_hash, sender_address.to_string()))
+    }
+
+    async fn create_batch_payment_ethereum(
+        &self,
+        broadcaster: &Arc<EVMTransactionBroadcaster>,
+        provider: &DynProvider,
+        lots: &[&Lot],
+        recipients: &[&str],
+    ) -> Result<(String, String)> {
+        let sender = broadcaster.sender;
+        let sender_address = format!("{:?}", sender);
+
+        // All lots must use the same token for a batch
+        let token_address = match &lots[0].currency.token {
+            TokenIdentifier::Address(address) => address.parse::<Address>().unwrap(),
+            TokenIdentifier::Native => {
+                return Err(map_wallet_error(WalletError::UnsupportedToken {
+                    token: lots[0].currency.token.clone(),
+                    loc: location!(),
+                }))
+            }
+        };
+
+        // Verify all lots use the same token
+        for lot in lots.iter() {
+            match &lot.currency.token {
+                TokenIdentifier::Address(addr) => {
+                    if addr.parse::<Address>().unwrap() != token_address {
+                        return Err(anyhow::anyhow!(
+                            "all lots in a batch must use the same token"
+                        ));
+                    }
+                }
+                TokenIdentifier::Native => {
+                    return Err(map_wallet_error(WalletError::UnsupportedToken {
+                        token: lot.currency.token.clone(),
+                        loc: location!(),
+                    }))
+                }
+            }
+        }
+
+        let token_contract = GenericEIP3009ERC20Instance::new(token_address, provider.clone());
+
+        // Convert recipients to addresses
+        let recipient_addresses: Result<Vec<Address>> = recipients
+            .iter()
+            .map(|r| r.parse::<Address>().context("invalid recipient address"))
+            .collect();
+        let recipient_addresses = recipient_addresses?;
+
+        // Extract amounts
+        let amounts: Vec<U256> = lots.iter().map(|lot| lot.amount).collect();
+
+        let payment_executions =
+            create_payment_executions(&token_contract, &recipient_addresses, &amounts);
+
+        let transaction_request = build_transaction_with_validation(
+            &sender,
+            provider.clone(),
+            payment_executions,
+            None,
+        )?;
+
+        let wallet_result = broadcaster
+            .broadcast_transaction(transaction_request, PreflightCheck::Simulate)
+            .await
+            .map_err(map_wallet_error)?;
+
+        match wallet_result {
+            TransactionExecutionResult::Success(tx_receipt) => {
+                Ok((tx_receipt.transaction_hash.to_string(), sender_address))
+            }
+            _ => Err(map_wallet_error(WalletError::TransactionCreationFailed {
+                reason: format!("{wallet_result:?}"),
+            })),
+        }
+    }
+
     /// Get the EVM account address that should control this swap
     pub fn get_evm_account_address(&self, swap_index: usize) -> Result<Address> {
         match self.mode.as_ref() {
@@ -457,6 +628,43 @@ fn should_retry_missing_or_spent(error_message: &str) -> bool {
     let lower = error_message.to_ascii_lowercase();
     lower.contains("bad-txns-inputs-missingorspent")
         || lower.contains("bax-txns-inputs-missingorspent")
+}
+
+async fn create_bitcoin_payment_with_retry_batch(
+    wallet: &Arc<BitcoinTransactionBroadcaster>,
+    payments: Vec<Payment>,
+) -> Result<String> {
+    let mut attempt = 0usize;
+    loop {
+        attempt += 1;
+        match wallet
+            .broadcast_transaction(payments.clone(), vec![], None, None)
+            .await
+        {
+            Ok(txid) => {
+                if attempt > 1 {
+                    debug!(attempt = attempt, "bitcoin batch payment succeeded after retry");
+                }
+                return Ok(txid);
+            }
+            Err(err) => {
+                let err_str = err.to_string();
+                if should_retry_missing_or_spent(&err_str) && attempt < BTC_PAYMENT_RETRY_ATTEMPTS {
+                    warn!(
+                        attempt = attempt,
+                        error = %err,
+                        "bitcoin batch payment failed due to missing/spent inputs, retrying"
+                    );
+                    sleep(BTC_PAYMENT_RETRY_BACKOFF).await;
+                    continue;
+                }
+                return Err(map_wallet_error(WalletError::BitcoinWalletClient {
+                    source: err,
+                    loc: location!(),
+                }));
+            }
+        }
+    }
 }
 
 #[derive(Clone)]
