@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::db::{DepositRepository, QuoteRepository};
+use crate::db::{DepositRepository, PaymentRepository, QuoteRepository};
 use crate::otc_handler::OTCMessageHandler;
 use crate::payment_manager::PaymentManager;
 use futures_util::{SinkExt, StreamExt};
@@ -69,9 +69,10 @@ impl OtcFillClient {
         quote_repository: Arc<QuoteRepository>,
         deposit_repository: Arc<DepositRepository>,
         payment_manager: Arc<PaymentManager>,
+        payment_repository: Arc<PaymentRepository>,
         otc_response_rx: mpsc::UnboundedReceiver<ProtocolMessage<MMResponse>>,
     ) -> Self {
-        let handler = OTCMessageHandler::new(quote_repository, deposit_repository, payment_manager);
+        let handler = OTCMessageHandler::new(quote_repository, deposit_repository, payment_manager, payment_repository);
         let (websocket_tx_watch, mut websocket_tx_watch_rx) =
             watch::channel::<Option<mpsc::Sender<WebSocketMessage>>>(None);
 
@@ -116,57 +117,6 @@ impl OtcFillClient {
             config,
             handler,
             websocket_tx_watch,
-        }
-    }
-
-    async fn replay_sent_batches(&self, websocket_sender: &mpsc::Sender<WebSocketMessage>) {
-        let payment_manager = self.handler.payment_manager();
-        let storage = payment_manager.payment_repository();
-
-        let batches = match storage.list_batches().await {
-            Ok(batches) => batches,
-            Err(e) => {
-                error!("Failed to load cached batch payments for replay: {}", e);
-                return;
-            }
-        };
-
-        if batches.is_empty() {
-            return;
-        }
-
-        info!(
-            "Replaying {} batch payment notifications to OTC server",
-            batches.len()
-        );
-
-        for batch in batches {
-            let protocol_msg = ProtocolMessage {
-                version: env!("CARGO_PKG_VERSION").to_string(),
-                sequence: 0,
-                payload: MMResponse::BatchPaymentSent {
-                    request_id: Uuid::new_v4(),
-                    tx_hash: batch.txid.clone(),
-                    swap_ids: batch.swap_ids.clone(),
-                    batch_nonce_digest: batch.batch_nonce_digest,
-                    timestamp: batch.created_at,
-                },
-            };
-
-            match serde_json::to_string(&protocol_msg) {
-                Ok(json) => {
-                    if let Err(e) = websocket_sender.send(Message::Text(json)).await {
-                        error!("Failed to replay batch {} to OTC server: {}", batch.txid, e);
-                        break;
-                    }
-                }
-                Err(e) => {
-                    error!(
-                        "Failed to serialize batch payment replay message for {}: {}",
-                        batch.txid, e
-                    );
-                }
-            }
         }
     }
 
@@ -345,8 +295,6 @@ impl OtcFillClient {
         {
             warn!("Failed to publish websocket sender to MMResponse forwarder");
         }
-
-        self.replay_sent_batches(&websocket_tx).await;
 
         let message_handler = Arc::new(self.handler.clone());
         let read_timeout = tokio::time::sleep(Duration::from_secs(READ_TIMEOUT_SECS));

@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use otc_chains::traits::MarketMakerBatch;
 use otc_models::ChainType;
 use sqlx::postgres::PgPool;
@@ -26,6 +27,7 @@ impl BatchRepository {
         tx_hash: String,
         batch: &MarketMakerBatch,
         swap_ids: Vec<Uuid>,
+        market_maker_id: Uuid,
     ) -> OtcServerResult<()> {
         let chain_str = chain_type_to_db(&chain);
         let batch_json = serde_json::to_value(batch).map_err(|e| OtcServerError::InvalidData {
@@ -43,15 +45,17 @@ impl BatchRepository {
                 tx_hash,
                 full_batch,
                 swap_ids,
+                market_maker_id,
                 created_at
             )
-            VALUES ($1, $2, $3, $4, NOW())
+            VALUES ($1, $2, $3, $4, $5, NOW())
             "#,
         )
         .bind(chain_str)
         .bind(&tx_hash)
         .bind(batch_json)
         .bind(swap_ids_json)
+        .bind(market_maker_id)
         .execute(&self.pool)
         .await?;
 
@@ -101,4 +105,27 @@ impl BatchRepository {
             None => Ok(None),
         }
     }
+
+    /// Get the timestamp of the latest batch payment sent by a specific market maker
+    pub async fn get_latest_known_batch_timestamp_by_market_maker(
+        &self,
+        market_maker_id: &Uuid,
+    ) -> OtcServerResult<Option<DateTime<Utc>>> {
+        let row = sqlx::query(
+            r#"
+            SELECT 
+                created_at
+            FROM batches
+            WHERE market_maker_id = $1
+            ORDER BY created_at DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(market_maker_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        Ok(row.map(|r| r.get("created_at")))
+    }
+
 }

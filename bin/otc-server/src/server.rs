@@ -679,14 +679,14 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         }
     }
 
-    match state.mm_registry.request_latest_deposit_vault_timestamp(&mm_uuid).await {
-        Ok(()) => {
-            info!("Requested latest deposit vault timestamp from market maker {}", mm_id);
-        }
-        Err(err) => {
-            error!(market_maker_id = %mm_id, error = %err, "Failed to request latest deposit vault timestamp from market maker");
-        }
-    }
+    state.mm_registry.request_latest_deposit_vault_timestamp(&mm_uuid).await.expect("Failed to request latest deposit vault timestamp");
+    info!("Requested latest deposit vault timestamp from market maker {}", mm_id);
+
+    let newest_batch_timestamp = state.db.batches().get_latest_known_batch_timestamp_by_market_maker(&mm_uuid).await.expect("Failed to get latest known batch timestamp");
+    info!("Latest known batch timestamp for market maker {} is {:#?}", mm_id, newest_batch_timestamp);
+
+    state.mm_registry.request_new_batches(&mm_uuid, newest_batch_timestamp).await.expect("Failed to request new batches");
+    info!("Requested new batches from market maker {}", mm_id);
 
     // Handle incoming messages
     let mm_id_clone = mm_id.clone();
@@ -821,38 +821,41 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
                             MMResponse::Pong { .. } => {
                                 // Handle pong for keepalive
                             }
-                            MMResponse::BatchPaymentSent {
-                                tx_hash,
-                                swap_ids,
-                                batch_nonce_digest,
+                            MMResponse::Batches {
+                                batches,
                                 ..
                             } => {
-                                info!(
-                                    market_maker_id = %mm_id_clone,
-                                    tx_hash = %tx_hash,
-                                    "Received batch payment notification from MM",
-                                );
-                                let swap_monitoring_service = state.swap_monitoring_service.clone();
-                                let mm_uuid_clone = mm_uuid;
-                                tokio::spawn(async move {
-                                    let res = swap_monitoring_service
-                                        .track_batch_payment(
-                                            mm_uuid_clone,
-                                            &tx_hash,
-                                            swap_ids.to_vec(),
-                                            batch_nonce_digest,
-                                        )
-                                        .await;
-                                    if let Err(e) = res {
-                                        error!(
-                                            market_maker_id = %mm_uuid_clone,
-                                            tx_hash = %tx_hash,
-                                            swap_ids = ?swap_ids,
-                                            error = %e,
-                                            "Failed to track batch payment for MM",
-                                        );
-                                    }
-                                });
+                                for batch in batches {
+                                    let tx_hash = batch.tx_hash;
+                                    let swap_ids = batch.swap_ids;
+                                    let batch_nonce_digest = batch.batch_nonce_digest;
+                                    info!(
+                                        market_maker_id = %mm_id_clone,
+                                        tx_hash = %tx_hash,
+                                        "Received batch payment notification from MM",
+                                    );
+                                    let swap_monitoring_service = state.swap_monitoring_service.clone();
+                                    let mm_uuid_clone = mm_uuid;
+                                    tokio::spawn(async move {
+                                        let res = swap_monitoring_service
+                                            .track_batch_payment(
+                                                mm_uuid_clone,
+                                                &tx_hash,
+                                                swap_ids.to_vec(),
+                                                batch_nonce_digest,
+                                            )
+                                            .await;
+                                        if let Err(e) = res {
+                                            error!(
+                                                market_maker_id = %mm_uuid_clone,
+                                                tx_hash = %tx_hash,
+                                                swap_ids = ?swap_ids,
+                                                error = %e,
+                                                "Failed to track batch payment for MM",
+                                            );
+                                        }
+                                    });
+                                }
                             }
                             MMResponse::PaymentQueued { .. } => {
                                 // Handle payment queued notification

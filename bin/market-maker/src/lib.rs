@@ -450,6 +450,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         quote_repository.clone(),
         deposit_repository.clone(),
         payment_manager.clone(),
+        payment_repository.clone(),
         otc_response_rx,
     );
     join_set.spawn(async move { otc_fill_client.run().await.map_err(Error::from) });

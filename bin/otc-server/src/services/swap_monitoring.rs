@@ -539,7 +539,13 @@ impl SwapMonitoringService {
         let swap_ids = swaps.iter().map(|s| s.id).collect::<Vec<_>>();
         self.db
             .batches()
-            .add_batch(chain_type, tx_hash.clone(), &market_maker_batch, swap_ids)
+            .add_batch(
+                chain_type,
+                tx_hash.clone(),
+                &market_maker_batch,
+                swap_ids,
+                market_maker_id,
+            )
             .await
             .context(DatabaseSnafu)?;
 

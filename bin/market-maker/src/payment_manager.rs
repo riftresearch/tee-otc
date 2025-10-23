@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use dashmap::{mapref::entry::Entry, DashMap};
 use otc_chains::traits::{MarketMakerQueuedPayment, MarketMakerQueuedPaymentExt};
 use otc_models::{can_be_refunded_soon, ChainType, Lot};
-use otc_protocols::mm::{MMErrorCode, MMResponse};
+use otc_protocols::mm::{MMErrorCode, MMResponse, NetworkBatch};
 use tokio::{
     sync::mpsc::{self, UnboundedSender},
     task::JoinSet,
@@ -351,12 +351,13 @@ fn spawn_batch_processor(
                     }
 
                     // Send batch payment notification to OTC server
-                    let response = MMResponse::BatchPaymentSent {
+                    let response = MMResponse::Batches {
                         request_id: Uuid::new_v4(),
-                        tx_hash: tx_hash.clone(),
-                        swap_ids: swap_ids.clone(),
-                        batch_nonce_digest,
-                        timestamp: utc::now(),
+                        batches: vec![NetworkBatch {
+                            tx_hash: tx_hash.clone(),
+                            swap_ids: swap_ids.clone(),
+                            batch_nonce_digest,
+                        }],
                     };
 
                     let protocol_msg = ProtocolMessage {
@@ -579,8 +580,9 @@ mod tests {
 
         let response = otc_rx.recv().await.expect("batch response sent");
         match response.payload {
-            MMResponse::BatchPaymentSent { swap_ids, .. } => {
-                assert_eq!(swap_ids, vec![eligible_swap]);
+            MMResponse::Batches { batches, .. } => {
+                assert_eq!(batches.len(), 1);
+                assert_eq!(batches[0].swap_ids, vec![eligible_swap]);
             }
             other => panic!("unexpected response: {:?}", other),
         }

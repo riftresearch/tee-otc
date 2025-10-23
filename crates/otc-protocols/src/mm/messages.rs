@@ -69,6 +69,12 @@ pub enum MMRequest {
         request_id: Uuid,
     },
 
+    /// Ask the MM for any batches they have that are newer than the newest batch we've seen
+    NewBatches { 
+        request_id: Uuid,
+        newest_batch_timestamp: Option<DateTime<Utc>>,
+    },
+
     /// Request MM status/health check
     Ping {
         request_id: Uuid,
@@ -80,6 +86,13 @@ pub enum MMRequest {
         request_id: Uuid,
         timestamp: DateTime<Utc>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NetworkBatch { 
+    pub tx_hash: String,
+    pub swap_ids: Vec<Uuid>,
+    pub batch_nonce_digest: [u8; 32],
 }
 
 /// Messages sent from Market Maker to OTC server
@@ -113,14 +126,9 @@ pub enum MMResponse {
     },
 
     /// Notification that MM has sent a batch payment
-    BatchPaymentSent {
+    Batches {
         request_id: Uuid,
-        /// Transaction hash of MM's batch payment
-        tx_hash: String,
-        /// Swap IDs in the exact order they appear in the transaction
-        swap_ids: Vec<Uuid>,
-        batch_nonce_digest: [u8; 32],
-        timestamp: DateTime<Utc>,
+        batches: Vec<NetworkBatch>,
     },
 
     /// Acknowledgment of `SwapComplete`

@@ -189,14 +189,16 @@ impl PaymentRepository {
         self.parse_batch_rows(rows)
     }
 
-    pub async fn list_batches(&self) -> PaymentRepositoryResult<Vec<StoredBatch>> {
+    pub async fn list_batches(&self, newest_seen_batch_timestamp: Option<DateTime<Utc>>) -> PaymentRepositoryResult<Vec<StoredBatch>> {
         let rows = sqlx::query(
             r#"
             SELECT txid, chain, swap_ids, batch_nonce_digest, created_at, status
             FROM mm_batches
+            WHERE created_at > $1
             ORDER BY created_at ASC
             "#,
         )
+        .bind(newest_seen_batch_timestamp.unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap()))
         .fetch_all(&self.pool)
         .await
         .context(DatabaseSnafu)?;

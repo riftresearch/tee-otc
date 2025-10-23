@@ -1,6 +1,6 @@
-use crate::db::{Deposit, DepositRepository, DepositStore, QuoteRepository};
+use crate::db::{Deposit, DepositRepository, DepositStore, PaymentRepository, QuoteRepository};
 use crate::payment_manager::PaymentManager;
-use otc_protocols::mm::{MMRequest, MMResponse, MMStatus, ProtocolMessage};
+use otc_protocols::mm::{MMRequest, MMResponse, MMStatus, NetworkBatch, ProtocolMessage};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
@@ -9,6 +9,7 @@ pub struct OTCMessageHandler {
     quote_repository: Arc<QuoteRepository>,
     deposit_repository: Arc<DepositRepository>,
     payment_manager: Arc<PaymentManager>,
+    payment_repository: Arc<PaymentRepository>,
 }
 
 impl OTCMessageHandler {
@@ -16,16 +17,14 @@ impl OTCMessageHandler {
         quote_repository: Arc<QuoteRepository>,
         deposit_repository: Arc<DepositRepository>,
         payment_manager: Arc<PaymentManager>,
+        payment_repository: Arc<PaymentRepository>,
     ) -> Self {
         Self {
             quote_repository,
             deposit_repository,
             payment_manager,
+            payment_repository,
         }
-    }
-
-    pub fn payment_manager(&self) -> Arc<PaymentManager> {
-        self.payment_manager.clone()
     }
 
     pub async fn handle_request(
@@ -33,6 +32,45 @@ impl OTCMessageHandler {
         msg: &ProtocolMessage<MMRequest>,
     ) -> Option<ProtocolMessage<MMResponse>> {
         match &msg.payload {
+            MMRequest::NewBatches {
+                request_id,
+                newest_batch_timestamp,
+                ..
+            } => {
+                info!(
+                    "Received new batches request for newest batch timestamp {:#?}", newest_batch_timestamp,
+                );
+
+                let response = match self.payment_repository.list_batches(*newest_batch_timestamp).await { 
+                    Ok(batches) => {
+                        MMResponse::Batches {
+                            request_id: *request_id,
+                            batches: batches.into_iter().map(|batch| NetworkBatch {
+                                tx_hash: batch.txid,
+                                swap_ids: batch.swap_ids,
+                                batch_nonce_digest: batch.batch_nonce_digest,
+                            }).collect(),
+                        }
+                    }
+                    Err(e) => {
+                        error!(
+                            "Failed to list batches: {}",
+                            e
+                        );
+                        MMResponse::Error {
+                            request_id: *request_id,
+                            error_code: otc_protocols::mm::MMErrorCode::InternalError,
+                            message: "Failed to list batches".to_string(),
+                            timestamp: utc::now(),
+                        }
+                    }
+                };
+                Some(ProtocolMessage {
+                    version: msg.version.clone(),
+                    sequence: msg.sequence + 1, 
+                    payload: response,
+                })
+            }
             MMRequest::LatestDepositVaultTimestamp {
                 request_id,
                 ..

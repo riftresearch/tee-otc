@@ -115,6 +115,41 @@ impl MMRegistry {
         }
     }
 
+    pub async fn request_new_batches(
+        &self,
+        market_maker_id: &Uuid,
+        newest_batch_timestamp: Option<DateTime<Utc>>,
+    ) -> Result<()> {
+        let (protocol_version, sender) = {
+            let connection = self.connections.get(market_maker_id).ok_or_else(|| {
+                MMRegistryError::MarketMakerNotConnected {
+                    market_maker_id: market_maker_id.to_string(),
+                }
+            })?;
+
+            (
+                connection.protocol_version.clone(),
+                connection.sender.clone(),
+            )
+        };
+
+        let request = ProtocolMessage {
+            version: protocol_version,
+            sequence: 0,
+            payload: MMRequest::NewBatches {
+                request_id: Uuid::new_v4(),
+                newest_batch_timestamp,
+            },
+        };
+
+        sender
+            .send(request)
+            .await
+            .map_err(|e| MMRegistryError::MessageSendError { source: e })?;
+
+        Ok(())
+    }
+
     pub async fn request_latest_deposit_vault_timestamp(
         &self,
         market_maker_id: &Uuid,
