@@ -170,7 +170,13 @@ impl SwapMonitoringService {
         let semaphore = Arc::new(Semaphore::new(self.max_concurrent_swaps));
 
         for swap in individual_swaps {
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let permit = match semaphore.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(e) => {
+                    error!("Failed to acquire semaphore permit: {}", e);
+                    panic!("semaphore should never be closed");
+                }
+            };
             let service = Arc::clone(self);
 
             join_set.spawn(async move {
@@ -182,7 +188,13 @@ impl SwapMonitoringService {
         }
 
         for (mm_tx_hash, swaps) in batched_swaps {
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let permit = match semaphore.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(e) => {
+                    error!("Failed to acquire semaphore permit: {}", e);
+                    panic!("semaphore should never be closed");
+                }
+            };
             let service = Arc::clone(self);
 
             join_set.spawn(async move {
@@ -199,7 +211,11 @@ impl SwapMonitoringService {
             });
         }
 
-        while join_set.join_next().await.is_some() {}
+        while let Some(result) = join_set.join_next().await {
+            if let Err(e) = result {
+                error!("Swap monitoring task panicked: {}", e);
+            }
+        }
 
         histogram!(SWAP_MONITORING_DURATION_METRIC).record(start.elapsed().as_secs_f64());
 

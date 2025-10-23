@@ -469,7 +469,7 @@ impl EthereumChain {
             })?;
 
         if transfers.transfers.is_empty() {
-            info!("No transfers found");
+            debug!("No transfers found");
             return Ok(None);
         }
 
