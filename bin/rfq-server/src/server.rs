@@ -50,7 +50,6 @@ struct Status {
     pub connected_market_makers: usize,
 }
 
-const MM_PING_INTERVAL: Duration = Duration::from_secs(30);
 static PROMETHEUS_HANDLE: OnceLock<Arc<PrometheusHandle>> = OnceLock::new();
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -333,22 +332,6 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         "1.0.0".to_string(), // Default protocol version
     );
 
-    let ping_registry = state.mm_registry.clone();
-    tokio::spawn(async move {
-        let ping_mm_id = mm_uuid;
-        let mut interval = tokio::time::interval(MM_PING_INTERVAL);
-        loop {
-            interval.tick().await;
-            if let Err(err) = ping_registry.send_ping(&ping_mm_id).await {
-                warn!(
-                    market_maker_id = %ping_mm_id,
-                    error = %err,
-                    "Stopping RFQ keepalive pings"
-                );
-                break;
-            }
-        }
-    });
 
     let (sender_tx, mut sender_rx) = mpsc::channel::<Message>(100);
 
