@@ -85,7 +85,7 @@ phala-deploy:
 # Docker compose prefix command for local integration testing 
 # DOCKER_DEFAULT_PLATFORM=linux/amd64  
 dc +args:
-    PHALA_DB_SNI=mock PRIMARY_DB_PASSWORD=replica_password REPLICA_DB_PASSWORD=actual_replica_password POSTGRES_REPLICA_PASSWORD=replica_password {{dc_files}} "$@"
+    PHALA_DB_SNI=mock PRIMARY_DB_PASSWORD=replica_password REPLICA_DB_PASSWORD=actual_replica_password POSTGRES_REPLICA_PASSWORD=replica_password {{dc_files}} {{args}}
 
 # Docker compose prefix command for market maker with all config files - passes through any arguments
 mm +args:
@@ -105,7 +105,7 @@ mm +args:
 
 # Docker compose prefix command for read replica
 replica +args:
-    {{dc_replica_files}} "$@"
+    {{dc_replica_files}} {{args}}
 
 # Run clippy
 clippy:
