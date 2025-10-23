@@ -653,6 +653,26 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         }
     });
 
+    // Spawn WebSocket protocol-level ping task for proxy keepalive
+    let ws_ping_sender = sender_tx.clone();
+    let ws_ping_mm_id = mm_id.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(20));
+        // Skip first tick to avoid immediate ping
+        interval.tick().await;
+
+        loop {
+            interval.tick().await;
+            if ws_ping_sender.send(Message::Ping(vec![])).await.is_err() {
+                info!(
+                    "WebSocket protocol ping channel closed for market maker {}",
+                    ws_ping_mm_id
+                );
+                break;
+            }
+        }
+    });
+
     match state.db.swaps().get_waiting_mm_deposit_swaps(mm_uuid).await {
         Ok(pending_swaps) => {
             for swap in pending_swaps {

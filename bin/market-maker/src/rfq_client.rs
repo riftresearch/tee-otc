@@ -43,6 +43,7 @@ type WebSocketMessage = Message;
 const PING_INTERVAL_SECS: u64 = 30;
 const PING_TIMEOUT_SECS: u64 = 10;
 const READ_TIMEOUT_SECS: u64 = 60;
+const WS_PROTOCOL_PING_INTERVAL_SECS: u64 = 20;
 
 struct PendingPing {
     id: Uuid,
@@ -270,6 +271,33 @@ impl RfqClient {
             }
         });
 
+        // Spawn WebSocket protocol-level ping task for proxy keepalive
+        let ws_ping_sender = websocket_tx.clone();
+        let notify_for_ws_ping = disconnect_notify.clone();
+        let (ws_ping_shutdown_tx, ws_ping_shutdown_rx) = oneshot::channel();
+        let mut ws_ping_shutdown_rx = ws_ping_shutdown_rx;
+        let ws_ping_handle = tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(Duration::from_secs(WS_PROTOCOL_PING_INTERVAL_SECS));
+            // Skip first tick to avoid immediate ping
+            interval.tick().await;
+
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if ws_ping_sender.send(Message::Ping(vec![])).await.is_err() {
+                            info!("WebSocket protocol ping sender channel closed");
+                            notify_for_ws_ping.notify_waiters();
+                            break;
+                        }
+                    }
+                    _ = &mut ws_ping_shutdown_rx => {
+                        break;
+                    }
+                }
+            }
+        });
+
         let message_handler = Arc::new(self.handler.clone());
         let pending_ping_reader = pending_ping.clone();
         let read_timeout = tokio::time::sleep(Duration::from_secs(READ_TIMEOUT_SECS));
@@ -360,6 +388,9 @@ impl RfqClient {
 
         let _ = ping_shutdown_tx.send(());
         let _ = ping_handle.await;
+
+        let _ = ws_ping_shutdown_tx.send(());
+        let _ = ws_ping_handle.await;
 
         // Clean up: drop sender to signal writer task to exit
         self.sender = None;
