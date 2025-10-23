@@ -124,6 +124,56 @@ impl RfqMMRegistry {
         receivers
     }
 
+    /// Broadcast a liquidity request to all connected market makers
+    pub async fn broadcast_liquidity_request(
+        &self,
+        request_id: &Uuid,
+    ) -> Vec<(Uuid, mpsc::Receiver<RFQResponse>)> {
+        let mut receivers = Vec::new();
+
+        for entry in self.connections.iter() {
+            let mm_id = *entry.key();
+            let connection = entry.value();
+
+            // Create a channel for this MM's response
+            let (response_tx, response_rx) = mpsc::channel::<RFQResponse>(1);
+
+            // Store the response channel for this MM and request
+            let mm_request_id = Uuid::new_v4(); // Unique ID for this MM's request
+            self.pending_requests.insert(mm_request_id, response_tx);
+
+            let request = ProtocolMessage {
+                version: connection.protocol_version.clone(),
+                sequence: 0,
+                payload: RFQRequest::LiquidityRequest {
+                    request_id: mm_request_id,
+                    timestamp: utc::now(),
+                },
+            };
+
+            // Send the request
+            if let Err(e) = connection.sender.send(request).await {
+                warn!(
+                    market_maker_id = %mm_id,
+                    error = %e,
+                    "Failed to send liquidity request to market maker"
+                );
+                self.pending_requests.remove(&mm_request_id);
+                continue;
+            }
+
+            receivers.push((mm_id, response_rx));
+        }
+
+        info!(
+            request_id = %request_id,
+            market_makers_count = receivers.len(),
+            "Broadcasted liquidity request to market makers"
+        );
+
+        receivers
+    }
+
     pub async fn send_ping(&self, market_maker_id: &Uuid) -> Result<()> {
         let (protocol_version, sender) = {
             let connection = self.connections.get(market_maker_id).ok_or_else(|| {

@@ -1,5 +1,6 @@
+use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
-use otc_models::{Quote, QuoteRequest};
+use otc_models::{Currency, Quote, QuoteRequest};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -19,6 +20,15 @@ pub struct Connected {
     pub session_id: Uuid,
     pub server_version: String,
     pub timestamp: DateTime<Utc>,
+}
+
+/// Represents maximum liquidity available for a specific trading pair
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TradingPairLiquidity {
+    pub from: Currency,
+    pub to: Currency,
+    /// Maximum from_amount the MM can handle
+    pub max_amount: U256,
 }
 
 /// Messages sent from RFQ server to Market Maker
@@ -47,6 +57,12 @@ pub enum RFQRequest {
 
     /// Pong response to keepalive ping
     Pong {
+        request_id: Uuid,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Request for maximum swap sizes from MM
+    LiquidityRequest {
         request_id: Uuid,
         timestamp: DateTime<Utc>,
     },
@@ -90,6 +106,13 @@ pub enum RFQResponse {
         request_id: Uuid,
         error_code: RFQErrorCode,
         message: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// MM's response with liquidity information
+    LiquidityResponse {
+        request_id: Uuid,
+        liquidity: Vec<TradingPairLiquidity>,
         timestamp: DateTime<Utc>,
     },
 }

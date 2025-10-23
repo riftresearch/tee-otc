@@ -41,13 +41,13 @@ pub struct WrappedBitcoinQuoter {
     wallet_registry: Arc<WalletManager>,
     fee_map: Arc<RwLock<HashMap<ChainType, u64>>>,
     balance_map: Arc<RwLock<HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>>>>,
-    balance_strategy: QuoteBalanceStrategy,
+    balance_strategy: Arc<QuoteBalanceStrategy>,
 }
 
 impl WrappedBitcoinQuoter {
     pub fn new(
         wallet_registry: Arc<WalletManager>,
-        balance_strategy: QuoteBalanceStrategy,
+        balance_strategy: Arc<QuoteBalanceStrategy>,
         btc_eth_price_oracle: BitcoinEtherPriceOracle,
         esplora_client: esplora_client::AsyncClient,
         eth_provider: DynProvider,
@@ -340,7 +340,7 @@ impl WrappedBitcoinQuoter {
 
         if !self
             .balance_strategy
-            .can_fill_quote(quote, balance.total_balance)
+            .can_fill_quote(quote.to.amount, balance.total_balance)
         {
             warn!(
                 "Cannot fill quote {}: insufficient balance for chain {:?} token {:?}; available {:?}",

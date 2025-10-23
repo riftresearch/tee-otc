@@ -5,6 +5,7 @@ pub mod cb_bitcoin_converter;
 mod config;
 pub mod db;
 pub mod evm_wallet;
+mod liquidity_cache;
 mod otc_client;
 mod otc_handler;
 pub mod payment_manager;
@@ -385,14 +386,15 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     wallet_manager.register(ChainType::Ethereum, evm_wallet.clone());
 
     let wallet_manager = Arc::new(wallet_manager);
-    let balance_strategy =
-        balance_strat::QuoteBalanceStrategy::new(args.balance_utilization_threshold_bps);
+    let balance_strategy = Arc::new(
+        balance_strat::QuoteBalanceStrategy::new(args.balance_utilization_threshold_bps),
+    );
 
     let btc_eth_price_oracle = price_oracle::BitcoinEtherPriceOracle::new(&mut join_set);
 
     let wrapped_bitcoin_quoter = Arc::new(WrappedBitcoinQuoter::new(
         wallet_manager.clone(),
-        balance_strategy,
+        balance_strategy.clone(),
         btc_eth_price_oracle,
         esplora_client,
         provider.clone().erased(),
@@ -455,10 +457,14 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     );
     join_set.spawn(async move { otc_fill_client.run().await.map_err(Error::from) });
 
+    // Create liquidity cache for RFQ liquidity requests
+    let liquidity_cache = Arc::new(liquidity_cache::LiquidityCache::new(wallet_manager.clone(), balance_strategy.clone()));
+
     let rfq_handler = rfq_handler::RFQMessageHandler::new(
         market_maker_id,
         wrapped_bitcoin_quoter.clone(),
         quote_repository,
+        liquidity_cache,
     );
 
     // Add RFQ client for handling quote requests

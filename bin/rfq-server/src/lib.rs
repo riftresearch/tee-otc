@@ -4,6 +4,7 @@ use snafu::prelude::*;
 use std::net::{IpAddr, SocketAddr};
 
 pub mod error;
+pub mod liquidity_aggregator;
 pub mod mm_registry;
 pub mod quote_aggregator;
 pub mod server;

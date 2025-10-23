@@ -1,6 +1,9 @@
 use crate::{
-    error::RfqServerError, mm_registry::RfqMMRegistry, quote_aggregator::QuoteAggregator, Result,
-    RfqServerArgs,
+    error::RfqServerError,
+    liquidity_aggregator::{LiquidityAggregator, LiquidityAggregatorResult},
+    mm_registry::RfqMMRegistry,
+    quote_aggregator::QuoteAggregator,
+    Result, RfqServerArgs,
 };
 use axum::{
     extract::{
@@ -36,6 +39,7 @@ pub struct AppState {
     pub mm_registry: Arc<RfqMMRegistry>,
     pub api_key_store: Arc<ApiKeyStore>,
     pub quote_aggregator: Arc<QuoteAggregator>,
+    pub liquidity_aggregator: Arc<LiquidityAggregator>,
     pub address_screener: Option<ChainalysisAddressScreener>,
 }
 
@@ -81,6 +85,12 @@ pub async fn run_server(args: RfqServerArgs) -> Result<()> {
         args.quote_timeout_milliseconds,
     ));
 
+    // Initialize liquidity aggregator
+    let liquidity_aggregator = Arc::new(LiquidityAggregator::new(
+        mm_registry.clone(),
+        args.quote_timeout_milliseconds,
+    ));
+
     // Initialize optional Chainalysis address screener
     let address_screener = match (&args.chainalysis_host, &args.chainalysis_token) {
         (Some(host), Some(token)) if !host.is_empty() && !token.is_empty() => {
@@ -109,6 +119,7 @@ pub async fn run_server(args: RfqServerArgs) -> Result<()> {
         mm_registry,
         api_key_store,
         quote_aggregator,
+        liquidity_aggregator,
         address_screener,
     };
 
@@ -119,6 +130,7 @@ pub async fn run_server(args: RfqServerArgs) -> Result<()> {
         .route("/ws/mm", get(mm_websocket_handler))
         // API endpoints
         .route("/api/v1/quotes/request", post(request_quotes))
+        .route("/api/v1/liquidity", get(get_liquidity))
         .route(
             "/api/v1/market-makers/connected",
             get(get_connected_market_makers),
@@ -384,6 +396,12 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
                                     .handle_quote_response(*request_id, msg.payload.clone())
                                     .await;
                             }
+                            RFQResponse::LiquidityResponse { request_id, .. } => {
+                                // Route the liquidity response to the appropriate aggregator
+                                mm_registry
+                                    .handle_quote_response(*request_id, msg.payload.clone())
+                                    .await;
+                            }
                             RFQResponse::Pong { .. } => {
                                 // Handle pong for keepalive
                             }
@@ -544,5 +562,37 @@ async fn get_connected_market_makers(
 ) -> Json<ConnectedMarketMakersResponse> {
     let market_makers = state.mm_registry.get_connected_market_makers();
     Json(ConnectedMarketMakersResponse { market_makers })
+}
+
+async fn get_liquidity(
+    State(state): State<AppState>,
+) -> Result<Json<LiquidityAggregatorResult>, RfqServerError> {
+    info!("Received liquidity request");
+
+    match state.liquidity_aggregator.request_liquidity().await {
+        Ok(result) => {
+            info!(
+                market_makers_count = result.market_makers.len(),
+                "Liquidity aggregation successful"
+            );
+            Ok(Json(result))
+        }
+        Err(e) => {
+            error!("Liquidity aggregation failed: {}", e);
+            use crate::liquidity_aggregator::LiquidityAggregatorError;
+
+            let err = match e {
+                LiquidityAggregatorError::NoMarketMakersConnected => {
+                    RfqServerError::ServiceUnavailable {
+                        service: "market_makers".to_string(),
+                    }
+                }
+                LiquidityAggregatorError::AggregationTimeout => RfqServerError::Timeout {
+                    message: "Liquidity collection timeout".to_string(),
+                },
+            };
+            Err(err)
+        }
+    }
 }
 

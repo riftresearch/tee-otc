@@ -4,6 +4,7 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::db::QuoteRepository;
+use crate::liquidity_cache::LiquidityCache;
 use crate::wrapped_bitcoin_quoter::WrappedBitcoinQuoter;
 use crate::QUOTE_LATENCY_METRIC;
 
@@ -12,6 +13,7 @@ pub struct RFQMessageHandler {
     market_maker_id: Uuid,
     wrapped_bitcoin_quoter: Arc<WrappedBitcoinQuoter>,
     quote_repository: Arc<QuoteRepository>,
+    liquidity_cache: Arc<LiquidityCache>,
 }
 
 impl RFQMessageHandler {
@@ -19,11 +21,13 @@ impl RFQMessageHandler {
         market_maker_id: Uuid,
         wrapped_bitcoin_quoter: Arc<WrappedBitcoinQuoter>,
         quote_repository: Arc<QuoteRepository>,
+        liquidity_cache: Arc<LiquidityCache>,
     ) -> Self {
         Self {
             market_maker_id,
             wrapped_bitcoin_quoter,
             quote_repository,
+            liquidity_cache,
         }
     }
 
@@ -131,6 +135,33 @@ impl RFQMessageHandler {
             RFQRequest::Pong { .. } => {
                 // Keep-alive acknowledgment from server, nothing to do
                 None
+            }
+            RFQRequest::LiquidityRequest {
+                request_id,
+                timestamp: _,
+            } => {
+                info!("Received liquidity request: request_id={}", request_id);
+
+                // Get liquidity from cache
+                let liquidity = self.liquidity_cache.get_liquidity().await;
+
+                info!(
+                    "Responding with {} trading pairs for liquidity request {}",
+                    liquidity.len(),
+                    request_id
+                );
+
+                let response = RFQResponse::LiquidityResponse {
+                    request_id: *request_id,
+                    liquidity,
+                    timestamp: utc::now(),
+                };
+
+                Some(ProtocolMessage {
+                    version: msg.version.clone(),
+                    sequence: msg.sequence,
+                    payload: response,
+                })
             }
         }
     }
