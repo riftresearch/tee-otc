@@ -34,7 +34,7 @@ pub type DepositRepositoryResult<T, E = DepositRepositoryError> = std::result::R
 pub trait DepositStore {
     async fn balance(&self, currency: &Currency) -> DepositRepositoryResult<U256>;
     async fn take_deposits_that_fill_lot(&self, lot: &Lot) -> DepositRepositoryResult<FillStatus>;
-    async fn store_deposit(&self, deposit: &Deposit, swap_settlement_timestamp: DateTime<Utc>) -> DepositRepositoryResult<()>;
+    async fn store_deposit(&self, deposit: &Deposit, swap_settlement_timestamp: DateTime<Utc>, associated_swap_id: Uuid) -> DepositRepositoryResult<()>;
     async fn get_latest_deposit_vault_timestamp(&self) -> DepositRepositoryResult<Option<DateTime<Utc>>>;
 }
 
@@ -203,7 +203,7 @@ impl DepositStore for DepositRepository {
         }
     }
 
-    async fn store_deposit(&self, deposit: &Deposit, swap_settlement_timestamp: DateTime<Utc>) -> DepositRepositoryResult<()> {
+    async fn store_deposit(&self, deposit: &Deposit, swap_settlement_timestamp: DateTime<Utc>, associated_swap_id: Uuid) -> DepositRepositoryResult<()> {
         let (chain, token, decimals) = Self::serialize_currency(&deposit.holdings.currency);
         let amount = deposit.holdings.amount.to_string();
         let created_at = swap_settlement_timestamp;
@@ -211,8 +211,8 @@ impl DepositStore for DepositRepository {
         sqlx::query(
             r#"
             INSERT INTO mm_deposits (
-                private_key, chain, token, decimals, amount, status, funding_tx_hash, created_at
-            ) VALUES ($1, $2, $3, $4, $5::numeric, 'available', $6, $7)
+                private_key, chain, token, decimals, amount, status, funding_tx_hash, created_at, associated_swap_id
+            ) VALUES ($1, $2, $3, $4, $5::numeric, 'available', $6, $7, $8)
             ON CONFLICT (private_key) DO NOTHING
             "#,
         )
@@ -223,6 +223,7 @@ impl DepositStore for DepositRepository {
         .bind(&amount)
         .bind(&deposit.funding_tx_hash)
         .bind(created_at)
+        .bind(associated_swap_id)
         .execute(&self.pool)
         .await
         .context(DatabaseSnafu)?;

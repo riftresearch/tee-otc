@@ -255,7 +255,7 @@ impl OTCMessageHandler {
                         private_key: user_deposit_private_key.to_string(),
                         holdings: lot.clone(),
                         funding_tx_hash: user_deposit_tx_hash.to_string(),
-                    }, *swap_settlement_timestamp)
+                    }, *swap_settlement_timestamp, *swap_id)
                     .await
                 {
                     Ok(_) => {}

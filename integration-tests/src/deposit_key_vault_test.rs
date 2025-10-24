@@ -2,6 +2,7 @@ use alloy::primitives::U256;
 use market_maker::db::{Database, Deposit, DepositRepository, DepositStore, FillStatus};
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
+use uuid::Uuid;
 
 use crate::utils::PgConnectOptionsExt;
 
@@ -33,11 +34,11 @@ async fn test_deposit_vault_consumes_on_fill(
     // Prefund with two deposits: 5 and 7 (total 12)
     // A 10-lot should reserve both and consume all available deposits.
     vault
-        .store_deposit(&Deposit::new("k1", eth_native(5), "tx1"), utc::now())
+        .store_deposit(&Deposit::new("k1", eth_native(5), "tx1"), utc::now(), Uuid::new_v4())
         .await
         .expect("store k1");
     vault
-        .store_deposit(&Deposit::new("k2", eth_native(7), "tx2"), utc::now())
+        .store_deposit(&Deposit::new("k2", eth_native(7), "tx2"), utc::now(), Uuid::new_v4())
         .await
         .expect("store k2");
 
@@ -90,15 +91,15 @@ async fn test_deposit_key_vault_take_deposits(
         amount: U256::from(amt),
     };
     vault
-        .store_deposit(&Deposit::new("k1", eth(5), "tx1"), utc::now())
+        .store_deposit(&Deposit::new("k1", eth(5), "tx1"), utc::now(), Uuid::new_v4())
         .await
         .expect("store k1");
     vault
-        .store_deposit(&Deposit::new("k2", eth(7), "tx2"), utc::now())
+        .store_deposit(&Deposit::new("k2", eth(7), "tx2"), utc::now(), Uuid::new_v4())
         .await
         .expect("store k2");
     vault
-        .store_deposit(&Deposit::new("k3", eth(20), "tx3"), utc::now())
+        .store_deposit(&Deposit::new("k3", eth(20), "tx3"), utc::now(), Uuid::new_v4())
         .await
         .expect("store k3");
 
@@ -164,11 +165,11 @@ async fn test_deposit_key_vault_take_deposits(
         amount: U256::from(amt),
     };
     vault
-        .store_deposit(&Deposit::new("b1", btc(3), "tx4"), utc::now())
+        .store_deposit(&Deposit::new("b1", btc(3), "tx4"), utc::now(), Uuid::new_v4())
         .await
         .expect("store b1");
     vault
-        .store_deposit(&Deposit::new("b2", btc(4), "tx5"), utc::now())
+        .store_deposit(&Deposit::new("b2", btc(4), "tx5"), utc::now(), Uuid::new_v4())
         .await
         .expect("store b2");
 

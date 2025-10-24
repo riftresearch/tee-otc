@@ -13,6 +13,7 @@ use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::time::Duration;
 use std::{collections::HashSet, sync::Arc};
 use tokio::task::JoinSet;
+use uuid::Uuid;
 use tracing::info;
 
 use crate::utils::PgConnectOptionsExt;
@@ -434,7 +435,8 @@ async fn test_bitcoin_wallet_spend_from_deposit_storage(
             deposit_lot.clone(),
             prefund_txid.clone(),
         ),
-        utc::now()
+        utc::now(),
+        Uuid::new_v4()
      )
         .await
         .expect("store deposit in key storage");
@@ -590,7 +592,8 @@ async fn test_bitcoin_wallet_cancel_tx(
             deposit_lot.clone(),
             prefund_txid.clone(),
         ),
-        utc::now()
+        utc::now(),
+        Uuid::new_v4()
     )
         .await
         .expect("store deposit in key storage");
