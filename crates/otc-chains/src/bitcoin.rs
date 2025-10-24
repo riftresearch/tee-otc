@@ -354,7 +354,7 @@ impl ChainOperations for BitcoinChain {
         lot: &Lot,
         _from_block_height: Option<u64>,
     ) -> Result<Option<TransferInfo>> {
-        info!("Searching for transfer");
+        debug!("Searching for transfer");
         let span = tracing::span!(
             tracing::Level::DEBUG,
             "search_for_transfer",

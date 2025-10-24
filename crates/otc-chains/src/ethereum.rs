@@ -453,7 +453,7 @@ impl EthereumChain {
         recipient_address: &Address,
         amount: &U256,
     ) -> Result<Option<TransferInfo>> {
-        info!(
+        debug!(
             "Searching for transfer for address: {}, amount: {}",
             recipient_address, amount
         );

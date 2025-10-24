@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use tokio::time;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 pub const SWAP_MONITORING_DURATION_METRIC: &str = "otc_swap_monitoring_duration_seconds";
@@ -224,7 +224,7 @@ impl SwapMonitoringService {
 
     /// Monitor a single swap based on its current state
     async fn monitor_swap(&self, swap: &Swap) -> MonitoringResult<()> {
-        info!(
+        debug!(
             "Monitoring swap {} status: {:?}, user deposit status: {:?}",
             swap.id, swap.status, swap.user_deposit_status
         );
@@ -234,7 +234,7 @@ impl SwapMonitoringService {
             return Ok(());
         }
 
-        info!(
+        debug!(
             "Monitoring swap {} status: {:?}, user deposit status: {:?}",
             swap.id, swap.status, swap.user_deposit_status
         );
@@ -286,7 +286,6 @@ impl SwapMonitoringService {
             .derive_wallet(&self.settings.master_key_bytes(), &swap.user_deposit_salt)
             .context(ChainOperationSnafu)?;
 
-        info!("User deposit wallet: {:?}", user_wallet.address);
 
         // Check for deposit from the user's wallet
         let deposit_info = chain_ops
@@ -295,7 +294,7 @@ impl SwapMonitoringService {
             .context(ChainOperationSnafu)?;
 
         if let Some(deposit) = deposit_info {
-            info!(
+            debug!(
                 "User deposit detected for swap {}: {} on chain {:?}",
                 swap.id, deposit.tx_hash, quote.from.currency.chain
             );
@@ -368,7 +367,7 @@ impl SwapMonitoringService {
 
         match tx_status {
             TxStatus::Confirmed(confirmations) => {
-                info!(
+                debug!(
                     "User deposit for swap {} has {} confirmations",
                     swap.id, confirmations
                 );
@@ -626,7 +625,7 @@ impl SwapMonitoringService {
             Some(confirmations) => {
                 let swap_ids: Vec<Uuid> = swaps.iter().map(|s| s.id).collect();
 
-                info!(
+                debug!(
                     "MM deposit batch {} has {} confirmations for {} swaps",
                     mm_tx_hash,
                     confirmations,
@@ -642,7 +641,7 @@ impl SwapMonitoringService {
 
                 // Check if we have enough confirmations (use first swap's requirements)
                 if confirmations >= chain_ops.minimum_block_confirmations().into() {
-                    info!(
+                    debug!(
                         "MM deposit batch {} has reached required confirmations, settling {} swaps",
                         mm_tx_hash,
                         swaps.len()
