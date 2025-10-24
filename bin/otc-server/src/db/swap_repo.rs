@@ -484,7 +484,7 @@ impl SwapRepository {
             WHERE s.market_maker_id = $1
               AND s.status = $2
               AND s.user_deposit_status IS NOT NULL
-              AND s.updated_at > $3
+              AND s.updated_at >= $3
             "#,
         )
         .bind(market_maker_id)
