@@ -3,6 +3,7 @@ use crate::rfq_handler::RFQMessageHandler;
 use futures_util::{SinkExt, StreamExt};
 use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse};
 use snafu::prelude::*;
+use tokio::task::JoinSet;
 use std::sync::Arc;
 use tokio::sync::{mpsc, oneshot, Mutex, Notify};
 use tokio::time::{sleep, Duration, Instant};
@@ -178,21 +179,23 @@ impl RfqClient {
             tx: websocket_tx.clone(),
         });
 
+        let mut rfq_join_set = JoinSet::new();
+
         // Spawn single writer task that owns the sink
         // This ensures all messages are sent in the order they are queued,
         // without interleaving that could corrupt the protocol
-        let writer_handle = tokio::spawn(async move {
+        rfq_join_set.spawn(async move {
             let mut sink = ws_sink;
             while let Some(message) = websocket_rx.recv().await {
                 if let Err(e) = sink.send(message).await {
-                    error!("Failed to send WebSocket message: {}", e);
+                    error!("Failed to send RFQ WebSocket message: {}", e);
                     break;
                 }
             }
             // Gracefully close the sink
             let _ = sink.flush().await;
             let _ = sink.close().await;
-            info!("WebSocket writer task finished");
+            info!("RFQ WebSocket writer task finished");
         });
 
         let pending_ping = Arc::new(Mutex::new(None::<PendingPing>));
@@ -203,7 +206,7 @@ impl RfqClient {
         let notify_for_ping = disconnect_notify.clone();
         let (ping_shutdown_tx, ping_shutdown_rx) = oneshot::channel();
         let mut ping_shutdown_rx = ping_shutdown_rx;
-        let ping_handle = tokio::spawn(async move {
+        rfq_join_set.spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(PING_INTERVAL_SECS));
             let mut sequence: u64 = 0;
             let version = env!("CARGO_PKG_VERSION").to_string();
@@ -276,7 +279,7 @@ impl RfqClient {
         let notify_for_ws_ping = disconnect_notify.clone();
         let (ws_ping_shutdown_tx, ws_ping_shutdown_rx) = oneshot::channel();
         let mut ws_ping_shutdown_rx = ws_ping_shutdown_rx;
-        let ws_ping_handle = tokio::spawn(async move {
+        rfq_join_set.spawn(async move {
             let mut interval =
                 tokio::time::interval(Duration::from_secs(WS_PROTOCOL_PING_INTERVAL_SECS));
             // Skip first tick to avoid immediate ping
@@ -315,6 +318,10 @@ impl RfqClient {
                         READ_TIMEOUT_SECS
                     );
                     disconnect_notify.notify_waiters();
+                    break;
+                }
+                res = rfq_join_set.join_next() => { 
+                    warn!("RFQ join set task finished: {:?}", res);
                     break;
                 }
                 maybe_msg = ws_stream.next() => {
@@ -387,17 +394,17 @@ impl RfqClient {
         }
 
         let _ = ping_shutdown_tx.send(());
-        let _ = ping_handle.await;
 
         let _ = ws_ping_shutdown_tx.send(());
-        let _ = ws_ping_handle.await;
+
+        info!("Shutting down RFQ join set");
+        let s = tokio::time::Instant::now();
+        rfq_join_set.shutdown().await;
+        info!("RFQ join set shutdown completed in {:?}", s.elapsed());
 
         // Clean up: drop sender to signal writer task to exit
         self.sender = None;
         drop(websocket_tx);
-
-        // Wait for writer task to finish
-        let _ = writer_handle.await;
 
         Ok(())
     }
