@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, io, thread, time::Duration};
+use std::{collections::VecDeque, io, thread, time::{Duration, Instant}};
 
 use alloy::primitives::U256;
 use anyhow::Result;
@@ -48,15 +48,32 @@ fn run(
     let mut terminal = Terminal::new(backend)?;
 
     let mut app = App::new(total_swaps, deposit_chain, exit_tx);
-    let tick_rate = Duration::from_millis(200);
+    let mut last_draw = Instant::now();
+    let draw_interval = Duration::from_millis(16); // 60 FPS target
 
     loop {
-        let mut redraw = true;
-        loop {
+        // Priority 1: Handle keyboard events first (1ms timeout for responsiveness)
+        if event::poll(Duration::from_millis(1))? {
+            if let Event::Key(key_event) = event::read()? {
+                app.handle_key_event(key_event);
+                // Immediate redraw for user input
+                terminal.draw(|f| app.draw(f))?;
+                last_draw = Instant::now();
+                
+                if app.should_exit() {
+                    break;
+                }
+                continue;
+            }
+        }
+
+        // Priority 2: Process UI events in batches
+        let mut ui_updates = false;
+        for _ in 0..100 {
             match receiver.try_recv() {
                 Ok(event) => {
                     app.handle_event(event);
-                    redraw = true;
+                    ui_updates = true;
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
@@ -66,22 +83,14 @@ fn run(
             }
         }
 
-        if redraw {
+        // Priority 3: Throttled redraw for UI updates
+        if ui_updates && last_draw.elapsed() >= draw_interval {
             terminal.draw(|f| app.draw(f))?;
+            last_draw = Instant::now();
         }
 
         if app.should_exit() {
             break;
-        }
-
-        if event::poll(tick_rate)? {
-            if let Event::Key(key_event) = event::read()? {
-                app.handle_key_event(key_event);
-            }
-            terminal.draw(|f| app.draw(f))?;
-            if app.should_exit() {
-                break;
-            }
         }
     }
 
@@ -102,6 +111,7 @@ struct App {
     view_mode: ViewMode,
     table_scroll: TableScroll,
     log_scroll: LogScroll,
+    count_buffer: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -172,10 +182,6 @@ impl TableScroll {
                 None => true,
             }
         }
-    }
-
-    fn state_mut(&mut self) -> &mut TableState {
-        &mut self.state
     }
 }
 
@@ -255,6 +261,7 @@ impl App {
             view_mode: ViewMode::Dashboard,
             table_scroll: TableScroll::default(),
             log_scroll: LogScroll::default(),
+            count_buffer: String::new(),
         };
         app.table_scroll.snap_to_end(app.rows.len());
         app
@@ -325,24 +332,102 @@ impl App {
         }
 
         match key.code {
-            KeyCode::Tab => self.toggle_view_mode(),
-            KeyCode::Char('l') | KeyCode::Char('L') => self.set_view_mode(ViewMode::Logs),
-            KeyCode::Char('d') | KeyCode::Char('D') => self.set_view_mode(ViewMode::Dashboard),
-            KeyCode::Up | KeyCode::Char('k') => self.scroll_up(1),
-            KeyCode::Down | KeyCode::Char('j') => self.scroll_down(1),
+            KeyCode::Tab => {
+                self.count_buffer.clear();
+                self.toggle_view_mode();
+            }
+            KeyCode::Char('l') | KeyCode::Char('L') => {
+                self.count_buffer.clear();
+                self.set_view_mode(ViewMode::Logs);
+            }
+            KeyCode::Char('d') | KeyCode::Char('D') => {
+                self.count_buffer.clear();
+                self.set_view_mode(ViewMode::Dashboard);
+            }
+            KeyCode::Char(ch @ '0'..='9') => {
+                // Accumulate digits for count prefix (vim-style)
+                self.count_buffer.push(ch);
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                let count = self.parse_and_clear_count();
+                self.scroll_up(count);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                let count = self.parse_and_clear_count();
+                self.scroll_down(count);
+            }
             KeyCode::PageUp | KeyCode::Char('b')
                 if key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                self.scroll_up(10)
+                self.count_buffer.clear();
+                self.scroll_up(10);
             }
             KeyCode::PageDown | KeyCode::Char('f')
                 if key.modifiers.contains(KeyModifiers::CONTROL) =>
             {
-                self.scroll_down(10)
+                self.count_buffer.clear();
+                self.scroll_down(10);
             }
-            KeyCode::Home | KeyCode::Char('g') => self.scroll_to_start(),
-            KeyCode::End | KeyCode::Char('G') => self.scroll_to_end(),
-            _ => {}
+            KeyCode::Home => {
+                self.count_buffer.clear();
+                self.scroll_to_start();
+            }
+            KeyCode::End => {
+                self.count_buffer.clear();
+                self.scroll_to_end();
+            }
+            KeyCode::Char('g') => {
+                // Support vim-style 'gg' for top
+                if self.count_buffer == "g" {
+                    self.count_buffer.clear();
+                    self.scroll_to_start();
+                } else {
+                    self.count_buffer.clear();
+                    self.count_buffer.push('g');
+                }
+            }
+            KeyCode::Char('G') => {
+                // Support vim-style 'G' for bottom, or with count for specific line
+                let count = self.parse_and_clear_count();
+                if count > 1 {
+                    // Go to specific line (0-indexed internally)
+                    self.scroll_to_line(count.saturating_sub(1));
+                } else {
+                    self.scroll_to_end();
+                }
+            }
+            _ => {
+                // Clear count buffer on any other key
+                self.count_buffer.clear();
+            }
+        }
+    }
+
+    fn parse_and_clear_count(&mut self) -> usize {
+        let count = if self.count_buffer.is_empty() {
+            1
+        } else {
+            self.count_buffer.parse::<usize>().unwrap_or(1)
+        };
+        self.count_buffer.clear();
+        count
+    }
+
+    fn scroll_to_line(&mut self, line: usize) {
+        match self.view_mode {
+            ViewMode::Dashboard => {
+                let len = self.rows.len();
+                if len > 0 {
+                    let target = std::cmp::min(line, len - 1);
+                    self.table_scroll.state.select(Some(target));
+                }
+            }
+            ViewMode::Logs => {
+                let len = self.logs.len();
+                if len > 0 {
+                    self.log_scroll.offset = std::cmp::min(line, len - 1);
+                }
+            }
         }
     }
 
@@ -400,6 +485,23 @@ impl App {
         self.rows.iter().filter(|row| row.is_terminal).count()
     }
 
+    fn get_visible_rows(&self, viewport_height: usize) -> (usize, Vec<&SwapRow>) {
+        if self.rows.is_empty() {
+            return (0, Vec::new());
+        }
+
+        let buffer = 10;
+        let selected = self.table_scroll.state.selected().unwrap_or(0);
+        
+        // Calculate visible window centered around selection with buffer
+        let half_viewport = viewport_height / 2;
+        let start = selected.saturating_sub(half_viewport + buffer);
+        let end = (start + viewport_height + buffer * 2).min(self.rows.len());
+        
+        let visible_rows: Vec<&SwapRow> = self.rows[start..end].iter().collect();
+        (start, visible_rows)
+    }
+
     fn draw(&mut self, frame: &mut Frame<'_>) {
         match self.view_mode {
             ViewMode::Dashboard => self.draw_dashboard(frame),
@@ -417,11 +519,17 @@ impl App {
             ])
             .split(frame.area());
 
+        let count_hint = if self.count_buffer.is_empty() {
+            String::new()
+        } else {
+            format!(" | Count: {}", self.count_buffer)
+        };
         let header = format!(
-            "Completed {}/{} | Deposit: {:?} | View: Dashboard (j/k scroll, g/G top/bottom, Tab toggles)",
+            "Completed {}/{} | Deposit: {:?}{} | View: Dashboard (j/k scroll, g/G top/bottom, Tab toggles)",
             self.completed_count(),
             self.total,
-            self.deposit_chain
+            self.deposit_chain,
+            count_hint
         );
         let header_block = Block::default()
             .title(header)
@@ -431,11 +539,16 @@ impl App {
 
         self.table_scroll.ensure_in_bounds(self.rows.len());
 
-        let rows = self.rows.iter().map(SwapRow::to_table_row);
+        // Virtual scrolling: only render visible rows
+        let table_area = layout[1];
+        let viewport_height = table_area.height.saturating_sub(3) as usize; // Subtract borders and header
+        let (offset, visible_rows) = self.get_visible_rows(viewport_height);
+
+        let rows = visible_rows.iter().map(|row| row.to_table_row());
         let table = Table::new(
             rows,
             [
-                Constraint::Length(4),
+                Constraint::Length(8),
                 Constraint::Length(12),
                 Constraint::Length(8),
                 Constraint::Length(12),
@@ -464,7 +577,13 @@ impl App {
         .highlight_style(Style::default().add_modifier(Modifier::REVERSED))
         .highlight_symbol("▶ ");
 
-        frame.render_stateful_widget(table, layout[1], self.table_scroll.state_mut());
+        // Adjust table state to account for offset
+        let mut adjusted_state = self.table_scroll.state.clone();
+        if let Some(selected) = adjusted_state.selected() {
+            adjusted_state.select(Some(selected.saturating_sub(offset)));
+        }
+        
+        frame.render_stateful_widget(table, table_area, &mut adjusted_state);
 
         let footer = if self.shutdown {
             "Shutting down..."
@@ -527,8 +646,14 @@ impl App {
             "Streaming logs"
         };
 
+        let count_hint = if self.count_buffer.is_empty() {
+            String::new()
+        } else {
+            format!(" | Count: {}", self.count_buffer)
+        };
+
         let footer_line = Line::from(vec![Span::styled(
-            format!("{} | View: Logs", footer_text),
+            format!("{} | View: Logs{}", footer_text, count_hint),
             Style::default().fg(Color::Gray),
         )]);
 

@@ -205,7 +205,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
     );
 
     // Get the EVM account address for this specific swap
-    let user_evm_account_address = match wallets.get_evm_account_address(index) {
+    let user_evm_account_address = match wallets.get_evm_account_address(index, &config.recipient_evm_address) {
         Ok(addr) => addr,
         Err(err) => {
             send_update(

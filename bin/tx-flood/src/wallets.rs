@@ -124,7 +124,8 @@ enum PaymentWalletMode {
         bitcoin: Arc<BitcoinTransactionBroadcaster>,
         bitcoin_address: String,
         ethereum: (Arc<EVMTransactionBroadcaster>, DynProvider),
-        // Random EVM addresses for Bitcoin swaps
+        // Markers to identify swap types: Address::ZERO for Ethereum swaps, 0x1 for Bitcoin swaps
+        // Actual EVM addresses for Bitcoin swaps come from recipient_evm_address config
         random_evm_addresses: Arc<Vec<Address>>,
     },
     Dedicated {
@@ -459,15 +460,15 @@ impl PaymentWallets {
     }
 
     /// Get the EVM account address that should control this swap
-    pub fn get_evm_account_address(&self, swap_index: usize) -> Result<Address> {
+    pub fn get_evm_account_address(&self, swap_index: usize, recipient_evm_address: &str) -> Result<Address> {
         match self.mode.as_ref() {
             PaymentWalletMode::Shared(wallet) => {
                 match wallet {
                     SinglePaymentWallet::Ethereum(broadcaster, _) => Ok(broadcaster.sender),
                     SinglePaymentWallet::Bitcoin(_, _) => {
-                        // BtcStart shared mode: return a random address for this swap
-                        // Since we don't have pre-generated addresses here, generate one
-                        Ok(generate_random_evm_address())
+                        // BtcStart shared mode: use the recipient_evm_address from config
+                        recipient_evm_address.parse::<Address>()
+                            .with_context(|| format!("invalid recipient EVM address: {}", recipient_evm_address))
                     }
                 }
             }
@@ -476,15 +477,20 @@ impl PaymentWallets {
                 ethereum,
                 ..
             } => {
-                // For RandStart shared mode, check what we're doing
-                // If we have a random address for this index, use it (Bitcoin swap)
-                // Otherwise use the ethereum wallet address (Ethereum swap)
-                random_evm_addresses
+                // For RandStart shared mode, check the marker to determine swap type
+                let marker = random_evm_addresses
                     .get(swap_index)
                     .copied()
-                    .filter(|addr| *addr != Address::ZERO)
-                    .or_else(|| Some(ethereum.0.sender))
-                    .ok_or_else(|| anyhow::anyhow!("no EVM address for swap {}", swap_index))
+                    .unwrap_or(Address::ZERO);
+                
+                if marker == Address::ZERO {
+                    // Ethereum swap: use the ethereum wallet address
+                    Ok(ethereum.0.sender)
+                } else {
+                    // Bitcoin swap (marker is 0x1): use recipient_evm_address
+                    recipient_evm_address.parse::<Address>()
+                        .with_context(|| format!("invalid recipient EVM address: {}", recipient_evm_address))
+                }
             }
             PaymentWalletMode::Dedicated {
                 dedicated,
@@ -964,18 +970,25 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
                 info!("dedicated dual-chain wallets enabled");
                 PaymentWallets::dual_dedicated(bitcoin_dedicated, ethereum_dedicated, index_mapping)
             } else {
-                // Generate random addresses only for Bitcoin swaps
-                let mut random_addresses = vec![Address::ZERO; directions.len()];
-                for (index, direction) in directions.iter().enumerate() {
-                    if direction.from_currency.chain == ChainType::Bitcoin {
-                        random_addresses[index] = generate_random_evm_address();
-                    }
-                }
+                // In shared mode (not dedicated), we use markers to identify swap types
+                // Bitcoin swaps: marked with a special address (0x1)
+                // Ethereum swaps: marked with Address::ZERO
+                // Actual addresses will be determined from recipient_evm_address in get_evm_account_address
+                let swap_type_markers: Vec<Address> = directions
+                    .iter()
+                    .map(|direction| {
+                        if direction.from_currency.chain == ChainType::Bitcoin {
+                            Address::from([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1])
+                        } else {
+                            Address::ZERO
+                        }
+                    })
+                    .collect();
                 PaymentWallets::dual_shared(
                     btc_broadcaster,
                     btc_address,
                     (evm_broadcaster, evm_provider),
-                    random_addresses,
+                    swap_type_markers,
                 )
             }
         }
