@@ -1,3 +1,4 @@
+mod admin_api;
 mod balance_strat;
 mod batch_monitor;
 pub mod bitcoin_wallet;
@@ -124,6 +125,15 @@ pub enum Error {
 
     #[snafu(display("Metrics server error: {}", source))]
     MetricsServer { source: std::io::Error },
+
+    #[snafu(display("Failed to bind admin API listener on {}: {}", addr, source))]
+    AdminApiServerBind {
+        source: std::io::Error,
+        addr: SocketAddr,
+    },
+
+    #[snafu(display("Admin API server error: {}", source))]
+    AdminApiServer { source: std::io::Error },
 }
 
 impl From<blockchain_utils::ProviderError> for Error {
@@ -161,6 +171,10 @@ pub struct MarketMakerArgs {
     /// Address for the Prometheus metrics exporter (will only be exposed if address is provided)
     #[arg(long, env = "METRICS_LISTEN_ADDR")]
     pub metrics_listen_addr: Option<SocketAddr>,
+
+    /// Address for the admin API server (will only be exposed if address is provided)
+    #[arg(long, env = "ADMIN_API_LISTEN_ADDR")]
+    pub admin_api_listen_addr: Option<SocketAddr>,
 
     /// Market maker identifier
     #[arg(long, env = "MM_TAG")]
@@ -324,6 +338,8 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         setup_metrics(&mut join_set, addr)?;
     }
 
+    let admin_api_addr = args.admin_api_listen_addr;
+
     let database = Arc::new(
         Database::connect(
             &args.database_url,
@@ -379,6 +395,18 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         )
         .await
         .expect("Should have been able to ensure EIP-7702 delegation");
+
+    // Setup admin API server if address is provided
+    if let Some(addr) = admin_api_addr {
+        info!("Setting up admin API listener on {}", addr);
+        setup_admin_api(
+            &mut join_set,
+            addr,
+            deposit_repository.clone(),
+            bitcoin_wallet.clone(),
+            evm_wallet.clone(),
+        )?;
+    }
 
     let mut wallet_manager = WalletManager::new();
 
@@ -580,6 +608,38 @@ fn setup_metrics(join_set: &mut JoinSet<Result<()>>, addr: SocketAddr) -> Result
         axum::serve(listener, app)
             .await
             .context(MetricsServerSnafu)?;
+
+        Ok(())
+    });
+
+    Ok(())
+}
+
+fn setup_admin_api(
+    join_set: &mut JoinSet<Result<()>>,
+    addr: SocketAddr,
+    deposit_repository: Arc<crate::db::DepositRepository>,
+    bitcoin_wallet: Arc<BitcoinWallet>,
+    evm_wallet: Arc<EVMWallet>,
+) -> Result<()> {
+    let state = admin_api::AdminApiState {
+        deposit_repository,
+        bitcoin_wallet,
+        evm_wallet,
+    };
+
+    let app = admin_api::create_admin_router(state);
+
+    join_set.spawn(async move {
+        let listener = TcpListener::bind(addr)
+            .await
+            .context(AdminApiServerBindSnafu { addr })?;
+
+        info!("Admin API server listening on {}", addr);
+
+        axum::serve(listener, app)
+            .await
+            .context(AdminApiServerSnafu)?;
 
         Ok(())
     });

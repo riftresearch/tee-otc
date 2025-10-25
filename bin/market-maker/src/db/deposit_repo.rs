@@ -36,6 +36,7 @@ pub trait DepositStore {
     async fn take_deposits_that_fill_lot(&self, lot: &Lot) -> DepositRepositoryResult<FillStatus>;
     async fn store_deposit(&self, deposit: &Deposit, swap_settlement_timestamp: DateTime<Utc>, associated_swap_id: Uuid) -> DepositRepositoryResult<()>;
     async fn get_latest_deposit_vault_timestamp(&self) -> DepositRepositoryResult<Option<DateTime<Utc>>>;
+    async fn peek_all_available_deposits(&self, chain: Option<String>) -> DepositRepositoryResult<Vec<Deposit>>;
 }
 
 #[derive(Clone)]
@@ -60,6 +61,37 @@ impl DepositRepository {
             }
         };
         (chain, token, currency.decimals as i16)
+    }
+
+    fn deserialize_currency(chain: &str, token: &serde_json::Value, decimals: i16) -> Currency {
+        let chain_type = match chain {
+            "bitcoin" => otc_models::ChainType::Bitcoin,
+            "ethereum" => otc_models::ChainType::Ethereum,
+            _ => otc_models::ChainType::Bitcoin, // Default fallback
+        };
+
+        let token_id = if let Some(token_type) = token.get("type").and_then(|v| v.as_str()) {
+            match token_type {
+                "Native" => otc_models::TokenIdentifier::Native,
+                "Address" => {
+                    let addr = token
+                        .get("data")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    otc_models::TokenIdentifier::Address(addr)
+                }
+                _ => otc_models::TokenIdentifier::Native,
+            }
+        } else {
+            otc_models::TokenIdentifier::Native
+        };
+
+        Currency {
+            chain: chain_type,
+            token: token_id,
+            decimals: decimals as u8,
+        }
     }
 }
 
@@ -229,5 +261,62 @@ impl DepositStore for DepositRepository {
         .context(DatabaseSnafu)?;
 
         Ok(())
+    }
+
+    async fn peek_all_available_deposits(&self, chain: Option<String>) -> DepositRepositoryResult<Vec<Deposit>> {
+        let rows: Vec<PgRow> = if let Some(chain_filter) = chain {
+            sqlx::query(
+                r#"
+                SELECT private_key, chain, token, decimals, amount::TEXT, funding_tx_hash
+                FROM mm_deposits
+                WHERE status = 'available'
+                  AND chain = $1
+                ORDER BY created_at, private_key;
+                "#,
+            )
+            .bind(&chain_filter)
+            .fetch_all(&self.pool)
+            .await
+            .context(DatabaseSnafu)?
+        } else {
+            sqlx::query(
+                r#"
+                SELECT private_key, chain, token, decimals, amount::TEXT, funding_tx_hash
+                FROM mm_deposits
+                WHERE status = 'available'
+                ORDER BY created_at, private_key;
+                "#,
+            )
+            .fetch_all(&self.pool)
+            .await
+            .context(DatabaseSnafu)?
+        };
+
+        let mut deposits = Vec::with_capacity(rows.len());
+        
+        for row in rows {
+            let private_key: String = row.get("private_key");
+            let chain: String = row.get("chain");
+            let token: serde_json::Value = row.get("token");
+            let decimals: i16 = row.get("decimals");
+            let amount_str: String = row.get("amount");
+            let funding_tx_hash: String = row.get("funding_tx_hash");
+
+            let amount = U256::from_str_radix(&amount_str, 10)
+                .map_err(|_| DepositRepositoryError::InvalidU256 { value: amount_str })?;
+
+            let currency = Self::deserialize_currency(&chain, &token, decimals);
+
+            deposits.push(Deposit {
+                private_key,
+                holdings: Lot {
+                    currency,
+                    amount,
+                },
+                funding_tx_hash,
+            });
+        }
+
+        Ok(deposits)
     }
 }

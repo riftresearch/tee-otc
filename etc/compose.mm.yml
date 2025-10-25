@@ -1031,9 +1031,12 @@ services:
     depends_on:
       mm-postgres:
         condition: service_healthy
+    ports:
+      - "8081:8081"
     environment:
       RUST_LOG: ${RUST_LOG} 
       METRICS_LISTEN_ADDR: 0.0.0.0:9000
+      ADMIN_API_LISTEN_ADDR: 0.0.0.0:8081
       MM_TAG: ${MM_TAG}
       MM_ID: ${MM_ID}
       MM_API_SECRET: ${MM_API_SECRET}
