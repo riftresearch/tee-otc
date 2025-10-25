@@ -417,6 +417,36 @@ configs:
                       }
                     }
                   ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "BTC→cbBTC"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "semi-dark-orange",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "cbBTC→BTC"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "semi-dark-blue",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
                 }
               ]
             },
@@ -460,10 +490,19 @@ configs:
             "title": "Cumulative Volume (sats)",
             "transformations": [
               {
-                "id": "renameByRegex",
+                "id": "joinByField",
+                "options": {}
+              },
+              {
+                "id": "organize",
                 "options": {
-                  "regex": "^(.*)-[^-]*$",
-                  "renamePattern": "$1 Deposit"
+                  "excludeByName": {},
+                  "includeByName": {},
+                  "indexByName": {},
+                  "renameByName": {
+                    "bitcoin:Native-ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf": "BTC→cbBTC",
+                    "ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf-bitcoin:Native": "cbBTC→BTC"
+                  }
                 }
               }
             ],
@@ -556,6 +595,36 @@ configs:
                       }
                     }
                   ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "BTC"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "semi-dark-orange",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "cbBTC"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "semi-dark-blue",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
                 }
               ]
             },
@@ -599,10 +668,19 @@ configs:
             "title": "Cumulative Fees (sats)",
             "transformations": [
               {
-                "id": "renameByRegex",
+                "id": "joinByField",
+                "options": {}
+              },
+              {
+                "id": "organize",
                 "options": {
-                  "regex": "^[^-]*-(.*)$",
-                  "renamePattern": "$1"
+                  "excludeByName": {},
+                  "includeByName": {},
+                  "indexByName": {},
+                  "renameByName": {
+                    "bitcoin:Native-ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf": "cbBTC",
+                    "ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf-bitcoin:Native": "BTC"
+                  }
                 }
               }
             ],
@@ -1416,8 +1494,8 @@ configs:
           "list": []
         },
         "time": {
-          "from": "2025-10-21T01:26:32.461Z",
-          "to": "2025-10-21T05:26:32.461Z"
+          "from": "now-24h",
+          "to": "now"
         },
         "timepicker": {},
         "timezone": "",
@@ -1426,6 +1504,7 @@ configs:
         "version": 1,
         "weekStart": ""
       }
+
 
 services:
   eth-jwt-generator:
