@@ -1889,6 +1889,9 @@ services:
         target: /etc/grafana/provisioning/dashboards/tee-monitoring.json
     networks:
       - rift-network
+    tmpfs:
+      - /var/lib/grafana
+      - /var/log/grafana
 
 networks:
   rift-network:

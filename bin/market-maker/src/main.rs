@@ -1,7 +1,6 @@
-use blockchain_utils::{init_logger, shutdown_signal};
+use blockchain_utils::init_logger;
 use clap::Parser;
 use market_maker::{run_market_maker, MarketMakerArgs};
-use tokio_util::sync::CancellationToken;
 
 #[tokio::main]
 async fn main() -> market_maker::Result<()> {
