@@ -61,6 +61,7 @@ async fn test_swap_from_bitcoin_to_ethereum(
         &devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
         None,
         None,
+        100, // max_deposits_per_lot
         &mut wallet_join_set,
     )
     .await
@@ -268,6 +269,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
         &devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
         None,
         None,
+        100, // max_deposits_per_lot
         &mut wallet_join_set,
     )
     .await

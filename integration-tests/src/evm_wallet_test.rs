@@ -95,6 +95,7 @@ async fn test_evm_wallet_nonce_error_retry(
         eth_rpc_url.to_string(),
         1, // 1 confirmation for testing
         None,
+        350, // max_deposits_per_lot
         &mut join_set,
     );
 
@@ -296,6 +297,7 @@ async fn test_evm_wallet_gas_price_bumping(
         eth_rpc_url.to_string(),
         1,
         None,
+        350, // max_deposits_per_lot
         &mut join_set,
     );
 
@@ -399,6 +401,7 @@ async fn test_evm_wallet_error_handling(
         eth_rpc_url.to_string(),
         1,
         None,
+        350, // max_deposits_per_lot
         &mut join_set,
     );
 
@@ -505,6 +508,7 @@ async fn test_evm_wallet_actually_sends_token(
         eth_rpc_url.to_string(),
         1, // 1 confirmation for testing
         None,
+        350, // max_deposits_per_lot
         &mut join_set,
     );
 
@@ -670,6 +674,7 @@ async fn test_evm_wallet_spend_from_deposit_storage(
         http_url,
         1, // confirmations
         Some(deposit_repository.clone()),
+        350, // max_deposits_per_lot
         &mut join_set,
     );
 

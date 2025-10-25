@@ -34,6 +34,7 @@ pub struct EVMWallet {
     pub tx_broadcaster: transaction_broadcaster::EVMTransactionBroadcaster,
     pub provider: Arc<WebsocketWalletProvider>,
     deposit_repository: Option<Arc<DepositRepository>>,
+    max_deposits_per_lot: usize,
 }
 
 impl EVMWallet {
@@ -42,6 +43,7 @@ impl EVMWallet {
         debug_rpc_url: String,
         confirmations: u64,
         deposit_repository: Option<Arc<DepositRepository>>,
+        max_deposits_per_lot: usize,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Self {
         let tx_broadcaster = transaction_broadcaster::EVMTransactionBroadcaster::new(
@@ -55,6 +57,7 @@ impl EVMWallet {
             tx_broadcaster,
             provider,
             deposit_repository,
+            max_deposits_per_lot,
         }
     }
     pub async fn ensure_eip7702_delegation(
@@ -179,12 +182,32 @@ impl Wallet for EVMWallet {
             }
         }
 
+        let mut funding_executions = Vec::new();
+        if let Some(deposit_repository) = &self.deposit_repository {
+            for payment in &payments {
+                let (consolidation_executions, _) = get_funding_executions_from_deposits(
+                    deposit_repository,
+                    &payment.lot,
+                    &self.provider,
+                    &self.tx_broadcaster.sender,
+                    self.max_deposits_per_lot,
+                )
+                .await?;
+
+                funding_executions.extend(consolidation_executions);
+                if funding_executions.len() >= self.max_deposits_per_lot {
+                    // roughly limit number of funding executions for this batch 
+                    break;
+                }
+            }
+        };
+
         let transaction_request = create_evm_transfer_transaction(
             &self.tx_broadcaster.sender,
             &self.provider,
             payments,
             mm_payment_validation,
-            self.deposit_repository.clone(),
+            funding_executions,
         )
         .await?;
 
@@ -271,6 +294,111 @@ impl Wallet for EVMWallet {
         }
     }
 
+    async fn consolidate(
+        &self,
+        lot: &otc_models::Lot,
+        max_deposits_per_iteration: usize,
+    ) -> WalletResult<crate::wallet::ConsolidationSummary> {
+        let deposit_repository = self.deposit_repository.as_ref().ok_or_else(|| {
+            WalletError::TransactionCreationFailed {
+                reason: "No deposit repository available for consolidation".to_string(),
+            }
+        })?;
+
+        let mut total_amount = U256::from(0);
+        let mut iterations = 0;
+        let mut tx_hashes = Vec::new();
+
+        loop {
+            // Acquire funding executions from deposit storage if available
+
+            let (consolidation_executions, fill_status) = get_funding_executions_from_deposits(
+                deposit_repository,
+                &lot,
+                &self.provider,
+                &self.tx_broadcaster.sender,
+                max_deposits_per_iteration,
+            )
+            .await?;
+
+            if consolidation_executions.is_empty() {
+                break;
+            }
+
+            let deposits = match &fill_status {
+                FillStatus::Empty => break,
+                FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
+                    deposits
+                }
+            };
+ 
+            // Sum the amount in this batch
+            let mut batch_amount = U256::from(0);
+            for deposit in deposits {
+                batch_amount = batch_amount.saturating_add(deposit.holdings.amount);
+            }
+            total_amount = total_amount.saturating_add(batch_amount);
+
+            // Create a consolidation payment to our own address
+            let receive_address = self.receive_address(&lot.currency.token);
+            let payment = Payment {
+                lot: Lot {
+                    currency: lot.currency.clone(),
+                    amount: batch_amount,
+                },
+                to_address: receive_address,
+            };
+
+            info!(
+                "Consolidating {} deposits with total amount {} to {}",
+                deposits.len(),
+                batch_amount,
+                payment.to_address
+            );
+
+            // Create and broadcast the consolidation transaction
+            let transaction_request = create_evm_transfer_transaction(
+                &self.tx_broadcaster.sender,
+                &self.provider,
+                vec![payment],
+                None, // No MM validation for consolidation
+                consolidation_executions,
+            )
+            .await?;
+
+            let broadcast_result = self
+                .tx_broadcaster
+                .broadcast_transaction(
+                    transaction_request,
+                    transaction_broadcaster::PreflightCheck::Simulate,
+                )
+                .await
+                .map_err(|e| WalletError::TransactionCreationFailed {
+                    reason: e.to_string(),
+                })?;
+
+            match broadcast_result {
+                transaction_broadcaster::TransactionExecutionResult::Success(tx_receipt) => {
+                    let tx_hash = tx_receipt.transaction_hash.to_string();
+                    info!("Consolidation transaction successful: {}", tx_hash);
+                    tx_hashes.push(tx_hash);
+                    iterations += 1;
+                }
+                _ => {
+                    return Err(WalletError::TransactionCreationFailed {
+                        reason: format!("Consolidation broadcast failed: {broadcast_result:?}"),
+                    });
+                }
+            }
+        }
+
+        Ok(crate::wallet::ConsolidationSummary {
+            total_amount,
+            iterations,
+            tx_hashes,
+        })
+    }
+
     fn chain_type(&self) -> ChainType {
         ChainType::Ethereum
     }
@@ -343,9 +471,10 @@ async fn get_funding_executions_from_deposits(
     lot: &Lot,
     provider: &Arc<WebsocketWalletProvider>,
     sender: &Address,
-) -> Result<Vec<Execution>, WalletError> {
+    max_funding_deposits: usize,
+) -> Result<(Vec<Execution>, FillStatus), WalletError> {
     let fill_status = deposit_repository
-        .take_deposits_that_fill_lot(lot)
+        .take_deposits_that_fill_lot(lot, Some(max_funding_deposits))
         .await
         .map_err(|e| WalletError::DepositRepositoryError {
             source: e,
@@ -353,7 +482,7 @@ async fn get_funding_executions_from_deposits(
         })?;
 
     let provider = provider.clone().erased();
-    match fill_status {
+    let executions = match &fill_status {
         FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
             let mut executions = Vec::with_capacity(deposits.len());
             for deposit in deposits.iter() {
@@ -367,12 +496,14 @@ async fn get_funding_executions_from_deposits(
             Ok(executions)
         }
         FillStatus::Empty => Ok(Vec::new()),
-    }
+    }?;
+    Ok((executions, fill_status))
 }
 
 /// Creates payment executions for transferring tokens to recipients.
 pub fn create_payment_executions(
     token_contract: &GenericEIP3009ERC20Instance<DynProvider>,
+    sender: &Address,
     recipients: &[Address],
     amounts: &[U256],
 ) -> Vec<Execution> {
@@ -380,6 +511,8 @@ pub fn create_payment_executions(
     recipients
         .iter()
         .zip(amounts.iter())
+        // filter out any self-transfers, may occur during consolidation
+        .filter(|(recipient, _)| **recipient != *sender)
         .map(|(recipient, amount)| {
             let calldata = token_contract
                 .transfer(*recipient, *amount)
@@ -442,7 +575,7 @@ pub async fn create_evm_transfer_transaction(
     provider: &Arc<WebsocketWalletProvider>,
     payments: Vec<Payment>,
     mm_payment_validation: Option<MarketMakerPaymentVerification>,
-    deposit_repository: Option<Arc<DepositRepository>>,
+    additional_funding_executions: Vec<Execution>,
 ) -> Result<TransactionRequest, WalletError> {
     // TODO: Temporary requirement that all tokens are the same in a batch
     for (i, payment) in payments.iter().enumerate() {
@@ -492,33 +625,16 @@ pub async fn create_evm_transfer_transaction(
                 amounts.push(validation.aggregated_fee);
             }
 
-            // Acquire funding executions from deposit storage if available
-            let funding_executions = match &deposit_repository {
-                Some(storage) => {
-                    let mut executions = Vec::new();
-                    for payment in payments {
-                        let execution = get_funding_executions_from_deposits(
-                            storage,
-                            &payment.lot,
-                            provider,
-                            sender,
-                        )
-                        .await?;
-                        executions.extend(execution);
-                    }
-                    executions
-                }
-                None => Vec::new(),
-            };
+
 
             // Create payment executions for transferring tokens
             let token_contract =
                 GenericEIP3009ERC20Instance::new(token_address, provider.clone().erased());
             let payment_executions =
-                create_payment_executions(&token_contract, &recipients, &amounts);
+                create_payment_executions(&token_contract, sender, &recipients, &amounts);
 
             // Combine funding and payment executions
-            let executions = [funding_executions, payment_executions].concat();
+            let executions = [additional_funding_executions, payment_executions].concat();
 
             // Build final transaction with validation
             build_transaction_with_validation(

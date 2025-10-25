@@ -7,7 +7,6 @@ use axum::{
     routing::post,
     Router,
 };
-use otc_chains::traits::Payment;
 use otc_models::{Lot, TokenIdentifier};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
@@ -102,95 +101,61 @@ async fn consolidate_handler(
 }
 
 async fn consolidate_bitcoin(
-    deposit_repository: Arc<DepositRepository>,
+    _deposit_repository: Arc<DepositRepository>,
     bitcoin_wallet: Arc<BitcoinWallet>,
 ) -> ChainConsolidationResult {
     info!("Starting Bitcoin deposit consolidation");
 
-    // Peek at all available Bitcoin deposits (read-only)
-    let deposits = match deposit_repository
-        .peek_all_available_deposits(Some("bitcoin".to_string()))
-        .await
-    {
-        Ok(deps) => deps,
+    // Create a lot representing Bitcoin native currency
+    // The consolidate method will find all available deposits
+    let lot = Lot {
+        currency: otc_models::Currency {
+            chain: otc_models::ChainType::Bitcoin,
+            token: TokenIdentifier::Native,
+            decimals: 8,
+        },
+        amount: alloy::primitives::U256::from(1), // Amount doesn't matter for consolidation
+    };
+
+    // Use the wallet's consolidate method
+    match bitcoin_wallet.consolidate(&lot, 100).await {
+        Ok(summary) => {
+            if summary.iterations == 0 {
+                info!("No Bitcoin deposits to consolidate");
+                ChainConsolidationResult {
+                    chain: "bitcoin".to_string(),
+                    status: "success".to_string(),
+                    tx_hash: None,
+                    amount: "0".to_string(),
+                    deposit_count: 0,
+                    error: None,
+                }
+            } else {
+                info!(
+                    "Bitcoin consolidation successful: {} iterations, {} total amount, {} txs",
+                    summary.iterations,
+                    summary.total_amount,
+                    summary.tx_hashes.len()
+                );
+                ChainConsolidationResult {
+                    chain: "bitcoin".to_string(),
+                    status: "success".to_string(),
+                    tx_hash: Some(summary.tx_hashes.join(", ")),
+                    amount: summary.total_amount.to_string(),
+                    deposit_count: summary.iterations,
+                    error: None,
+                }
+            }
+        }
         Err(e) => {
-            error!("Failed to fetch Bitcoin deposits: {}", e);
-            return ChainConsolidationResult {
+            error!("Failed to consolidate Bitcoin deposits: {}", e);
+            ChainConsolidationResult {
                 chain: "bitcoin".to_string(),
                 status: "error".to_string(),
                 tx_hash: None,
                 amount: "0".to_string(),
                 deposit_count: 0,
-                error: Some(format!("Database error: {}", e)),
-            };
-        }
-    };
-
-    if deposits.is_empty() {
-        info!("No Bitcoin deposits to consolidate");
-        return ChainConsolidationResult {
-            chain: "bitcoin".to_string(),
-            status: "success".to_string(),
-            tx_hash: None,
-            amount: "0".to_string(),
-            deposit_count: 0,
-            error: None,
-        };
-    }
-
-    info!("Found {} Bitcoin deposits to consolidate", deposits.len());
-
-    // Sum up total amount and get currency from first deposit
-    let mut total_amount = alloy::primitives::U256::from(0);
-    let currency = deposits[0].holdings.currency.clone();
-
-    for deposit in &deposits {
-        total_amount = total_amount.saturating_add(deposit.holdings.amount);
-    }
-
-    // Get the wallet's receive address
-    let receive_address = bitcoin_wallet.receive_address(&TokenIdentifier::Native);
-
-    // Create a single payment to ourselves for the total amount
-    let payment = Payment {
-        lot: Lot {
-            currency,
-            amount: total_amount,
-        },
-        to_address: receive_address,
-    };
-
-    info!(
-        "Creating consolidation payment for {} sats to {}",
-        total_amount, payment.to_address
-    );
-
-    // Use the existing payment infrastructure to handle consolidation
-    // This will automatically pull from deposit keys via take_deposits_that_fill_lot
-    match bitcoin_wallet
-        .create_batch_payment(vec![payment], None)
-        .await
-    {
-        Ok(tx_hash) => {
-            info!("Bitcoin consolidation successful: {}", tx_hash);
-            ChainConsolidationResult {
-                chain: "bitcoin".to_string(),
-                status: "success".to_string(),
-                tx_hash: Some(tx_hash),
-                amount: total_amount.to_string(),
-                deposit_count: deposits.len(),
-                error: None,
-            }
-        }
-        Err(e) => {
-            error!("Failed to create Bitcoin consolidation payment: {}", e);
-            ChainConsolidationResult {
-                chain: "bitcoin".to_string(),
-                status: "error".to_string(),
-                tx_hash: None,
-                amount: total_amount.to_string(),
-                deposit_count: deposits.len(),
-                error: Some(format!("Payment error: {}", e)),
+                error: Some(format!("Consolidation error: {}", e)),
             }
         }
     }
@@ -202,7 +167,7 @@ async fn consolidate_ethereum(
 ) -> ChainConsolidationResult {
     info!("Starting Ethereum deposit consolidation");
 
-    // Peek at all available Ethereum deposits (read-only)
+    // Peek at all available Ethereum deposits to identify unique tokens
     let deposits = match deposit_repository
         .peek_all_available_deposits(Some("ethereum".to_string()))
         .await
@@ -235,8 +200,8 @@ async fn consolidate_ethereum(
 
     info!("Found {} Ethereum deposits to consolidate", deposits.len());
 
-    // Group deposits by token
-    let mut deposits_by_token: std::collections::HashMap<String, Vec<crate::db::Deposit>> =
+    // Group deposits by token to get unique currencies
+    let mut unique_currencies: std::collections::HashMap<String, otc_models::Currency> =
         std::collections::HashMap::new();
 
     for deposit in deposits {
@@ -244,62 +209,42 @@ async fn consolidate_ethereum(
             TokenIdentifier::Native => "native".to_string(),
             TokenIdentifier::Address(addr) => addr.clone(),
         };
-        deposits_by_token
+        unique_currencies
             .entry(token_key)
-            .or_default()
-            .push(deposit);
+            .or_insert_with(|| deposit.holdings.currency.clone());
     }
 
     let mut all_tx_hashes = Vec::new();
     let mut total_amount = alloy::primitives::U256::from(0);
-    let mut total_deposit_count = 0;
+    let mut total_iterations = 0;
     let mut errors = Vec::new();
 
-    // Get the wallet's receive address
-    let receive_address = evm_wallet.receive_address(&TokenIdentifier::Native);
+    // Process each token separately
+    for (token_key, currency) in unique_currencies {
+        info!("Consolidating deposits for token: {}", token_key);
 
-    // Process each token group
-    for (token_key, token_deposits) in deposits_by_token {
-        info!(
-            "Consolidating {} deposits for token: {}",
-            token_deposits.len(),
-            token_key
-        );
-
-        total_deposit_count += token_deposits.len();
-
-        // Sum up total for this token
-        let mut token_total = alloy::primitives::U256::from(0);
-        let currency = token_deposits[0].holdings.currency.clone();
-
-        for deposit in &token_deposits {
-            token_total = token_total.saturating_add(deposit.holdings.amount);
-        }
-
-        total_amount = total_amount.saturating_add(token_total);
-
-        // Create a single payment to ourselves for this token
-        let payment = Payment {
-            lot: Lot {
-                currency,
-                amount: token_total,
-            },
-            to_address: receive_address.clone(),
+        let lot = Lot {
+            currency: currency.clone(),
+            amount: alloy::primitives::U256::from(1), // Amount doesn't matter for consolidation
         };
 
-        info!(
-            "Creating consolidation payment for token {} amount {} to {}",
-            token_key, token_total, payment.to_address
-        );
-
-        // Use the existing payment infrastructure
-        match evm_wallet
-            .create_batch_payment(vec![payment], None)
-            .await
-        {
-            Ok(tx_hash) => {
-                info!("Token {} consolidation successful: {}", token_key, tx_hash);
-                all_tx_hashes.push(tx_hash);
+        // Use the wallet's consolidate method
+        match evm_wallet.consolidate(&lot, 350).await {
+            Ok(summary) => {
+                if summary.iterations > 0 {
+                    info!(
+                        "Token {} consolidation successful: {} iterations, {} total amount, {} txs",
+                        token_key,
+                        summary.iterations,
+                        summary.total_amount,
+                        summary.tx_hashes.len()
+                    );
+                    total_amount = total_amount.saturating_add(summary.total_amount);
+                    total_iterations += summary.iterations;
+                    all_tx_hashes.extend(summary.tx_hashes);
+                } else {
+                    info!("No deposits found for token {}", token_key);
+                }
             }
             Err(e) => {
                 error!("Failed to consolidate token {}: {}", token_key, e);
@@ -314,7 +259,7 @@ async fn consolidate_ethereum(
             status: "error".to_string(),
             tx_hash: None,
             amount: total_amount.to_string(),
-            deposit_count: total_deposit_count,
+            deposit_count: total_iterations,
             error: Some(errors.join("; ")),
         }
     } else {
@@ -331,7 +276,7 @@ async fn consolidate_ethereum(
                 Some(all_tx_hashes.join(", "))
             },
             amount: total_amount.to_string(),
-            deposit_count: total_deposit_count,
+            deposit_count: total_iterations,
             error: if errors.is_empty() {
                 None
             } else {

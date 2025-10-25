@@ -87,6 +87,7 @@ impl SinglePaymentWallet {
                     GenericEIP3009ERC20Instance::new(token_address, provider.clone());
                 let payment_executions = create_payment_executions(
                     &token_contract,
+                    &sender,
                     &[recipient.parse::<Address>().unwrap()],
                     &[lot.amount],
                 );
@@ -240,6 +241,7 @@ impl PaymentWallets {
                         GenericEIP3009ERC20Instance::new(token_address, ethereum.1.clone());
                     let payment_executions = create_payment_executions(
                         &token_contract,
+                        &sender,
                         &[recipient.parse::<Address>().unwrap()],
                         &[lot.amount],
                     );
@@ -435,7 +437,7 @@ impl PaymentWallets {
         let amounts: Vec<U256> = lots.iter().map(|lot| lot.amount).collect();
 
         let payment_executions =
-            create_payment_executions(&token_contract, &recipient_addresses, &amounts);
+            create_payment_executions(&token_contract, &sender, &recipient_addresses, &amounts);
 
         let transaction_request = build_transaction_with_validation(
             &sender,
@@ -1011,6 +1013,7 @@ async fn init_bitcoin_wallet(
         &cfg.esplora_url,
         None,
         None,
+        100, // max_deposits_per_lot
         join_set,
     )
     .await
@@ -1032,6 +1035,7 @@ async fn init_evm_wallet(
         cfg.debug_rpc_url.clone(),
         cfg.confirmations,
         None,
+        350, // max_deposits_per_lot
         join_set,
     );
 
@@ -1121,6 +1125,7 @@ async fn create_bitcoin_dedicated_wallets_count(
                     &cfg.esplora_url,
                     None,
                     None,
+                    100, // max_deposits_per_lot
                     &mut join_set,
                 )
                 .await
@@ -1298,8 +1303,10 @@ async fn fund_evm_wallets_dedicated(
             let mut amounts = Vec::with_capacity(recipients.len());
             amounts.resize(recipients.len(), deposit_amount);
 
+            let sender = broadcaster.sender;
             executions.extend(create_payment_executions(
                 &token_contract,
+                &sender,
                 &recipients,
                 &amounts,
             ));

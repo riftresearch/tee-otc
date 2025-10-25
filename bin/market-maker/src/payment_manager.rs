@@ -454,6 +454,14 @@ mod tests {
 
     #[async_trait]
     impl crate::wallet::Wallet for RecordingWallet {
+        async fn consolidate(&self, _lot: &otc_models::Lot, _max_deposits_per_iteration: usize) -> crate::wallet::WalletResult<crate::wallet::ConsolidationSummary> {
+            Ok(crate::wallet::ConsolidationSummary {
+                total_amount: U256::ZERO,
+                iterations: 0,
+                tx_hashes: Vec::new(),
+            })
+        }
+
         async fn cancel_tx(&self, _tx_hash: &str) -> crate::wallet::WalletResult<String> {
             Ok("mock_txid_123".to_string())
         }

@@ -33,7 +33,7 @@ pub type DepositRepositoryResult<T, E = DepositRepositoryError> = std::result::R
 #[allow(async_fn_in_trait)]
 pub trait DepositStore {
     async fn balance(&self, currency: &Currency) -> DepositRepositoryResult<U256>;
-    async fn take_deposits_that_fill_lot(&self, lot: &Lot) -> DepositRepositoryResult<FillStatus>;
+    async fn take_deposits_that_fill_lot(&self, lot: &Lot, max_deposits: Option<usize>) -> DepositRepositoryResult<FillStatus>;
     async fn store_deposit(&self, deposit: &Deposit, swap_settlement_timestamp: DateTime<Utc>, associated_swap_id: Uuid) -> DepositRepositoryResult<()>;
     async fn get_latest_deposit_vault_timestamp(&self) -> DepositRepositoryResult<Option<DateTime<Utc>>>;
     async fn peek_all_available_deposits(&self, chain: Option<String>) -> DepositRepositoryResult<Vec<Deposit>>;
@@ -156,50 +156,93 @@ impl DepositStore for DepositRepository {
         Ok(row.map(|t| t.0))
     }
 
-    async fn take_deposits_that_fill_lot(&self, lot: &Lot) -> DepositRepositoryResult<FillStatus> {
+    async fn take_deposits_that_fill_lot(&self, lot: &Lot, max_deposits: Option<usize>) -> DepositRepositoryResult<FillStatus> {
         let (chain, token, decimals) = Self::serialize_currency(&lot.currency);
         let target = lot.amount.to_string();
         let reservation_id = Uuid::new_v4();
         let now = utc::now();
 
-        let rows: Vec<PgRow> = sqlx::query(
-            r#"
-            WITH ordered AS (
-                SELECT private_key, amount, created_at
-                FROM mm_deposits
-                WHERE status = 'available'
-                  AND chain = $1
-                  AND token = $2
-                  AND decimals = $3
-                ORDER BY created_at, private_key
-                FOR UPDATE SKIP LOCKED
-            ),
-            pref AS (
-                SELECT private_key, amount, created_at,
-                       SUM(amount) OVER (ORDER BY created_at, private_key) AS run
-                FROM ordered
-            ),
-            take AS (
-                SELECT private_key FROM pref WHERE (run - amount) < $4::numeric
+        let rows: Vec<PgRow> = if let Some(limit) = max_deposits {
+            sqlx::query(
+                r#"
+                WITH ordered AS (
+                    SELECT private_key, amount, created_at
+                    FROM mm_deposits
+                    WHERE status = 'available'
+                      AND chain = $1
+                      AND token = $2
+                      AND decimals = $3
+                    ORDER BY created_at, private_key
+                    LIMIT $7
+                    FOR UPDATE SKIP LOCKED
+                ),
+                pref AS (
+                    SELECT private_key, amount, created_at,
+                           SUM(amount) OVER (ORDER BY created_at, private_key) AS run
+                    FROM ordered
+                ),
+                take AS (
+                    SELECT private_key FROM pref WHERE (run - amount) < $4::numeric
+                )
+                UPDATE mm_deposits i
+                SET status = 'reserved',
+                    reserved_by = $5,
+                    reserved_at = $6
+                FROM take
+                WHERE i.private_key = take.private_key
+                RETURNING i.private_key, i.amount::TEXT, i.funding_tx_hash;
+                "#,
             )
-            UPDATE mm_deposits i
-            SET status = 'reserved',
-                reserved_by = $5,
-                reserved_at = $6
-            FROM take
-            WHERE i.private_key = take.private_key
-            RETURNING i.private_key, i.amount::TEXT, i.funding_tx_hash;
-            "#,
-        )
-        .bind(&chain)
-        .bind(&token)
-        .bind(decimals)
-        .bind(&target)
-        .bind(reservation_id)
-        .bind(now)
-        .fetch_all(&self.pool)
-        .await
-        .context(DatabaseSnafu)?;
+            .bind(&chain)
+            .bind(&token)
+            .bind(decimals)
+            .bind(&target)
+            .bind(reservation_id)
+            .bind(now)
+            .bind(limit as i64)
+            .fetch_all(&self.pool)
+            .await
+            .context(DatabaseSnafu)?
+        } else {
+            sqlx::query(
+                r#"
+                WITH ordered AS (
+                    SELECT private_key, amount, created_at
+                    FROM mm_deposits
+                    WHERE status = 'available'
+                      AND chain = $1
+                      AND token = $2
+                      AND decimals = $3
+                    ORDER BY created_at, private_key
+                    FOR UPDATE SKIP LOCKED
+                ),
+                pref AS (
+                    SELECT private_key, amount, created_at,
+                           SUM(amount) OVER (ORDER BY created_at, private_key) AS run
+                    FROM ordered
+                ),
+                take AS (
+                    SELECT private_key FROM pref WHERE (run - amount) < $4::numeric
+                )
+                UPDATE mm_deposits i
+                SET status = 'reserved',
+                    reserved_by = $5,
+                    reserved_at = $6
+                FROM take
+                WHERE i.private_key = take.private_key
+                RETURNING i.private_key, i.amount::TEXT, i.funding_tx_hash;
+                "#,
+            )
+            .bind(&chain)
+            .bind(&token)
+            .bind(decimals)
+            .bind(&target)
+            .bind(reservation_id)
+            .bind(now)
+            .fetch_all(&self.pool)
+            .await
+            .context(DatabaseSnafu)?
+        };
 
         if rows.is_empty() {
             return Ok(FillStatus::Empty);

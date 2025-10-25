@@ -45,7 +45,7 @@ async fn test_deposit_vault_consumes_on_fill(
     // Request a 10-lot: expect Full and two deposits reserved
     let lot_eth_10 = eth_native(10);
     let res1 = vault
-        .take_deposits_that_fill_lot(&lot_eth_10)
+        .take_deposits_that_fill_lot(&lot_eth_10, None)
         .await
         .expect("reservation should succeed");
 
@@ -62,7 +62,7 @@ async fn test_deposit_vault_consumes_on_fill(
 
     // Same request again should find no available deposits left
     let res2 = vault
-        .take_deposits_that_fill_lot(&lot_eth_10)
+        .take_deposits_that_fill_lot(&lot_eth_10, None)
         .await
         .expect("second reservation call should succeed");
     match res2 {
@@ -113,7 +113,7 @@ async fn test_deposit_key_vault_take_deposits(
         amount: U256::from(10u64),
     };
     let res1 = vault
-        .take_deposits_that_fill_lot(&lot_eth_10)
+        .take_deposits_that_fill_lot(&lot_eth_10, None)
         .await
         .expect("reservation should succeed");
 
@@ -131,7 +131,7 @@ async fn test_deposit_key_vault_take_deposits(
 
     // Take again for 10 => should take the remaining 20 as a single deposit
     let res2 = vault
-        .take_deposits_that_fill_lot(&lot_eth_10)
+        .take_deposits_that_fill_lot(&lot_eth_10, None)
         .await
         .expect("second reservation should succeed");
     match res2 {
@@ -147,7 +147,7 @@ async fn test_deposit_key_vault_take_deposits(
 
     // Third take should return Empty
     let res3 = vault
-        .take_deposits_that_fill_lot(&lot_eth_10)
+        .take_deposits_that_fill_lot(&lot_eth_10, None)
         .await
         .expect("third reservation call should succeed");
     match res3 {
@@ -182,7 +182,7 @@ async fn test_deposit_key_vault_take_deposits(
         amount: U256::from(10u64),
     };
     let res4 = vault
-        .take_deposits_that_fill_lot(&lot_btc_10)
+        .take_deposits_that_fill_lot(&lot_btc_10, None)
         .await
         .expect("reservation should succeed");
     match res4 {

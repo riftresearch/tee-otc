@@ -60,6 +60,7 @@ async fn test_refund_from_bitcoin_user_deposit(
         &devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
         None,
         None,
+        100, // max_deposits_per_lot
         &mut wallet_join_set,
     )
     .await

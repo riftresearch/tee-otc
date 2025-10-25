@@ -308,6 +308,14 @@ pub struct MarketMakerArgs {
     /// Batch monitor polling interval in seconds
     #[arg(long, env = "BATCH_MONITOR_INTERVAL_SECS", default_value = "600")]
     pub batch_monitor_interval_secs: u64,
+
+    /// Maximum number of deposits to collect per lot for Ethereum
+    #[arg(long, env = "ETHEREUM_MAX_DEPOSITS_PER_LOT", default_value = "350")]
+    pub ethereum_max_deposits_per_lot: usize,
+
+    /// Maximum number of deposits to collect per lot for Bitcoin
+    #[arg(long, env = "BITCOIN_MAX_DEPOSITS_PER_LOT", default_value = "100")]
+    pub bitcoin_max_deposits_per_lot: usize,
 }
 
 fn parse_hex_string(s: &str) -> std::result::Result<[u8; 32], String> {
@@ -368,6 +376,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
             &args.bitcoin_wallet_esplora_url,
             Some(deposit_repository.clone()),
             Some(broadcasted_transaction_repository.clone()),
+            args.bitcoin_max_deposits_per_lot,
             &mut join_set,
         )
         .await
@@ -386,6 +395,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         args.ethereum_rpc_ws_url,
         args.ethereum_confirmations,
         Some(deposit_repository.clone()),
+        args.ethereum_max_deposits_per_lot,
         &mut join_set,
     ));
 

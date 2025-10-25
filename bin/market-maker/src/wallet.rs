@@ -141,6 +141,13 @@ pub struct WalletBalance {
     pub deposit_key_balance: U256,
 }
 
+#[derive(Debug, Clone)]
+pub struct ConsolidationSummary {
+    pub total_amount: U256,
+    pub iterations: usize,
+    pub tx_hashes: Vec<String>,
+}
+
 #[async_trait]
 pub trait Wallet: Send + Sync {
     /// Creates a transaction to send funds to the specified addresses
@@ -170,6 +177,14 @@ pub trait Wallet: Send + Sync {
 
     /// Return the available balance for the given token
     async fn balance(&self, token: &TokenIdentifier) -> WalletResult<WalletBalance>;
+
+    /// Consolidate deposits by repeatedly taking deposits until none remain.
+    /// Returns summary of total amount consolidated and number of iterations.
+    async fn consolidate(
+        &self,
+        lot: &otc_models::Lot,
+        max_deposits_per_iteration: usize,
+    ) -> WalletResult<ConsolidationSummary>;
 
     fn receive_address(&self, token: &TokenIdentifier) -> String;
 
@@ -270,6 +285,18 @@ mod tests {
                 total_balance: U256::from(1000000000000000000u64),
                 native_balance: U256::from(1000000000000000000u64),
                 deposit_key_balance: U256::from(0),
+            })
+        }
+
+        async fn consolidate(
+            &self,
+            _lot: &otc_models::Lot,
+            _max_deposits_per_iteration: usize,
+        ) -> WalletResult<ConsolidationSummary> {
+            Ok(ConsolidationSummary {
+                total_amount: U256::from(0),
+                iterations: 0,
+                tx_hashes: Vec::new(),
             })
         }
 

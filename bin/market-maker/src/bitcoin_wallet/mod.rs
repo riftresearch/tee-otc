@@ -23,7 +23,7 @@ use tokio::task::JoinSet;
 use tracing::{info, warn};
 
 use crate::bitcoin_wallet::transaction_broadcaster::{ForeignUtxo, TransactionRequest};
-use crate::db::{BroadcastedTransactionRepository, DepositRepository, DepositStore, FillStatus};
+use crate::db::{BroadcastedTransactionRepository, Deposit, DepositRepository, DepositStore, FillStatus};
 use crate::wallet::{self, Wallet as WalletTrait, WalletBalance, WalletError};
 use crate::WalletResult;
 
@@ -158,6 +158,7 @@ pub struct BitcoinWallet {
     receive_address: String,
     deposit_repository: Option<Arc<DepositRepository>>,
     broadcasted_transaction_repository: Option<Arc<BroadcastedTransactionRepository>>,
+    max_deposits_per_lot: usize,
 }
 
 impl BitcoinWallet {
@@ -168,6 +169,7 @@ impl BitcoinWallet {
         esplora_url: &str,
         deposit_repository: Option<Arc<DepositRepository>>,
         broadcasted_transaction_repository: Option<Arc<BroadcastedTransactionRepository>>,
+        max_deposits_per_lot: usize,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Result<Self, BitcoinWalletError> {
         let mut conn = Connection::open(db_file).context(OpenDatabaseSnafu)?;
@@ -240,7 +242,92 @@ impl BitcoinWallet {
             receive_address,
             deposit_repository,
             broadcasted_transaction_repository,
+            max_deposits_per_lot,
         })
+    }
+
+    /// Converts a single deposit to ForeignUtxos by fetching the funding transaction
+    /// and parsing the deposit's descriptor to identify spendable outputs.
+    async fn deposit_to_foreign_utxos(
+        &self,
+        deposit: Deposit,
+    ) -> Result<Vec<ForeignUtxo>, WalletError> {
+        let tx = self
+            .esplora_client
+            .get_tx(&Txid::from_str(&deposit.funding_tx_hash).unwrap())
+            .await
+            .map_err(|e| WalletError::EsploraClientError {
+                source: e,
+                loc: location!(),
+            })?;
+        
+        let tx = match tx {
+            Some(tx) => tx,
+            None => {
+                warn!("Transaction not found for deposit: {:?}", deposit);
+                return Ok(Vec::new());
+            }
+        };
+
+        // Parse the descriptor string to get the address
+        let mut descriptor_str = deposit.private_key.clone();
+        if !descriptor_str.starts_with("wpkh(") {
+            descriptor_str = format!("wpkh({})", descriptor_str);
+        }
+        let network = self.wallet.lock().await.network();
+        let secp = Secp256k1::new();
+
+        // Parse the descriptor with secret keys using BDK's parse_descriptor
+        let (public_desc, _key_map) =
+            descriptor::Descriptor::<DescriptorPublicKey>::parse_descriptor(&secp, &descriptor_str)
+                .map_err(|e| WalletError::InvalidDescriptor {
+                    reason: format!("Failed to parse descriptor with secret keys: {e}"),
+                    loc: location!(),
+                })?;
+
+        // Derive at index 0 to get the concrete address
+        let derived_desc = public_desc.at_derivation_index(0).map_err(|e| {
+            WalletError::InvalidDescriptor {
+                reason: format!("Failed to derive descriptor at index 0: {e}"),
+                loc: location!(),
+            }
+        })?;
+
+        let deposit_address = derived_desc.address(network).map_err(|e| {
+            WalletError::InvalidDescriptor {
+                reason: format!("Failed to get address from descriptor: {e}"),
+                loc: location!(),
+            }
+        })?;
+
+        // find all UTXOs in `tx` that pay to `deposit_address`
+        let target_spk = deposit_address.script_pubkey();
+        let mut foreign_utxos = Vec::new();
+
+        for (vout, txo) in tx
+            .output
+            .iter()
+            .enumerate()
+            .filter(|(_, o)| o.script_pubkey == target_spk)
+        {
+            // Build PSBT input for each spendable output
+            let psbt_input = bdk_wallet::bitcoin::psbt::Input {
+                witness_utxo: Some(txo.clone()),
+                non_witness_utxo: Some(tx.clone()),
+                ..Default::default()
+            };
+
+            let satisfaction_weight = bdk_wallet::bitcoin::Weight::from_wu(108);
+
+            foreign_utxos.push(ForeignUtxo {
+                outpoint: OutPoint::new(tx.compute_txid(), vout as u32),
+                psbt_input,
+                satisfaction_weight,
+                foreign_descriptor: descriptor_str.clone(),
+            });
+        }
+
+        Ok(foreign_utxos)
     }
 
     async fn get_dedicated_wallet_balance(&self) -> Result<u64, BitcoinWalletError> {
@@ -441,9 +528,13 @@ impl WalletTrait for BitcoinWallet {
         let mut foreign_utxos = Vec::new();
         if let Some(deposit_repository) = self.deposit_repository.clone() {
             for payment in &payments {
+                if foreign_utxos.len() >= self.max_deposits_per_lot {
+                    // roughly limit number of foreign UTXOs for this batch 
+                    break;
+                }
                 let lot = payment.lot.clone();
                 match deposit_repository
-                    .take_deposits_that_fill_lot(&lot)
+                    .take_deposits_that_fill_lot(&lot, Some(self.max_deposits_per_lot))
                     .await
                     .map_err(|e| WalletError::DepositRepositoryError {
                         source: e,
@@ -451,85 +542,8 @@ impl WalletTrait for BitcoinWallet {
                     })? {
                     FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
                         for deposit in deposits {
-                            let tx = self
-                                .esplora_client
-                                .get_tx(&Txid::from_str(&deposit.funding_tx_hash).unwrap())
-                                .await
-                                .map_err(|e| WalletError::EsploraClientError {
-                                    source: e,
-                                    loc: location!(),
-                                })?;
-                            let tx = match tx {
-                                Some(tx) => tx,
-                                None => {
-                                    warn!("Transaction not found for deposit: {:?}", deposit);
-                                    continue;
-                                }
-                            };
-
-                            // Parse the descriptor string to get the address
-                            let mut descriptor_str = deposit.private_key.clone();
-                            if !descriptor_str.starts_with("wpkh(") {
-                                descriptor_str = format!("wpkh({})", descriptor_str);
-                            }
-                            let network = self.wallet.lock().await.network();
-                            let secp = Secp256k1::new();
-
-                            // Parse the descriptor with secret keys using BDK's parse_descriptor
-                            let (public_desc, _key_map) = descriptor::Descriptor::<
-                                DescriptorPublicKey,
-                            >::parse_descriptor(
-                                &secp, &descriptor_str
-                            )
-                            .map_err(|e| WalletError::InvalidDescriptor {
-                                reason: format!("Failed to parse descriptor with secret keys: {e}"),
-                                loc: location!(),
-                            })?;
-
-                            // Derive at index 0 to get the concrete address
-                            let derived_desc = public_desc.at_derivation_index(0).map_err(|e| {
-                                WalletError::InvalidDescriptor {
-                                    reason: format!("Failed to derive descriptor at index 0: {e}"),
-                                    loc: location!(),
-                                }
-                            })?;
-
-                            let deposit_address = derived_desc.address(network).map_err(|e| {
-                                WalletError::InvalidDescriptor {
-                                    reason: format!("Failed to get address from descriptor: {e}"),
-                                    loc: location!(),
-                                }
-                            })?;
-                            info!("deposit_address from descriptor: {:?}", deposit_address);
-
-                            // find all UTXOs in `tx` that pay to `deposit_address`
-                            let target_spk = deposit_address.script_pubkey();
-
-                            for (vout, txo) in tx
-                                .output
-                                .iter()
-                                .enumerate()
-                                .filter(|(_, o)| o.script_pubkey == target_spk)
-                            {
-                                // Build PSBT input for each spendable output
-                                let psbt_input = bdk_wallet::bitcoin::psbt::Input {
-                                    witness_utxo: Some(txo.clone()),
-                                    non_witness_utxo: Some(tx.clone()),
-                                    ..Default::default()
-                                };
-
-                                // Typical P2WPKH input weight; adjust if your descriptor isn’t P2WPKH
-                                let satisfaction_weight = bdk_wallet::bitcoin::Weight::from_wu(108);
-
-                                info!("Adding foreign UTXO: vout={vout}");
-
-                                foreign_utxos.push(ForeignUtxo {
-                                    outpoint: OutPoint::new(tx.compute_txid(), vout as u32),
-                                    psbt_input,
-                                    satisfaction_weight,
-                                    foreign_descriptor: descriptor_str.clone(),
-                                });
-                            }
+                            let utxos = self.deposit_to_foreign_utxos(deposit).await?;
+                            foreign_utxos.extend(utxos);
                         }
                     }
                     FillStatus::Empty => {
@@ -591,6 +605,99 @@ impl WalletTrait for BitcoinWallet {
             total_balance,
             native_balance,
             deposit_key_balance: net_deposit_key_balance,
+        })
+    }
+
+    async fn consolidate(
+        &self,
+        lot: &otc_models::Lot,
+        max_deposits_per_iteration: usize,
+    ) -> WalletResult<wallet::ConsolidationSummary> {
+        let deposit_repository = self.deposit_repository.as_ref().ok_or_else(|| {
+            WalletError::TransactionCreationFailed {
+                reason: "No deposit repository available for consolidation".to_string(),
+            }
+        })?;
+
+        let mut total_amount = U256::from(0);
+        let mut iterations = 0;
+        let mut tx_hashes = Vec::new();
+
+        loop {
+            let fill_status = deposit_repository
+                .take_deposits_that_fill_lot(lot, Some(max_deposits_per_iteration))
+                .await
+                .map_err(|e| WalletError::DepositRepositoryError {
+                    source: e,
+                    loc: location!(),
+                })?;
+
+            match fill_status {
+                FillStatus::Empty => break,
+                FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
+                    // Sum the amount in this batch
+                    let mut batch_amount = U256::from(0);
+                    for deposit in &deposits {
+                        batch_amount = batch_amount.saturating_add(deposit.holdings.amount);
+                    }
+                    total_amount = total_amount.saturating_add(batch_amount);
+
+                    // Convert deposits to foreign UTXOs
+                    let mut foreign_utxos = Vec::new();
+                    for deposit in deposits {
+                        let utxos = self.deposit_to_foreign_utxos(deposit).await?;
+                        foreign_utxos.extend(utxos);
+                    }
+
+                    if foreign_utxos.is_empty() {
+                        warn!("No foreign UTXOs found for this batch, skipping");
+                        continue;
+                    }
+
+                    // Create a consolidation payment to our own address
+                    let receive_address = self.receive_address(&lot.currency.token);
+                    let payment = Payment {
+                        lot: Lot {
+                            currency: lot.currency.clone(),
+                            amount: batch_amount,
+                        },
+                        to_address: receive_address.clone(),
+                    };
+
+                    info!(
+                        "Consolidating {} deposits ({} UTXOs) with total amount {} to {}",
+                        foreign_utxos.len(),
+                        foreign_utxos.len(),
+                        batch_amount,
+                        receive_address
+                    );
+
+                    // Broadcast the consolidation transaction
+                    let tx_hash = self
+                        .tx_broadcaster
+                        .broadcast_transaction(
+                            vec![payment],
+                            foreign_utxos,
+                            None, // No MM validation for consolidation
+                            None, // No explicit fee
+                        )
+                        .await
+                        .map_err(|e| WalletError::BitcoinWalletClient {
+                            source: e,
+                            loc: location!(),
+                        })?;
+
+                    info!("Consolidation transaction successful: {}", tx_hash);
+                    tx_hashes.push(tx_hash);
+                    iterations += 1;
+                }
+            }
+        }
+
+        Ok(wallet::ConsolidationSummary {
+            total_amount,
+            iterations,
+            tx_hashes,
         })
     }
 

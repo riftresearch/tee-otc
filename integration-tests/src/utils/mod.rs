@@ -293,6 +293,8 @@ pub async fn build_mm_test_args(
         auto_manage_inventory: false,
         metrics_listen_addr: None,
         batch_monitor_interval_secs: 5,
+        ethereum_max_deposits_per_lot: 350,
+        bitcoin_max_deposits_per_lot: 100,
     }
 }
 
@@ -379,6 +381,7 @@ pub async fn build_test_user_ethereum_wallet(
         devnet.ethereum.anvil.ws_endpoint(),
         1,
         None,
+        350,
         &mut join_set,
     );
     (join_set, wallet)

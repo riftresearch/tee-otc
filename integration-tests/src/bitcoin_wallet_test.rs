@@ -71,6 +71,7 @@ async fn test_bitcoin_wallet_basic_operations() {
         esplora_url,
         None,
         None,
+        100, // max_deposits_per_lot
         &mut join_set,
     )
     .await
@@ -290,6 +291,7 @@ async fn test_bitcoin_wallet_error_handling() {
         esplora_url,
         None,
         None,
+        100, // max_deposits_per_lot
         &mut join_set,
     )
     .await
@@ -451,6 +453,7 @@ async fn test_bitcoin_wallet_spend_from_deposit_storage(
         devnet.bitcoin.esplora_url.as_ref().unwrap(),
         Some(deposit_repository.clone()),
         None,
+        100, // max_deposits_per_lot
         &mut join_set,
     )
     .await
@@ -608,6 +611,7 @@ async fn test_bitcoin_wallet_cancel_tx(
         devnet.bitcoin.esplora_url.as_ref().unwrap(),
         Some(deposit_repository.clone()),
         Some(broadcasted_transaction_repository.clone()),
+        100, // max_deposits_per_lot
         &mut join_set,
     )
     .await
