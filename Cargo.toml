@@ -37,7 +37,7 @@ corepc-node = { version = "0.8.0", features = ["29_0", "download"] }
 electrsd = { git = "https://github.com/RCasatta/electrsd", rev = "bdc97e879bad82e13e69c74d898271db12224f44", features = ["corepc-node_29_0", "esplora_a33e97e1", "legacy"] }
 esplora-client = {git = "https://github.com/riftresearch/rust-esplora-client" , rev = "4009ba4be0d73ed7126e91ef8d39e8f560190053", features = ["async", "tokio"]}
 
-alloy = { version = "1.0.23", features = ["full", "node-bindings", "json-rpc"] }
+alloy = { version = "1.0.23", features = ["full", "node-bindings", "json-rpc", "eip712"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.40", features = ["full"] }

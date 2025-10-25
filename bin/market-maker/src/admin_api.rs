@@ -246,7 +246,7 @@ async fn consolidate_ethereum(
         };
         deposits_by_token
             .entry(token_key)
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(deposit);
     }
 

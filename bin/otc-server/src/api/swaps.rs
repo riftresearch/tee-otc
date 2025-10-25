@@ -1,7 +1,5 @@
 use alloy::{
-    dyn_abi::{DynSolType, DynSolValue},
-    primitives::{keccak256, Address, U256},
-    signers::Signature,
+    dyn_abi::{DynSolType, Eip712Domain}, primitives::{Address, U256}, signers::Signature, sol, sol_types::SolStruct
 };
 use chrono::{DateTime, Utc};
 use otc_models::{ChainType, Metadata, Quote, RefundSwapReason};
@@ -14,12 +12,7 @@ pub struct BlockHashResponse {
     pub block_hash: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RefundPayload {
-    pub swap_id: Uuid,
-    pub refund_recipient: String,
-    pub refund_transaction_fee: U256,
-}
+
 
 /// Request to refund a swap
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -40,30 +33,43 @@ pub static RIFT_DOMAIN_TYPE: LazyLock<DynSolType> = LazyLock::new(|| {
     ])
 });
 
-pub static RIFT_DOMAIN_VALUE: LazyLock<DynSolValue> = LazyLock::new(|| {
-    DynSolValue::Tuple(vec![
-        DynSolValue::String("Rift OTC".to_string()),
-        DynSolValue::String("1.0.0".to_string()),
-        DynSolValue::Uint(U256::from(1), 256),
-        DynSolValue::Address(Address::from([0x42; 20])),
-    ])
+pub static RIFT_DOMAIN_VALUE: LazyLock<Eip712Domain> = LazyLock::new(|| {
+    Eip712Domain::new(
+        Some("Rift OTC".to_string().into()),
+        Some("1.0.0".to_string().into()),
+        Some(U256::from(1)),
+        None,
+        None,
+    )
 });
+
+
+sol! {
+    struct SolRefundPayload {
+        string swap_id;
+        string refund_recipient;
+        uint256 refund_transaction_fee;
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefundPayload {
+    pub swap_id: Uuid,
+    pub refund_recipient: String,
+    pub refund_transaction_fee: U256,
+}
+
+
 
 impl RefundPayload {
     pub fn get_signer_address_from_signature(&self, signature: &[u8]) -> Result<Address, String> {
-        let message_value = DynSolValue::Tuple(vec![
-            DynSolValue::String(self.swap_id.to_string()),
-            DynSolValue::String(self.refund_recipient.to_string()),
-            DynSolValue::Uint(self.refund_transaction_fee, 256),
-        ]);
+        let message_value = SolRefundPayload {
+            swap_id: self.swap_id.to_string(),
+            refund_recipient: self.refund_recipient.to_string(),
+            refund_transaction_fee: self.refund_transaction_fee,
+        };
 
-        let encoded_domain = RIFT_DOMAIN_VALUE.abi_encode();
-        let encoded_message = message_value.abi_encode();
-
-        let domain_separator = keccak256(&encoded_domain);
-        let message_hash = keccak256(&encoded_message);
-        let eip712_hash =
-            keccak256([&[0x19, 0x01], &domain_separator[..], &message_hash[..]].concat());
+        let eip712_hash = message_value.eip712_signing_hash(&RIFT_DOMAIN_VALUE);
         let recovered_address = Signature::from_raw(signature)
             .map_err(|e| format!("Passed signature could not be parsed: {}", e))?
             .recover_address_from_prehash(&eip712_hash)

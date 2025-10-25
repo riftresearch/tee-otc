@@ -18,7 +18,7 @@ use devnet::MultichainAccount;
 use market_maker::{evm_wallet::EVMWallet, MarketMakerArgs};
 use otc_server::{
     api::{
-        swaps::{RefundPayload, RIFT_DOMAIN_VALUE},
+        swaps::{RefundPayload, SolRefundPayload, RIFT_DOMAIN_VALUE},
         SwapResponse,
     },
     OtcServerArgs,
@@ -36,20 +36,13 @@ pub trait RefundRequestSignature {
 
 impl RefundRequestSignature for RefundPayload {
     fn sign(&self, signer: &PrivateKeySigner) -> Vec<u8> {
-        let message_value = DynSolValue::Tuple(vec![
-            DynSolValue::String(self.swap_id.to_string()),
-            DynSolValue::String(self.refund_recipient.to_string()),
-            DynSolValue::Uint(self.refund_transaction_fee, 256),
-        ]);
-
-        let encoded_domain = RIFT_DOMAIN_VALUE.abi_encode();
-        let encoded_message = message_value.abi_encode();
-
-        let domain_separator = keccak256(&encoded_domain);
-        let message_hash = keccak256(&encoded_message);
-        let eip712_hash =
-            keccak256([&[0x19, 0x01], &domain_separator[..], &message_hash[..]].concat());
-        let signature = signer.sign_hash_sync(&eip712_hash).unwrap();
+        let message_value = SolRefundPayload {
+            swap_id: self.swap_id.to_string(),
+            refund_recipient: self.refund_recipient.to_string(),
+            refund_transaction_fee: self.refund_transaction_fee,
+        };
+        let domain_value = RIFT_DOMAIN_VALUE.clone();
+        let signature = signer.sign_typed_data_sync(&message_value, &domain_value).unwrap();
         signature.as_bytes().to_vec()
     }
 }
