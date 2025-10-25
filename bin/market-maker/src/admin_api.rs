@@ -114,7 +114,7 @@ async fn consolidate_bitcoin(
             token: TokenIdentifier::Native,
             decimals: 8,
         },
-        amount: alloy::primitives::U256::from(1), // Amount doesn't matter for consolidation
+        amount: alloy::primitives::U256::MAX, // MAX amount to ensure all deposits are consolidated
     };
 
     // Use the wallet's consolidate method
@@ -225,7 +225,8 @@ async fn consolidate_ethereum(
 
         let lot = Lot {
             currency: currency.clone(),
-            amount: alloy::primitives::U256::from(1), // Amount doesn't matter for consolidation
+            // make amount insanely big
+            amount: alloy::primitives::U256::MAX, // Amount doesn't matter for consolidation
         };
 
         // Use the wallet's consolidate method

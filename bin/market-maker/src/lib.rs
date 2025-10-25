@@ -32,7 +32,7 @@ use reqwest::Url;
 use snafu::{prelude::*, ResultExt};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, info};
+use tracing::info;
 
 use axum::{
     extract::State, http::header, http::StatusCode, response::IntoResponse, routing::get, Router,
