@@ -12,6 +12,7 @@ use tokio::{
     sync::mpsc::{self, UnboundedSender},
     task::JoinSet,
 };
+use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
@@ -69,6 +70,7 @@ impl PaymentManager {
         payment_repository: Arc<PaymentRepository>,
         batch_configs: HashMap<ChainType, BatchConfig>,
         otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
+        cancellation_token: CancellationToken,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Self {
         // Create channels for each chain type
@@ -89,6 +91,7 @@ impl PaymentManager {
                     config.clone(),
                     otc_response_tx.clone(),
                     in_flight_payments.clone(),
+                    cancellation_token.clone(),
                     join_set,
                 );
             }
@@ -105,6 +108,7 @@ impl PaymentManager {
                     config.clone(),
                     otc_response_tx.clone(),
                     in_flight_payments.clone(),
+                    cancellation_token.clone(),
                     join_set,
                 );
             }
@@ -242,6 +246,7 @@ fn spawn_batch_processor(
     config: BatchConfig,
     otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
     in_flight_payments: Arc<DashMap<Uuid, ()>>,
+    cancellation_token: CancellationToken,
     join_set: &mut JoinSet<crate::Result<()>>,
 ) {
     join_set.spawn(async move {
@@ -254,6 +259,14 @@ fn spawn_batch_processor(
         );
 
         loop {
+            // Check for cancellation before processing
+            if cancellation_token.is_cancelled() {
+                info!(
+                    "Batch processor for {:?} cancelled, shutting down",
+                    chain_type
+                );
+                return Ok(());
+            }
             // Drain up to batch_size items from the channel
             let mut queued_payments = Vec::new();
             while queued_payments.len() < config.batch_size {
@@ -275,124 +288,146 @@ fn spawn_batch_processor(
                 }
             }
 
-            // Split queued payments into eligible and ineligible (near refund window)
-            let (eligible_payments, ineligible_payments): (Vec<_>, Vec<_>) = queued_payments
-                .into_iter()
-                .partition(|p| {
-                    !can_be_refunded_soon(
-                        otc_models::SwapStatus::WaitingMMDepositInitiated,
-                        p.user_deposit_confirmed_at,
-                        None,
-                    )
-                });
+            // Process the batch (filtering and processing handled in helper)
+            process_batch(
+                chain_type,
+                &wallet,
+                &payment_recorder,
+                &otc_response_tx,
+                &in_flight_payments,
+                queued_payments,
+            )
+            .await;
+        }
+    });
+}
 
-            for swap_id in ineligible_payments.iter().map(|p| p.swap_id) {
-                in_flight_payments.remove(&swap_id);
-            }
+/// Helper function to process a batch of payments
+async fn process_batch(
+    chain_type: ChainType,
+    wallet: &Arc<dyn crate::wallet::Wallet>,
+    payment_recorder: &Arc<dyn BatchPaymentRecorder>,
+    otc_response_tx: &UnboundedSender<ProtocolMessage<MMResponse>>,
+    in_flight_payments: &Arc<DashMap<Uuid, ()>>,
+    queued_payments: Vec<MarketMakerQueuedPayment>,
+) {
+    // Split queued payments into eligible and ineligible (near refund window)
+    let (eligible_payments, ineligible_payments): (Vec<_>, Vec<_>) = queued_payments
+        .into_iter()
+        .partition(|p| {
+            !can_be_refunded_soon(
+                otc_models::SwapStatus::WaitingMMDepositInitiated,
+                p.user_deposit_confirmed_at,
+                None,
+            )
+        });
 
-            if !ineligible_payments.is_empty() {
-                info!(
-                    skipped = ineligible_payments.len(),
-                    "Skipping ineligible payments that are near refund window"
+    for swap_id in ineligible_payments.iter().map(|p| p.swap_id) {
+        in_flight_payments.remove(&swap_id);
+    }
+
+    if !ineligible_payments.is_empty() {
+        info!(
+            skipped = ineligible_payments.len(),
+            "Skipping ineligible payments that are near refund window"
+        );
+    }
+
+    if eligible_payments.is_empty() {
+        return;
+    }
+
+    info!(
+        "Processing batch of {} payments for {:?}",
+        eligible_payments.len(),
+        chain_type
+    );
+
+    let payment_batch = match eligible_payments.to_market_maker_batch() {
+        Some(payment_batch) => payment_batch,
+        None => {
+            error!(
+                "No market maker batch could be created for {:?}: queued_payments={:?}",
+                chain_type, eligible_payments
+            );
+            return;
+        }
+    };
+
+    let batch_nonce_digest = payment_batch.payment_verification.batch_nonce_digest;
+
+    // Execute the batch payment
+    match wallet
+        .create_batch_payment(
+            payment_batch.ordered_payments,
+            Some(payment_batch.payment_verification),
+        )
+        .await
+    {
+        Ok(tx_hash) => {
+            let swap_ids: Vec<Uuid> = eligible_payments.iter().map(|qp| qp.swap_id).collect();
+            info!(
+                "Batch payment successful for {:?}: tx_hash={}, swap_ids={:?}",
+                chain_type, tx_hash, swap_ids
+            );
+
+            // Store all payments with the same tx_hash
+            if let Err(e) = payment_recorder
+                .record_batch_payment(swap_ids.clone(), tx_hash.clone(), chain_type, batch_nonce_digest)
+                .await
+            {
+                error!(
+                    "Failed to store batch payment in database for {:?}: swap_ids={:?}, error={}",
+                    chain_type, swap_ids, e
                 );
             }
 
-            if eligible_payments.is_empty() {
-                interval.tick().await;
-                continue;
+            // Clear in-flight tracking now that payments are broadcast
+            for swap_id in &swap_ids {
+                in_flight_payments.remove(swap_id);
             }
 
-
-            info!(
-                "Processing batch of {} payments for {:?}",
-                eligible_payments.len(),
-                chain_type
-            );
-
-
-            let payment_batch = match eligible_payments.to_market_maker_batch() {
-                Some(payment_batch) => payment_batch,
-                None => {
-                    error!("No market maker batch could be created for {:?}: queued_payments={:?}", chain_type, eligible_payments);
-                    continue;
-                }
+            // Send batch payment notification to OTC server
+            let response = MMResponse::Batches {
+                request_id: Uuid::new_v4(),
+                batches: vec![NetworkBatch {
+                    tx_hash: tx_hash.clone(),
+                    swap_ids: swap_ids.clone(),
+                    batch_nonce_digest,
+                }],
             };
 
-            let batch_nonce_digest = payment_batch.payment_verification.batch_nonce_digest;
+            let protocol_msg = ProtocolMessage {
+                version: "1.0.0".to_string(),
+                sequence: 0, // Unsolicited message, sequence doesn't matter
+                payload: response,
+            };
 
-            // Execute the batch payment
-            match wallet.create_batch_payment(payment_batch.ordered_payments, Some(payment_batch.payment_verification)).await {
-                Ok(tx_hash) => {
-                    let swap_ids: Vec<Uuid> = eligible_payments.iter().map(|qp| qp.swap_id).collect();
-                    info!(
-                        "Batch payment successful for {:?}: tx_hash={}, swap_ids={:?}",
-                        chain_type, tx_hash, swap_ids
-                    );
-
-                    // Store all payments with the same tx_hash
-                    if let Err(e) = payment_recorder
-                        .record_batch_payment(
-                            swap_ids.clone(),
-                            tx_hash.clone(),
-                            chain_type,
-                            batch_nonce_digest,
-                        )
-                        .await
-                    {
-                        error!(
-                            "Failed to store batch payment in database for {:?}: swap_ids={:?}, error={}",
-                            chain_type, swap_ids, e
-                        );
-                    }
-
-                    // Clear in-flight tracking now that payments are broadcast
-                    for swap_id in &swap_ids {
-                        in_flight_payments.remove(swap_id);
-                    }
-
-                    // Send batch payment notification to OTC server
-                    let response = MMResponse::Batches {
-                        request_id: Uuid::new_v4(),
-                        batches: vec![NetworkBatch {
-                            tx_hash: tx_hash.clone(),
-                            swap_ids: swap_ids.clone(),
-                            batch_nonce_digest,
-                        }],
-                    };
-
-                    let protocol_msg = ProtocolMessage {
-                        version: "1.0.0".to_string(),
-                        sequence: 0, // Unsolicited message, sequence doesn't matter
-                        payload: response,
-                    };
-
-                    if let Err(e) = otc_response_tx.send(protocol_msg) {
-                        error!(
-                            "Failed to send batch payment notification to OTC server for {:?}: swap_ids={:?}, error={}",
-                            chain_type, swap_ids, e
-                        );
-                    } else {
-                        info!(
-                            "Sent batch payment notification to OTC server for {:?}: tx_hash={}, swap_ids={:?}",
-                            chain_type, tx_hash, swap_ids
-                        );
-                    }
-                }
-                Err(e) => {
-                    let swap_ids: Vec<Uuid> = eligible_payments.iter().map(|qp| qp.swap_id).collect();
-                    error!(
-                        "Batch payment failed for {:?}: swap_ids={:?}, error={}",
-                        chain_type, swap_ids, e
-                    );
-
-                    // Clear in-flight tracking to allow retry on next reconnect replay
-                    for swap_id in &swap_ids {
-                        in_flight_payments.remove(swap_id);
-                    }
-                }
+            if let Err(e) = otc_response_tx.send(protocol_msg) {
+                error!(
+                    "Failed to send batch payment notification to OTC server for {:?}: swap_ids={:?}, error={}",
+                    chain_type, swap_ids, e
+                );
+            } else {
+                info!(
+                    "Sent batch payment notification to OTC server for {:?}: tx_hash={}, swap_ids={:?}",
+                    chain_type, tx_hash, swap_ids
+                );
             }
         }
-    });
+        Err(e) => {
+            let swap_ids: Vec<Uuid> = eligible_payments.iter().map(|qp| qp.swap_id).collect();
+            error!(
+                "Batch payment failed for {:?}: swap_ids={:?}, error={}",
+                chain_type, swap_ids, e
+            );
+
+            // Clear in-flight tracking to allow retry on next reconnect replay
+            for swap_id in &swap_ids {
+                in_flight_payments.remove(swap_id);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -518,6 +553,7 @@ mod tests {
         let (otc_tx, mut otc_rx) = mpsc::unbounded_channel();
         let in_flight = Arc::new(DashMap::new());
         let mut join_set = JoinSet::new();
+        let cancellation_token = CancellationToken::new();
 
         spawn_batch_processor(
             chain_type,
@@ -530,6 +566,7 @@ mod tests {
             },
             otc_tx,
             in_flight.clone(),
+            cancellation_token,
             &mut join_set,
         );
 

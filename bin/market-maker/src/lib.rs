@@ -16,6 +16,7 @@ mod rfq_handler;
 pub mod wallet;
 mod wrapped_bitcoin_quoter;
 
+use blockchain_utils::shutdown_signal;
 pub use wallet::WalletError;
 pub use wallet::WalletResult;
 
@@ -30,7 +31,8 @@ use otc_models::ChainType;
 use reqwest::Url;
 use snafu::{prelude::*, ResultExt};
 use tokio::task::JoinSet;
-use tracing::info;
+use tokio_util::sync::CancellationToken;
+use tracing::{error, info};
 
 use axum::{
     extract::State, http::header, http::StatusCode, response::IntoResponse, routing::get, Router,
@@ -330,7 +332,10 @@ fn parse_url(s: &str) -> std::result::Result<Url, String> {
     Url::parse(s).map_err(|e| e.to_string())
 }
 
-pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
+pub async fn run_market_maker(
+    args: MarketMakerArgs,
+) -> Result<()> {
+    let cancellation_token = CancellationToken::new();
     let mut join_set: JoinSet<Result<()>> = JoinSet::new();
     let market_maker_id = Uuid::parse_str(&args.market_maker_id).map_err(|e| Error::Config {
         source: config::ConfigError::InvalidUuid {
@@ -471,12 +476,16 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     // Create channel for MMResponse messages from PaymentManager to OTC server
     let (otc_response_tx, otc_response_rx) = tokio::sync::mpsc::unbounded_channel();
 
+    // dedicated join set for payment manager tasks b/c if we shutdown
+    // we want to wait for the payment manager tasks to finish before exiting
+    let mut payment_manager_join_set: JoinSet<Result<()>> = JoinSet::new();
     let payment_manager = Arc::new(PaymentManager::new(
         wallet_manager.clone(),
         payment_repository.clone(),
         batch_configs,
         otc_response_tx,
-        &mut join_set,
+        cancellation_token.clone(),
+        &mut payment_manager_join_set,
     ));
 
     let otc_fill_client = otc_client::OtcFillClient::new(
@@ -554,7 +563,28 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
 
     join_set.spawn(async move { conversion_actor.await.context(ConversionActorSnafu) });
 
-    handle_background_thread_result(join_set.join_next().await).context(BackgroundThreadSnafu)?;
+
+    tokio::select! { 
+        _ = shutdown_signal() => {
+            info!("Shutdown signal received");
+        }
+        task_end = join_set.join_next() => {
+            info!("Main Task exited: {:?}", handle_background_thread_result(task_end));
+        }
+        payment_manager_task_end = payment_manager_join_set.join_next() => {
+            info!("PaymentManager task exited: {:?}", handle_background_thread_result(payment_manager_task_end));
+        }
+    }
+
+    info!("Triggering graceful shutdown...");
+    cancellation_token.cancel();
+
+    while let Some(_) = payment_manager_join_set.join_next().await {
+        info!("PaymentManager task exited gracefully...");
+    }
+    join_set.abort_all();
+
+    info!("All background tasks have been shut down");
 
     Ok(())
 }
