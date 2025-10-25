@@ -30,7 +30,7 @@ use axum::{
 use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use dstack_sdk::dstack_client::{DstackClient, GetQuoteResponse, InfoResponse};
 use futures_util::{SinkExt, StreamExt};
-use metrics::{describe_counter, describe_gauge, describe_histogram, gauge, histogram};
+use metrics::{describe_gauge, describe_histogram, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
 use otc_chains::{bitcoin::BitcoinChain, ethereum::EthereumChain, ChainRegistry};
@@ -150,6 +150,40 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         let monitoring_service = swap_monitoring_service.clone();
         async move {
             monitoring_service.run().await;
+        }
+    });
+
+    // Start periodic database metrics sync for Grafana
+    info!("Starting database metrics sync...");
+    tokio::spawn({
+        let db = db.clone();
+        async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(10));
+            loop {
+                interval.tick().await;
+                
+                // Sync volume metrics
+                if let Ok(volumes) = db.swaps().get_settled_volume_totals().await {
+                    for (market, total) in volumes {
+                        gauge!(
+                            SWAP_VOLUME_TOTAL_METRIC,
+                            "market" => market,
+                        )
+                        .set(total as f64);
+                    }
+                }
+                
+                // Sync fee metrics
+                if let Ok(fees) = db.swaps().get_settled_fee_totals().await {
+                    for (market, total) in fees {
+                        gauge!(
+                            SWAP_FEES_TOTAL_METRIC,
+                            "market" => market,
+                        )
+                        .set(total as f64);
+                    }
+                }
+            }
         }
     });
 
@@ -310,14 +344,14 @@ fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
         "Current number of market maker deposit batches monitored in the latest monitoring cycle."
     );
 
-    describe_counter!(
+    describe_gauge!(
         SWAP_VOLUME_TOTAL_METRIC,
-        "Cumulative user deposit volume recorded when swaps settle (base units)."
+        "Settled volume per market (sats), synced from database aggregate tables."
     );
 
-    describe_counter!(
+    describe_gauge!(
         SWAP_FEES_TOTAL_METRIC,
-        "Cumulative protocol fees recorded when swaps settle (satoshis)."
+        "Settled protocol fees per market (sats), synced from database aggregate tables."
     );
 
     if PROMETHEUS_HANDLE.set(shared_handle.clone()).is_err() {

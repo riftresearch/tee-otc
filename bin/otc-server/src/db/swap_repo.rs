@@ -1,14 +1,12 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use metrics::counter;
 use otc_models::{
     ChainType, LatestRefund, Lot, MMDepositStatus, SettlementStatus, Swap, SwapStatus,
-    TokenIdentifier, UserDepositStatus,
+    UserDepositStatus,
 };
 use sqlx::postgres::PgPool;
 use sqlx::Row;
-use tracing::warn;
 use uuid::Uuid;
 
 use super::conversions::{
@@ -22,8 +20,6 @@ use crate::error::{OtcServerError, OtcServerResult};
 
 pub const SWAP_VOLUME_TOTAL_METRIC: &str = "otc_swap_volume_total";
 pub const SWAP_FEES_TOTAL_METRIC: &str = "otc_swap_fees_total";
-const SWAP_VOLUME_SIDE_LABEL: &str = "sell";
-const SWAP_VOLUME_SOURCE_LABEL: &str = "otc";
 
 #[derive(Debug, Clone)]
 pub struct PendingMMDepositSwap {
@@ -965,9 +961,6 @@ impl SwapRepository {
             .bind(swap.updated_at)
             .execute(&mut *tx)
             .await?;
-
-            // Record settlement metrics for each swap
-            record_settlement_volume(swap);
         }
 
         tx.commit().await?;
@@ -1039,65 +1032,37 @@ impl SwapRepository {
         self.update(&swap).await?;
         Ok(())
     }
-}
 
-fn record_settlement_volume(swap: &Swap) {
-    let Some(increment) = settlement_volume_increment(&swap.quote.from) else {
-        return;
-    };
+    /// Query settled volume totals by market from aggregate table
+    pub async fn get_settled_volume_totals(&self) -> OtcServerResult<Vec<(String, i64)>> {
+        let rows = sqlx::query("SELECT market, total FROM settled_volume_totals_market")
+            .fetch_all(&self.pool)
+            .await?;
 
-    let market = market_label(&swap.quote.from, &swap.quote.to);
-    let protocol_fee = swap.quote.fee_schedule.protocol_fee_sats;
-
-    counter!(
-        SWAP_VOLUME_TOTAL_METRIC,
-        "market" => market.clone(),
-        "side" => SWAP_VOLUME_SIDE_LABEL,
-        "source" => SWAP_VOLUME_SOURCE_LABEL,
-    )
-    .increment(increment);
-
-    counter!(
-        SWAP_FEES_TOTAL_METRIC,
-        "market" => market,
-        "side" => SWAP_VOLUME_SIDE_LABEL,
-        "source" => SWAP_VOLUME_SOURCE_LABEL,
-    )
-    .increment(protocol_fee);
-}
-
-fn settlement_volume_increment(lot: &Lot) -> Option<u64> {
-    let amount_u128 = match u128::try_from(&lot.amount) {
-        Ok(value) => value,
-        Err(_) => {
-            warn!(amount = %lot.amount, "Skipping volume metric; amount exceeds u128 range");
-            return None;
-        }
-    };
-
-    match u64::try_from(amount_u128) {
-        Ok(value) => Some(value),
-        Err(_) => {
-            warn!(
-                amount = %lot.amount,
-                "Truncating volume metric increment to u64::MAX; amount exceeds u64 range"
-            );
-            Some(u64::MAX)
-        }
+        Ok(rows
+            .iter()
+            .map(|row| {
+                let market: String = row.get("market");
+                let total: i64 = row.get("total");
+                (market, total)
+            })
+            .collect())
     }
-}
 
-fn market_label(from: &Lot, to: &Lot) -> String {
-    format!("{}-{}", currency_label(from), currency_label(to))
-}
+    /// Query settled protocol fee totals by market from aggregate table
+    pub async fn get_settled_fee_totals(&self) -> OtcServerResult<Vec<(String, i64)>> {
+        let rows = sqlx::query("SELECT market, total FROM settled_protocol_fee_totals_market")
+            .fetch_all(&self.pool)
+            .await?;
 
-fn currency_label(lot: &Lot) -> String {
-    let chain = format!("{:?}", lot.currency.chain).to_ascii_uppercase();
-    match &lot.currency.token {
-        TokenIdentifier::Native => chain,
-        TokenIdentifier::Address(address) => {
-            format!("{chain}:{}", address.to_ascii_lowercase())
-        }
+        Ok(rows
+            .iter()
+            .map(|row| {
+                let market: String = row.get("market");
+                let total: i64 = row.get("total");
+                (market, total)
+            })
+            .collect())
     }
 }
 
