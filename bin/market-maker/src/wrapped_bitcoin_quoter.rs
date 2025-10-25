@@ -113,58 +113,75 @@ impl WrappedBitcoinQuoter {
         fee_map: Arc<RwLock<HashMap<ChainType, u64>>>,
     ) -> Result<()> {
         loop {
-            let send_fee_sats_on_btc = {
-                let sats_per_vbyte_by_confirmations = esplora_client
-                    .get_fee_estimates()
-                    .await
-                    .context(EsploraSnafu)?;
-                let sats_per_vbyte = sats_per_vbyte_by_confirmations.get(&1).unwrap_or(&1.5);
-                let sats_per_vbyte = sats_per_vbyte * fee_safety_multiplier;
-
-                calculate_fees_in_sats_to_send_btc(sats_per_vbyte)
+            let fee_history = match eth_provider
+                .get_fee_history(10u64, BlockNumberOrTag::Latest, &[25.0, 50.0, 75.0])
+                .await
+            {
+                Ok(history) => history,
+                Err(e) => {
+                    warn!("Failed to get fee history during fee update: {:?}, trying again later...", e);
+                    tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
+                    continue;
+                }
             };
-            let send_fee_sats_on_eth = {
-                let fee_history = match eth_provider
-                    .get_fee_history(10u64, BlockNumberOrTag::Latest, &[25.0, 50.0, 75.0])
-                    .await
-                {
-                    Ok(history) => history,
-                    Err(e) => {
-                        warn!("Failed to get fee history during fee update: {:?}", e);
+
+            let base_fee_wei: u128 = match fee_history.next_block_base_fee() {
+                Some(base_fee_wei) => base_fee_wei,
+                None => {
+                    warn!("Failed to get base fee from fee_history next block, trying again later...");
+                    tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
+                    continue;
+                }
+            };
+            let base_fee_gwei: f64 = (base_fee_wei as f64) / 1e9f64;
+
+            let mid_priority_wei: u128 = match fee_history
+                .reward
+                .as_ref()
+                .and_then(|rewards| rewards.last())
+                .and_then(|percentiles| percentiles.get(1)) // 50th percentile
+                .copied() { 
+                    Some(mid_priority_wei) => mid_priority_wei,
+                    None => {
+                        warn!("Failed to get mid priority fee from fee_history, trying again later...");
                         tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
                         continue;
                     }
                 };
 
-                let base_fee_wei: u128 = fee_history.next_block_base_fee().unwrap_or(0u128);
-                let base_fee_gwei: f64 = (base_fee_wei as f64) / 1e9f64;
+            let mut max_priority_fee_gwei: f64 = (mid_priority_wei as f64) / 1e9f64;
 
-                let mid_priority_wei: u128 = fee_history
-                    .reward
-                    .as_ref()
-                    .and_then(|rewards| rewards.last())
-                    .and_then(|percentiles| percentiles.get(1)) // 50th percentile
-                    .copied()
-                    .unwrap_or(1_500_000_000u128); // default 1.5 gwei
-                let mut max_priority_fee_gwei: f64 = (mid_priority_wei as f64) / 1e9f64;
+            max_priority_fee_gwei *= fee_safety_multiplier;
 
-                max_priority_fee_gwei *= fee_safety_multiplier;
-
-                let eth_per_btc_price = match btc_eth_price_oracle.get_eth_per_btc().await {
-                    Ok(p) => p,
-                    Err(e) => {
-                        warn!("Failed to get BTC/ETH price during fee update: {:?}", e);
-                        tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
-                        continue;
-                    }
-                };
-
-                calculate_fees_in_sats_to_send_cbbtc_on_eth(
-                    base_fee_gwei,
-                    max_priority_fee_gwei,
-                    eth_per_btc_price,
-                )
+            let eth_per_btc_price = match btc_eth_price_oracle.get_eth_per_btc().await {
+                Ok(p) => p,
+                Err(e) => {
+                    warn!("Failed to get BTC/ETH price during fee update: {:?}", e);
+                    tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
+                    continue;
+                }
             };
+
+            let sats_per_vbyte_by_confirmations = esplora_client
+                .get_fee_estimates()
+                .await
+                .context(EsploraSnafu)?;
+            let sats_per_vbyte = sats_per_vbyte_by_confirmations.get(&1).unwrap_or(&1.5);
+            let sats_per_vbyte = sats_per_vbyte * fee_safety_multiplier;
+
+            let send_fee_sats_on_btc = calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault(
+                sats_per_vbyte,
+                base_fee_gwei,
+                max_priority_fee_gwei,
+                eth_per_btc_price,
+            );
+
+            let send_fee_sats_on_eth = calculate_fees_in_sats_for_market_maker_to_send_cbbtc_and_receive_btc_vault(
+                base_fee_gwei,
+                max_priority_fee_gwei,
+                eth_per_btc_price,
+                sats_per_vbyte,
+            );
 
             let mut global_fee_map = fee_map.write().await;
             global_fee_map.insert(ChainType::Bitcoin, send_fee_sats_on_btc);
@@ -477,26 +494,53 @@ fn quote_exact_output(
     ))
 }
 
-// TODO(gpt-ignore): This should be computed by the wallet
-fn calculate_fees_in_sats_to_send_btc(sats_per_vbyte: f64) -> u64 {
-    let vbytes = 199.0; // 3 p2wpkh outputs, 1 op return w/ 16 bytes, 1 p2wpkh input (napkin math)
-    let fee = sats_per_vbyte * vbytes;
-    fee.ceil() as u64
-}
+// NOTICE: We want the following methods to include the cost for the market maker to send 
+// on x chain directly to you as well as the cost to spend the deposit vault the
+// user creates on y chain , all denominated in sats
 
-// TODO: This should be computed by the wallet?
-fn calculate_fees_in_sats_to_send_cbbtc_on_eth(
+fn calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault(
+    sats_per_vbyte: f64,
     base_fee_gwei: f64,
     max_priority_fee_gwei: f64,
     eth_per_btc_price: f64,
 ) -> u64 {
-    // TODO(high): compute the cost to use the EIP7702 delegator contract, for a basic transfer of CB-BTC
-    // This is the gas cost to use disperse.app on ethereum mainnet w/ 2 addresses as recipients reference: https://etherscan.io/tx/0x22d7b1141273fb60ded7a910da4eb4492fd349abe927b6d1961afa7759d25644
-    let transfer_gas_limit = 98_722f64;
-    let gas_cost_gwei = transfer_gas_limit * (max_priority_fee_gwei + base_fee_gwei);
+    // 1 P2WPKH input + 2 P2WPKH output + 1 OP_RETURN output w/ 32 bytes
+    let vbytes = (68 + (31 * 2) + 44) as f64;
+    // TODO: if this method is called that means the user gave us a cbBTC deposit vault
+    // so we need to add the cost to spend that cbBTC deposit vault to the quote as well
+    let btc_cost_sats = (sats_per_vbyte * vbytes).ceil() as u64;
+    // receiveWithAuthorization later, calldata
+    let gas_limit = 57670 + 2872;
+    let eth_spend_vault_cost_sats = eth_fees_in_sats(gas_limit as f64, base_fee_gwei, max_priority_fee_gwei, eth_per_btc_price);
+    btc_cost_sats + eth_spend_vault_cost_sats
+}
+
+fn calculate_fees_in_sats_for_market_maker_to_send_cbbtc_and_receive_btc_vault(
+    base_fee_gwei: f64,
+    max_priority_fee_gwei: f64,
+    eth_per_btc_price: f64,
+    sats_per_vbyte: f64,
+) -> u64 {
+    // base tx cost, transfer incl cold-access, calldata
+    let transfer_gas_limit = (21000 + 11642 + 572) as f64;
+    let eth_cost_sats = eth_fees_in_sats(transfer_gas_limit, base_fee_gwei, max_priority_fee_gwei, eth_per_btc_price);
+    // spend a P2WPKH input later
+    let btc_spend_vault_cost_sats = (68.0 * sats_per_vbyte).ceil() as u64;
+    eth_cost_sats + btc_spend_vault_cost_sats
+}
+
+
+fn eth_fees_in_sats(
+    gas_limit: f64,
+    base_fee_gwei: f64,
+    max_priority_fee_gwei: f64,
+    eth_per_btc_price: f64,
+) -> u64 {
+    let gas_cost_gwei = gas_limit * (max_priority_fee_gwei + base_fee_gwei);
     let gas_cost_wei = U256::from(gas_cost_gwei.ceil() as u64) * U256::from(1e9);
     let wei_per_sat = U256::from((eth_per_btc_price * 1e10).round() as u128);
-    (gas_cost_wei / wei_per_sat).to::<u64>()
+    let eth_cost = (gas_cost_wei / wei_per_sat).to::<u64>();
+    eth_cost
 }
 
 #[cfg(test)]
@@ -504,18 +548,26 @@ mod tests {
     use otc_protocols::rfq::RFQResult;
 
     use crate::wrapped_bitcoin_quoter::{
-        calculate_fees_in_sats_to_send_btc, quote_exact_input, quote_exact_output,
+        calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault, quote_exact_input, quote_exact_output,
     };
 
     const SATS_PER_VBYTE: f64 = 1.5;
     const TRADE_SPREAD_BPS: u64 = 13;
+    const BASE_FEE_GWEI: f64 = 1.5;
+    const MAX_PRIORITY_FEE_GWEI: f64 = 2.5;
+    const ETH_PER_BTC_PRICE: f64 = 30000.0;
 
     #[test]
     fn fuzz_fee_computation_symmetric() {
         let user_input_sats = [1500, 2000, 10000, 30001, 1001001];
         for user_input_sats in user_input_sats {
             println!("user_input_sats: {user_input_sats}");
-            let fee_sats_to_send_btc = calculate_fees_in_sats_to_send_btc(SATS_PER_VBYTE);
+            let fee_sats_to_send_btc = calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault(
+                SATS_PER_VBYTE,
+                BASE_FEE_GWEI,
+                MAX_PRIORITY_FEE_GWEI,
+                ETH_PER_BTC_PRICE,
+            );
             println!("fee_sats_to_send_btc: {fee_sats_to_send_btc}");
             let output = quote_exact_input(user_input_sats, fee_sats_to_send_btc, TRADE_SPREAD_BPS);
             println!("output: {output:?}");

@@ -265,7 +265,7 @@ configs:
           url: http://prometheus:9090
           isDefault: true
 
-  grafana-dashboard-provider:
+  grafana-dashboard-providerv2:
     content: |
       apiVersion: 1
       providers:
@@ -273,10 +273,11 @@ configs:
           orgId: 1
           folder: ""
           type: file
+          allowUiUpdates: true
           options:
             path: /etc/grafana/provisioning/dashboards
 
-  grafana-node-dashboard:
+  grafana-node-dashboardv2:
     content: |
       {
         "annotations": {
@@ -1883,9 +1884,9 @@ services:
     configs:
       - source: grafana-datasource
         target: /etc/grafana/provisioning/datasources/prometheus.yml
-      - source: grafana-dashboard-provider
+      - source: grafana-dashboard-providerv2
         target: /etc/grafana/provisioning/dashboards/provider.yml
-      - source: grafana-node-dashboard
+      - source: grafana-node-dashboardv2
         target: /etc/grafana/provisioning/dashboards/tee-monitoring.json
     networks:
       - rift-network
