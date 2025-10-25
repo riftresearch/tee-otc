@@ -1,19 +1,19 @@
 services:
   db:
     image: postgres:15-alpine
-    container_name: ${PG_DB:-otc_dev}
+    container_name: test_db
     ports:
-      - "${PG_PORT:-5433}:5432"
+      - "5435:5432"
     environment:
       POSTGRES_PASSWORD: password
       POSTGRES_USER: postgres
-      POSTGRES_DB: ${PG_DB:-otc_dev}
+      POSTGRES_DB: test_db
       POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=trust"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d otc_dev"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U postgres -d test_db"]
+      interval: 100ms
       timeout: 5s
-      retries: 10
+      retries: 100
     networks:
       - test-network
 

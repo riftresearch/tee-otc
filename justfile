@@ -1,6 +1,3 @@
-# Default database URL for development
-database_url := "postgres://postgres:password@localhost:5433/otc_dev"
-
 # Docker compose files for main deployment
 dc_files := "COMPOSE_BAKE=true docker compose -f etc/compose.devnet.yml -f etc/compose.override.yml"
 
@@ -21,10 +18,8 @@ help:
 # Start development database
 start-db:
     @echo "Starting PostgreSQL..."
-    @{{test_db}} up -d
-    @echo "Waiting for database to be ready..."
-    @until docker exec otc_dev pg_isready -U postgres -d otc_dev >/dev/null 2>&1; do sleep 0.1; done
-    @echo "Database ready at: {{database_url}}"
+    @{{test_db}} up -d --wait
+    @echo "PostgreSQL is healthy and ready"
 
 # Stop and remove database volumes
 clean-db:
