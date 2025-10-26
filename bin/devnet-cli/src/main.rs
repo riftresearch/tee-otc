@@ -39,7 +39,7 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), Whatever> {
-    init_logger("info").whatever_context("Failed to initialize logger")?;
+    init_logger("info", None::<console_subscriber::ConsoleLayer>).whatever_context("Failed to initialize logger")?;
 
     let cli = Cli::parse();
 

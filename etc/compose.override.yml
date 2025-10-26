@@ -216,6 +216,7 @@ services:
   market-maker:
     ports:
       - "9000:9000"
+      - "6669:6669"
     depends_on:
       mm-postgres:
         condition: service_healthy
@@ -226,6 +227,7 @@ services:
       rfq-server:
         condition: service_started
     environment:
+      ENABLE_TOKIO_CONSOLE_SUBSCRIBER: true
       RUST_LOG: info
       METRICS_LISTEN_ADDR: 0.0.0.0:9000
       MM_TAG: test-mm

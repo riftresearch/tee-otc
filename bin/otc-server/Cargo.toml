@@ -42,6 +42,7 @@ bitcoincore-rpc-async = {workspace=true}
 chainalysis-address-screener = { workspace = true }
 dstack-sdk = {workspace=true}
 metrics = { workspace = true }
+console-subscriber = {workspace=true}
 metrics-exporter-prometheus = { workspace = true }
 
 [dev-dependencies]

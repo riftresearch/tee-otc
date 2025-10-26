@@ -6,7 +6,7 @@ use otc_server::{server::run_server, OtcServerArgs, Result};
 async fn main() -> Result<()> {
     let args = OtcServerArgs::parse();
 
-    init_logger(&args.log_level).expect("Logger should initialize");
+    init_logger(&args.log_level, None::<console_subscriber::ConsoleLayer>).expect("Logger should initialize");
 
     tokio::select! {
         result = run_server(args) => result,

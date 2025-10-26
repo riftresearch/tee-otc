@@ -97,7 +97,7 @@ fn generate_command(tag: String) -> Result<()> {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    init_logger(&args.log_level).expect("Logger should initialize");
+    init_logger(&args.log_level, None::<console_subscriber::ConsoleLayer>).expect("Logger should initialize");
 
     match args.command {
         Command::Generate { tag } => generate_command(tag),

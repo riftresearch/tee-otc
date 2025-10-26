@@ -318,6 +318,10 @@ pub struct MarketMakerArgs {
     /// Maximum number of deposits to collect per lot for Bitcoin
     #[arg(long, env = "BITCOIN_MAX_DEPOSITS_PER_LOT", default_value = "100")]
     pub bitcoin_max_deposits_per_lot: usize,
+
+    /// Enable tokio console subscriber
+    #[arg(long, env = "ENABLE_TOKIO_CONSOLE_SUBSCRIBER", default_value = "false")]
+    pub enable_tokio_console_subscriber: bool,
 }
 
 fn parse_hex_string(s: &str) -> std::result::Result<[u8; 32], String> {

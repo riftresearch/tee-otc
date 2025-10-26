@@ -15,6 +15,7 @@ devnet = { workspace = true}
 tokio = { workspace = true}
 alloy = {workspace = true}
 tracing-subscriber = {workspace = true}
+console-subscriber = {workspace = true}
 snafu = {workspace = true}
 tracing = {workspace = true}
 blockchain-utils = {workspace = true}

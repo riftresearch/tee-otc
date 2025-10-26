@@ -15,4 +15,5 @@ rand = { workspace = true }
 snafu = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+console-subscriber = { workspace = true }
 blockchain-utils = { workspace = true }

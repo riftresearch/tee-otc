@@ -6,7 +6,7 @@ pub use alloy_ext::*;
 pub use bitcoin_wallet::*;
 pub use fee_calc::*;
 pub use receive_auth_helper::*;
-use snafu::ResultExt;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 pub fn handle_background_thread_result<T, E>(
     result: Option<Result<Result<T, E>, tokio::task::JoinError>>,
@@ -32,11 +32,22 @@ pub enum InitLoggerError {
     },
 }
 
-pub fn init_logger(log_level: &str) -> Result<(), InitLoggerError> {
-    tracing_subscriber::fmt()
-        .with_env_filter(log_level)
-        .try_init()
-        .context(LoggerFailedSnafu)?;
+pub fn init_logger<L>(
+    log_level: &str,
+    console_layer: Option<L>,
+) -> Result<(), InitLoggerError>
+where
+    L: Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
+{
+    tracing_subscriber::registry()
+        .with(console_layer)
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_line_number(true)
+                .with_filter(EnvFilter::new(log_level)),
+        )
+        .init();
 
     Ok(())
 }
