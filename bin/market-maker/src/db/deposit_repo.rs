@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use otc_models::{Currency, Lot};
 use snafu::prelude::*;
 use sqlx::{postgres::PgRow, PgPool, Row};
+use tracing::info;
 use uuid::Uuid;
 
 #[derive(Debug, Clone)]
@@ -271,6 +272,7 @@ impl DepositStore for DepositRepository {
             });
         }
 
+        info!("Collected Deposits to fill {lot:?}: {deposits:?}");
         if sum >= lot.amount {
             Ok(FillStatus::Full(deposits))
         } else {
