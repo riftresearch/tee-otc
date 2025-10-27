@@ -11,7 +11,7 @@ use tokio_tungstenite::{
     connect_async_with_config,
     tungstenite::{http, Message},
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -41,9 +41,9 @@ type Result<T, E = RfqClientError> = std::result::Result<T, E>;
 
 type WebSocketMessage = Message;
 
-const PING_INTERVAL_SECS: u64 = 30;
-const PING_TIMEOUT_SECS: u64 = 10;
-const READ_TIMEOUT_SECS: u64 = 60;
+const PING_INTERVAL_SECS: u64 = 10;  // Reduced from 30 - faster detection
+const PING_TIMEOUT_SECS: u64 = 5;    // Reduced from 10 - faster timeout
+const READ_TIMEOUT_SECS: u64 = 20;   // Reduced from 60 - faster fallback
 const WS_PROTOCOL_PING_INTERVAL_SECS: u64 = 20;
 
 struct PendingPing {
@@ -109,11 +109,14 @@ impl RfqClient {
         loop {
             match self.connect_and_run().await {
                 Ok(()) => {
-                    info!("RFQ WebSocket connection closed normally");
+                    info!("RFQ WebSocket connection closed normally, will reconnect");
                     reconnect_attempts = 0;
                 }
                 Err(e) => {
-                    error!("RFQ WebSocket error: {}", e);
+                    error!(
+                        "RFQ WebSocket error: {}, reconnecting (attempt {}/{})",
+                        e, reconnect_attempts + 1, self.config.max_reconnect_attempts
+                    );
                     reconnect_attempts += 1;
 
                     if reconnect_attempts >= self.config.max_reconnect_attempts {
@@ -167,7 +170,7 @@ impl RfqClient {
             .await
             .context(WebSocketConnectionSnafu)?;
 
-        info!("RFQ WebSocket connected, authenticated via headers");
+        info!("RFQ WebSocket connected and authenticated - will verify with ping/pong");
 
         let (ws_sink, mut ws_stream) = ws_stream.split();
 
@@ -216,11 +219,13 @@ impl RfqClient {
                     _ = interval.tick() => {
                         let mut new_ping_id = None;
                         let mut timed_out = false;
+                        let mut last_ping_id = None;
                         {
                             let guard = pending_for_ping.lock().await;
                             if let Some(pending) = guard.as_ref() {
                                 if pending.sent_at.elapsed() >= Duration::from_secs(PING_TIMEOUT_SECS) {
                                     timed_out = true;
+                                    last_ping_id = Some(pending.id);
                                 }
                             } else {
                                 new_ping_id = Some(Uuid::new_v4());
@@ -229,8 +234,9 @@ impl RfqClient {
 
                         if timed_out {
                             warn!(
-                                "RFQ ping watchdog detected no pong within {}s; closing connection",
-                                PING_TIMEOUT_SECS
+                                "RFQ ping watchdog detected no pong within {}s; closing connection (last ping: {:?})",
+                                PING_TIMEOUT_SECS,
+                                last_ping_id
                             );
                             notify_for_ping.notify_waiters();
                             break;
@@ -254,6 +260,7 @@ impl RfqClient {
                                         break;
                                     }
 
+                                    debug!("Sent RFQ ping {}", ping_id);
                                     let mut guard = pending_for_ping.lock().await;
                                     *guard = Some(PendingPing {
                                         id: ping_id,
@@ -309,7 +316,7 @@ impl RfqClient {
         loop {
             tokio::select! {
                 _ = disconnect_notify.notified() => {
-                    warn!("RFQ disconnect requested by watchdog");
+                    warn!("RFQ disconnect requested by watchdog (ping timeout or task failure)");
                     break;
                 }
                 _ = &mut read_timeout => {
@@ -339,6 +346,7 @@ impl RfqClient {
                                                     .map(|pending| pending.id == *request_id)
                                                     .unwrap_or(false)
                                                 {
+                                                    debug!("Received pong for ping {}, connection healthy", request_id);
                                                     *guard = None;
                                                 }
 
@@ -384,7 +392,7 @@ impl RfqClient {
                             }
                         }
                         None => {
-                            info!("RFQ WebSocket stream ended by server");
+                            info!("RFQ WebSocket stream ended by server (graceful shutdown or connection lost)");
                             disconnect_notify.notify_waiters();
                             break;
                         }

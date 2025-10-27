@@ -43,3 +43,6 @@ mod timeout_triggers_cancel_test;
 
 #[cfg(test)]
 mod liquidity_endpoint_test;
+
+#[cfg(test)]
+mod rfq_reconnection_test;

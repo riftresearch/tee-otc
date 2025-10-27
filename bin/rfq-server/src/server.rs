@@ -29,9 +29,9 @@ use std::{
     sync::{Arc, OnceLock},
     time::Duration,
 };
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, task::JoinSet};
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -331,14 +331,17 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         tx.clone(),
         "1.0.0".to_string(), // Default protocol version
     );
-
+    debug!("MM {} registered, spawning background tasks", mm_uuid);
 
     let (sender_tx, mut sender_rx) = mpsc::channel::<Message>(100);
+
+    // Track all background tasks to ensure proper cleanup
+    let mut tasks = JoinSet::new();
 
     // Spawn task to handle outgoing messages from the registry
     let mm_id_clone = mm_uuid;
     let sender_tx_clone = sender_tx.clone();
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         while let Some(msg) = rx.recv().await {
             if let Ok(json) = serde_json::to_string(&msg) {
                 if sender_tx_clone.send(Message::Text(json)).await.is_err() {
@@ -347,12 +350,13 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
                 }
             }
         }
+        debug!("Registry-to-socket task exited for MM {}", mm_id_clone);
     });
 
     // Spawn task to forward messages to the socket
     let mm_id_clone = mm_uuid;
     let mut sender = sender;
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         while let Some(msg) = sender_rx.recv().await {
             if sender.send(msg).await.is_err() {
                 error!(
@@ -362,12 +366,13 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
                 break;
             }
         }
+        debug!("Socket writer task exited for MM {}", mm_id_clone);
     });
 
     // Spawn WebSocket protocol-level ping task for proxy keepalive
     let ws_ping_sender = sender_tx.clone();
     let ws_ping_mm_id = mm_uuid;
-    tokio::spawn(async move {
+    tasks.spawn(async move {
         let mut interval = tokio::time::interval(Duration::from_secs(20));
         // Skip first tick to avoid immediate ping
         interval.tick().await;
@@ -382,95 +387,117 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
                 break;
             }
         }
+        debug!("Ping task exited for MM {}", ws_ping_mm_id);
     });
 
-    // Handle incoming messages
-    while let Some(msg) = receiver.next().await {
-        match msg {
-            Ok(Message::Text(text)) => {
-                let mm_registry = state.mm_registry.clone();
-                let sender_tx_task = sender_tx.clone();
-                tokio::spawn(async move {
-                    match serde_json::from_str::<ProtocolMessage<RFQResponse>>(&text) {
-                        Ok(msg) => match &msg.payload {
-                            RFQResponse::QuoteResponse { request_id, .. } => {
-                                // Route the response to the appropriate aggregator
-                                mm_registry
-                                    .handle_quote_response(*request_id, msg.payload.clone())
-                                    .await;
-                            }
-                            RFQResponse::LiquidityResponse { request_id, .. } => {
-                                // Route the liquidity response to the appropriate aggregator
-                                mm_registry
-                                    .handle_quote_response(*request_id, msg.payload.clone())
-                                    .await;
-                            }
-                            RFQResponse::Pong { .. } => {
-                                // Handle pong for keepalive
-                            }
-                            RFQResponse::Ping { request_id, .. } => {
-                                let pong_message = ProtocolMessage {
-                                    version: msg.version.clone(),
-                                    sequence: msg.sequence,
-                                    payload: RFQRequest::Pong {
-                                        request_id: *request_id,
-                                        timestamp: utc::now(),
-                                    },
-                                };
+    // Handle incoming messages - monitor both messages and background tasks
+    loop {
+        tokio::select! {
+            // Check if any background task died
+            Some(result) = tasks.join_next() => {
+                match result {
+                    Ok(_) => {
+                        warn!("Background task exited for MM {}, closing connection", mm_uuid);
+                    }
+                    Err(e) => {
+                        error!("Background task panicked for MM {}: {}", mm_uuid, e);
+                    }
+                }
+                break;
+            }
+            // Handle incoming WebSocket messages
+            Some(msg) = receiver.next() => {
+                match msg {
+                    Ok(Message::Text(text)) => {
+                        let mm_registry = state.mm_registry.clone();
+                        let sender_tx_task = sender_tx.clone();
+                        tokio::spawn(async move {
+                            match serde_json::from_str::<ProtocolMessage<RFQResponse>>(&text) {
+                                Ok(msg) => match &msg.payload {
+                                    RFQResponse::QuoteResponse { request_id, .. } => {
+                                        // Route the response to the appropriate aggregator
+                                        mm_registry
+                                            .handle_quote_response(*request_id, msg.payload.clone())
+                                            .await;
+                                    }
+                                    RFQResponse::LiquidityResponse { request_id, .. } => {
+                                        // Route the liquidity response to the appropriate aggregator
+                                        mm_registry
+                                            .handle_quote_response(*request_id, msg.payload.clone())
+                                            .await;
+                                    }
+                                    RFQResponse::Pong { .. } => {
+                                        // Handle pong for keepalive
+                                    }
+                                    RFQResponse::Ping { request_id, .. } => {
+                                        let pong_message = ProtocolMessage {
+                                            version: msg.version.clone(),
+                                            sequence: msg.sequence,
+                                            payload: RFQRequest::Pong {
+                                                request_id: *request_id,
+                                                timestamp: utc::now(),
+                                            },
+                                        };
 
-                                match serde_json::to_string(&pong_message) {
-                                    Ok(json) => {
-                                        if let Err(err) =
-                                            sender_tx_task.send(Message::Text(json)).await
-                                        {
-                                            warn!(
-                                                market_maker_id = %mm_uuid,
-                                                error = %err,
-                                                "Failed to send RFQ keepalive pong to market maker",
-                                            );
+                                        match serde_json::to_string(&pong_message) {
+                                            Ok(json) => {
+                                                if let Err(err) =
+                                                    sender_tx_task.send(Message::Text(json)).await
+                                                {
+                                                    warn!(
+                                                        market_maker_id = %mm_uuid,
+                                                        error = %err,
+                                                        "Failed to send RFQ keepalive pong to market maker",
+                                                    );
+                                                }
+                                            }
+                                            Err(err) => {
+                                                error!(
+                                                    market_maker_id = %mm_uuid,
+                                                    error = %err,
+                                                    "Failed to serialize RFQ keepalive pong for market maker",
+                                                );
+                                            }
                                         }
                                     }
-                                    Err(err) => {
-                                        error!(
-                                            market_maker_id = %mm_uuid,
-                                            error = %err,
-                                            "Failed to serialize RFQ keepalive pong for market maker",
+                                    RFQResponse::Error {
+                                        error_code,
+                                        message,
+                                        ..
+                                    } => {
+                                        warn!(
+                                            "Received error from market maker {}: {:?} - {}",
+                                            mm_uuid, error_code, message
                                         );
                                     }
+                                },
+                                Err(e) => {
+                                    error!("Failed to parse RFQ message: {}", e);
                                 }
                             }
-                            RFQResponse::Error {
-                                error_code,
-                                message,
-                                ..
-                            } => {
-                                warn!(
-                                    "Received error from market maker {}: {:?} - {}",
-                                    mm_uuid, error_code, message
-                                );
-                            }
-                        },
-                        Err(e) => {
-                            error!("Failed to parse RFQ message: {}", e);
-                        }
+                        });
                     }
-                });
+                    Ok(Message::Close(_)) => {
+                        info!("Market maker {} disconnected", mm_uuid);
+                        break;
+                    }
+                    Err(e) => {
+                        error!("WebSocket error for market maker {}: {}", mm_uuid, e);
+                        break;
+                    }
+                    _ => {}
+                }
             }
-            Ok(Message::Close(_)) => {
-                info!("Market maker {} disconnected", mm_uuid);
-                break;
-            }
-            Err(e) => {
-                error!("WebSocket error for market maker {}: {}", mm_uuid, e);
-                break;
-            }
-            _ => {}
         }
     }
 
+    // Cleanup - shutdown all background tasks
+    debug!("MM {} connection handler exiting, shutting down background tasks", mm_uuid);
+    tasks.shutdown().await;
+    
     // Unregister on disconnect
     state.mm_registry.unregister(mm_uuid);
-    info!("Market maker {} unregistered", mm_uuid);
+    info!("Market maker {} unregistered, background tasks shut down", mm_uuid);
 }
 
 async fn request_quotes(
