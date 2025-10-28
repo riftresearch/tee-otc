@@ -407,6 +407,17 @@ pub async fn convert_btc_to_cbbtc(
         .fail();
     }
 
+    info!("Consolidating bitcoin deposits before rebalance");
+    let consolidation_summary = sender_wallet.consolidate(&Lot {
+        currency: Currency {
+            chain: ChainType::Bitcoin,
+            token: TokenIdentifier::Native,
+            decimals: 8,
+        },
+        amount: U256::MAX,
+    }, 100).await.context(WalletSnafu)?;
+    info!("Consolidation summary during rebalance: {:?}", consolidation_summary);
+
     let btc_account_id = coinbase_client.get_btc_account_id().await?;
 
     // get btc deposit address
@@ -504,6 +515,17 @@ pub async fn convert_cbbtc_to_btc(
         }
         .fail();
     }
+
+    info!("Consolidating cbbtc deposits before rebalance");
+    let consolidation_summary = sender_wallet.consolidate(&Lot {
+        currency: Currency {
+            chain: ChainType::Ethereum,
+            token: cbbtc.clone(),
+            decimals: 8,
+        },
+        amount: U256::MAX,
+    }, 200).await.context(WalletSnafu)?;
+    info!("Consolidation summary during rebalance: {:?}", consolidation_summary);
 
     let btc_account_id = coinbase_client.get_btc_account_id().await?;
 
