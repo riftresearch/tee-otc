@@ -17,6 +17,7 @@ use crate::{
     },
     OtcServerArgs, Result,
 };
+use async_trait::async_trait;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
@@ -27,9 +28,9 @@ use axum::{
     routing::{get, post, Router},
     Json,
 };
+use mm_websocket_server::{MessageHandler, MessageSender};
 use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use dstack_sdk::dstack_client::{DstackClient, GetQuoteResponse, InfoResponse};
-use futures_util::{SinkExt, StreamExt};
 use metrics::{describe_gauge, describe_histogram, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
@@ -44,7 +45,7 @@ use std::{
 };
 use tokio::{sync::mpsc, time::Duration};
 use tower_http::cors::{AllowOrigin, CorsLayer};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -65,7 +66,6 @@ struct Status {
     version: String,
 }
 
-const MM_PING_INTERVAL: Duration = Duration::from_secs(30);
 const QUOTE_LATENCY_METRIC: &str = "otc_quote_response_seconds";
 static PROMETHEUS_HANDLE: OnceLock<Arc<PrometheusHandle>> = OnceLock::new();
 
@@ -621,328 +621,297 @@ async fn get_connected_market_makers(
     Json(ConnectedMarketMakersResponse { market_makers })
 }
 
-async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
-    info!("Market maker {} WebSocket connection established", mm_uuid);
+// ========== MM WebSocket Handler Implementation ==========
 
-    // Channel for sending messages to the MM
-    let (tx, mut rx) = mpsc::channel::<ProtocolMessage<MMRequest>>(100);
+/// Message handler for OTC protocol
+struct OTCMessageHandler {
+    db: Database,
+    mm_registry: Arc<MMRegistry>,
+    swap_monitoring_service: Arc<SwapMonitoringService>,
+    chain_registry: Arc<ChainRegistry>,
+    swap_manager: Arc<SwapManager>,
+}
 
-    // Split the socket for bidirectional communication
-    let (sender, mut receiver) = socket.split();
+#[async_trait]
+impl MessageHandler for OTCMessageHandler {
+    async fn handle_message(&self, mm_id: Uuid, text: &str) -> Option<String> {
+        match serde_json::from_str::<ProtocolMessage<MMResponse>>(text) {
+                Ok(msg) => {
+                    let ProtocolMessage {
+                        version: _,
+                        sequence: _,
+                        payload,
+                    } = msg;
 
-    // Register the MM immediately (already authenticated via headers)
-    state.mm_registry.register(
-        mm_uuid,
-        tx.clone(),
-        "1.0.0".to_string(), // Default protocol version
-    );
+                match payload {
+                    MMResponse::QuoteValidated {
+                        quote_id, accepted, ..
+                    } => {
+                        info!(
+                            market_maker_id = %mm_id,
+                            quote_id = %quote_id,
+                            accepted = %accepted,
+                            "Market maker validated quote",
+                        );
+                        self.mm_registry
+                            .handle_validation_response(&mm_id, &quote_id, accepted);
+                        None
+                    }
+                    MMResponse::LatestDepositVaultTimestampResponse {
+                        swap_settlement_timestamp,
+                        ..
+                    } => {
+                        info!(
+                            market_maker_id = %mm_id,
+                            "Received latest deposit vault timestamp from MM",
+                        );
+                        let db = self.db.clone();
+                        let mm_registry = self.mm_registry.clone();
+                        let chain_registry = self.chain_registry.clone();
+                        let swap_manager = self.swap_manager.clone();
+                        
+                        tokio::spawn(async move {
+                            match db
+                                .swaps()
+                                .get_settled_swaps_for_market_maker(mm_id, swap_settlement_timestamp)
+                                .await
+                            {
+                                Ok(settled_swaps) => {
+                                    if !settled_swaps.is_empty() {
+                                        let master_key = swap_manager.master_key_bytes();
 
-    let ping_registry = state.mm_registry.clone();
-    tokio::spawn(async move {
-        let ping_mm_id = mm_uuid;
-        let mut interval = tokio::time::interval(MM_PING_INTERVAL);
-        loop {
-            interval.tick().await;
-            if let Err(err) = ping_registry.send_ping(&ping_mm_id).await {
-                warn!(
-                    market_maker_id = %ping_mm_id,
-                    error = %err,
-                    "Stopping OTC keepalive pings"
-                );
-                break;
+                                        for swap in settled_swaps {
+                                            let Some(chain_ops) = chain_registry.get(&swap.deposit_chain) else {
+                                                error!(
+                                                    market_maker_id = %mm_id,
+                                                    swap_id = %swap.swap_id,
+                                                    deposit_chain = ?swap.deposit_chain,
+                                                    "Failed to load chain operations for settled swap notification"
+                                                );
+                                                continue;
+                                            };
+
+                                            let wallet = match chain_ops.derive_wallet(&master_key, &swap.user_deposit_salt)
+                                            {
+                                                Ok(wallet) => wallet,
+                                                Err(err) => {
+                                                    error!(
+                                                        market_maker_id = %mm_id,
+                                                        swap_id = %swap.swap_id,
+                                                        error = %err,
+                                                        "Failed to derive user deposit wallet for settled swap notification"
+                                                    );
+                                                    continue;
+                                                }
+                                            };
+
+                                            let private_key = wallet.private_key().to_string();
+
+                                            mm_registry
+                                                .notify_swap_complete(
+                                                    &mm_id,
+                                                    &swap.swap_id,
+                                                    &private_key,
+                                                    &swap.lot,
+                                                    &swap.user_deposit_tx_hash,
+                                                    &swap.swap_settlement_timestamp,
+                                                )
+                                                .await;
+                                        }
+                                    }
+                                }
+                                Err(err) => {
+                                    error!(
+                                        market_maker_id = %mm_id,
+                                        error = %err,
+                                        "Failed to fetch settled swaps for notification"
+                                    );
+                                }
+                            }
+                        });
+                        None
+                    }
+                    MMResponse::Batches {
+                        batches,
+                        ..
+                    } => {
+                        for batch in batches {
+                            let tx_hash = batch.tx_hash;
+                            let swap_ids = batch.swap_ids;
+                            let batch_nonce_digest = batch.batch_nonce_digest;
+                            info!(
+                                market_maker_id = %mm_id,
+                                tx_hash = %tx_hash,
+                                "Received batch payment notification from MM",
+                            );
+                            let swap_monitoring_service = self.swap_monitoring_service.clone();
+                            tokio::spawn(async move {
+                                let res = swap_monitoring_service
+                                    .track_batch_payment(
+                                        mm_id,
+                                        &tx_hash,
+                                        swap_ids.to_vec(),
+                                        batch_nonce_digest,
+                                    )
+                                    .await;
+                                if let Err(e) = res {
+                                    error!(
+                                        market_maker_id = %mm_id,
+                                        tx_hash = %tx_hash,
+                                        swap_ids = ?swap_ids,
+                                        error = %e,
+                                        "Failed to track batch payment for MM",
+                                    );
+                                }
+                            });
+                        }
+                        None
+                    }
+                    MMResponse::PaymentQueued { .. } => {
+                        // Handle payment queued notification
+                        None
+                    }
+                    MMResponse::SwapCompleteAck { .. } => {
+                        // Handle swap complete acknowledgment
+                        None
+                    }
+                    MMResponse::Error { .. } => {
+                        // Handle error response
+                        error!("Received error response from market maker {}", mm_id);
+                        None
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to parse MM message: {}", e);
+                None
             }
         }
-    });
+    }
 
-    let mm_id = mm_uuid.to_string();
+    async fn on_connect(&self, mm_id: Uuid, _sender: &MessageSender) -> Result<(), mm_websocket_server::handler::MessageError> {
+        // Send pending swaps awaiting MM deposit
+        match self.db.swaps().get_waiting_mm_deposit_swaps(mm_id).await {
+            Ok(pending_swaps) => {
+                for swap in pending_swaps {
+                    self.mm_registry
+                        .notify_user_deposit_confirmed(
+                            &mm_id,
+                            &swap.swap_id,
+                            &swap.quote_id,
+                            swap.user_destination_address.as_str(),
+                            swap.mm_nonce,
+                            &swap.expected_lot,
+                            swap.user_deposit_confirmed_at,
+                        )
+                        .await;
+                }
+            }
+            Err(err) => {
+                error!(
+                    market_maker_id = %mm_id,
+                    error = %err,
+                    "Failed to fetch swaps awaiting MM deposit"
+                );
+            }
+        }
 
-    let (sender_tx, mut sender_rx) = mpsc::channel::<Message>(100);
+        // Request latest deposit vault timestamp
+        if let Err(e) = self.mm_registry.request_latest_deposit_vault_timestamp(&mm_id).await {
+            error!(
+                market_maker_id = %mm_id,
+                error = %e,
+                "Failed to request latest deposit vault timestamp"
+            );
+        } else {
+            info!("Requested latest deposit vault timestamp from market maker {}", mm_id);
+        }
 
-    // Spawn task to handle outgoing messages from the registry
-    let mm_id_clone = mm_id.clone();
-    let sender_tx_clone = sender_tx.clone();
+        // Get and request new batches
+        match self.db.batches().get_latest_known_batch_timestamp_by_market_maker(&mm_id).await {
+            Ok(newest_batch_timestamp) => {
+                info!("Latest known batch timestamp for market maker {} is {:#?}", mm_id, newest_batch_timestamp);
+                
+                if let Err(e) = self.mm_registry.request_new_batches(&mm_id, newest_batch_timestamp).await {
+                    error!(
+                        market_maker_id = %mm_id,
+                        error = %e,
+                        "Failed to request new batches"
+                    );
+                } else {
+                    info!("Requested new batches from market maker {}", mm_id);
+                }
+            }
+            Err(err) => {
+                error!(
+                    market_maker_id = %mm_id,
+                    error = %err,
+                    "Failed to get latest known batch timestamp"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn on_disconnect(&self, mm_id: Uuid, connection_id: Uuid) {
+        self.mm_registry.unregister(mm_id, connection_id);
+        info!(
+            market_maker_id = %mm_id,
+            connection_id = %connection_id,
+            "Market maker disconnected"
+        );
+    }
+}
+
+async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
+    // Generate unique connection ID to prevent race conditions
+    let connection_id = Uuid::new_v4();
+    
+    // Create channel for registry to send messages to the connection
+    let (tx, rx) = mpsc::channel::<Message>(100);
+
+    // Convert ProtocolMessage channel from registry into Message channel
+    let (protocol_tx, mut protocol_rx) = mpsc::channel::<ProtocolMessage<MMRequest>>(100);
+    
+    // Register the MM with the registry
+    state.mm_registry.register(
+        mm_uuid,
+        connection_id,
+        protocol_tx,
+        "1.0.0".to_string(),
+    );
+
+    // Spawn task to convert ProtocolMessage to Message
+    let tx_clone = tx.clone();
     tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
+        while let Some(msg) = protocol_rx.recv().await {
             if let Ok(json) = serde_json::to_string(&msg) {
-                if sender_tx_clone.send(Message::Text(json)).await.is_err() {
-                    error!("Failed to send message to market maker {}", mm_id_clone);
+                if tx_clone.send(Message::Text(json)).await.is_err() {
                     break;
                 }
             }
         }
     });
 
-    // Spawn task to forward messages to the socket
-    let mm_id_clone = mm_id.clone();
-    let mut sender = sender;
-    tokio::spawn(async move {
-        while let Some(msg) = sender_rx.recv().await {
-            if sender.send(msg).await.is_err() {
-                error!(
-                    "Failed to send message to market maker {} socket",
-                    mm_id_clone
-                );
-                break;
-            }
-        }
+    // Create handler
+    let handler = Arc::new(OTCMessageHandler {
+        db: state.db.clone(),
+        mm_registry: state.mm_registry.clone(),
+        swap_monitoring_service: state.swap_monitoring_service.clone(),
+        chain_registry: state.chain_registry.clone(),
+        swap_manager: state.swap_manager.clone(),
     });
 
-    // Spawn WebSocket protocol-level ping task for proxy keepalive
-    let ws_ping_sender = sender_tx.clone();
-    let ws_ping_mm_id = mm_id.clone();
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(Duration::from_secs(20));
-        // Skip first tick to avoid immediate ping
-        interval.tick().await;
-
-        loop {
-            interval.tick().await;
-            if ws_ping_sender.send(Message::Ping(vec![])).await.is_err() {
-                info!(
-                    "WebSocket protocol ping channel closed for market maker {}",
-                    ws_ping_mm_id
-                );
-                break;
-            }
-        }
-    });
-
-    match state.db.swaps().get_waiting_mm_deposit_swaps(mm_uuid).await {
-        Ok(pending_swaps) => {
-            for swap in pending_swaps {
-                state
-                    .mm_registry
-                    .notify_user_deposit_confirmed(
-                        &mm_uuid,
-                        &swap.swap_id,
-                        &swap.quote_id,
-                        swap.user_destination_address.as_str(),
-                        swap.mm_nonce,
-                        &swap.expected_lot,
-                        swap.user_deposit_confirmed_at,
-                    )
-                    .await;
-            }
-        }
-        Err(err) => {
-            error!(
-                market_maker_id = %mm_id,
-                error = %err,
-                "Failed to fetch swaps awaiting MM deposit"
-            );
-        }
-    }
-
-    state.mm_registry.request_latest_deposit_vault_timestamp(&mm_uuid).await.expect("Failed to request latest deposit vault timestamp");
-    info!("Requested latest deposit vault timestamp from market maker {}", mm_id);
-
-    let newest_batch_timestamp = state.db.batches().get_latest_known_batch_timestamp_by_market_maker(&mm_uuid).await.expect("Failed to get latest known batch timestamp");
-    info!("Latest known batch timestamp for market maker {} is {:#?}", mm_id, newest_batch_timestamp);
-
-    state.mm_registry.request_new_batches(&mm_uuid, newest_batch_timestamp).await.expect("Failed to request new batches");
-    info!("Requested new batches from market maker {}", mm_id);
-
-    // Handle incoming messages
-    let mm_id_clone = mm_id.clone();
-    let mm_registry = state.mm_registry.clone();
-    while let Some(msg) = receiver.next().await {
-        match msg {
-            Ok(Message::Text(text)) => {
-                match serde_json::from_str::<ProtocolMessage<MMResponse>>(&text) {
-                    Ok(msg) => {
-                        let ProtocolMessage {
-                            version,
-                            sequence,
-                            payload,
-                        } = msg;
-
-                        match payload {
-                            MMResponse::QuoteValidated {
-                                quote_id, accepted, ..
-                            } => {
-                                info!(
-                                    market_maker_id = %mm_id_clone,
-                                    quote_id = %quote_id,
-                                    accepted = %accepted,
-                                    "Market maker validated quote",
-                                );
-                                mm_registry
-                                .handle_validation_response(&mm_uuid, &quote_id, accepted);
-                            }
-                            MMResponse::LatestDepositVaultTimestampResponse {
-                                swap_settlement_timestamp,
-                                ..
-                            } => {
-                                info!(
-                                    market_maker_id = %mm_id_clone,
-                                    "Received latest deposit vault timestamp from MM",
-                                );
-                                let state = state.clone();
-                                let mm_uuid = mm_uuid;
-                                tokio::spawn(async move {
-                                    match state
-                                        .db
-                                        .swaps()
-                                        .get_settled_swaps_for_market_maker(mm_uuid, swap_settlement_timestamp)
-                                        .await
-                                    {
-                                        Ok(settled_swaps) => {
-                                            if !settled_swaps.is_empty() {
-                                                let master_key = state.swap_manager.master_key_bytes();
-
-                                                for swap in settled_swaps {
-                                                    let Some(chain_ops) = state.chain_registry.get(&swap.deposit_chain) else {
-                                                        error!(
-                                                            market_maker_id = %mm_uuid,
-                                                            swap_id = %swap.swap_id,
-                                                            deposit_chain = ?swap.deposit_chain,
-                                                            "Failed to load chain operations for settled swap notification"
-                                                        );
-                                                        continue;
-                                                    };
-
-                                                    let wallet = match chain_ops.derive_wallet(&master_key, &swap.user_deposit_salt)
-                                                    {
-                                                        Ok(wallet) => wallet,
-                                                        Err(err) => {
-                                                            error!(
-                                                                market_maker_id = %mm_uuid,
-                                                                swap_id = %swap.swap_id,
-                                                                error = %err,
-                                                                "Failed to derive user deposit wallet for settled swap notification"
-                                                            );
-                                                            continue;
-                                                        }
-                                                    };
-
-                                                    let private_key = wallet.private_key().to_string();
-
-                                                    state
-                                                        .mm_registry
-                                                        .notify_swap_complete(
-                                                            &mm_uuid,
-                                                            &swap.swap_id,
-                                                            &private_key,
-                                                            &swap.lot,
-                                                            &swap.user_deposit_tx_hash,
-                                                            &swap.swap_settlement_timestamp,
-                                                        )
-                                                        .await;
-                                                }
-                                            }
-                                        }
-                                        Err(err) => {
-                                            error!(
-                                                market_maker_id = %mm_uuid,
-                                                error = %err,
-                                                "Failed to fetch settled swaps for notification"
-                                            );
-                                        }
-                                    }
-                                });
-                            }
-                            MMResponse::Ping { request_id, .. } => {
-                                let pong_message = ProtocolMessage {
-                                    version,
-                                    sequence,
-                                    payload: MMRequest::Pong {
-                                        request_id,
-                                        timestamp: utc::now(),
-                                    },
-                                };
-
-                                match serde_json::to_string(&pong_message) {
-                                    Ok(json) => {
-                                        if let Err(err) =
-                                            sender_tx.clone().send(Message::Text(json)).await
-                                        {
-                                            warn!(
-                                                market_maker_id = %mm_id_clone,
-                                                error = %err,
-                                                "Failed to send keepalive pong to market maker",
-                                            );
-                                        }
-                                    }
-                                    Err(err) => {
-                                        error!(
-                                            market_maker_id = %mm_id_clone,
-                                            error = %err,
-                                            "Failed to serialize keepalive pong for market maker",
-                                        );
-                                    }
-                                }
-                            }
-                            MMResponse::Pong { .. } => {
-                                // Handle pong for keepalive
-                            }
-                            MMResponse::Batches {
-                                batches,
-                                ..
-                            } => {
-                                for batch in batches {
-                                    let tx_hash = batch.tx_hash;
-                                    let swap_ids = batch.swap_ids;
-                                    let batch_nonce_digest = batch.batch_nonce_digest;
-                                    info!(
-                                        market_maker_id = %mm_id_clone,
-                                        tx_hash = %tx_hash,
-                                        "Received batch payment notification from MM",
-                                    );
-                                    let swap_monitoring_service = state.swap_monitoring_service.clone();
-                                    let mm_uuid_clone = mm_uuid;
-                                    tokio::spawn(async move {
-                                        let res = swap_monitoring_service
-                                            .track_batch_payment(
-                                                mm_uuid_clone,
-                                                &tx_hash,
-                                                swap_ids.to_vec(),
-                                                batch_nonce_digest,
-                                            )
-                                            .await;
-                                        if let Err(e) = res {
-                                            error!(
-                                                market_maker_id = %mm_uuid_clone,
-                                                tx_hash = %tx_hash,
-                                                swap_ids = ?swap_ids,
-                                                error = %e,
-                                                "Failed to track batch payment for MM",
-                                            );
-                                        }
-                                    });
-                                }
-                            }
-                            MMResponse::PaymentQueued { .. } => {
-                                // Handle payment queued notification
-                            }
-                            MMResponse::SwapCompleteAck { .. } => {
-                                // Handle swap complete acknowledgment
-                            }
-                            MMResponse::Error { .. } => {
-                                // Handle error response
-                                error!("Received error response from market maker {}", mm_id);
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to parse MM message: {}", e);
-                    }
-                }
-            }
-            Ok(Message::Close(_)) => {
-                info!("Market maker {} disconnected", mm_id);
-                break;
-            }
-            Err(e) => {
-                error!("WebSocket error for market maker {}: {}", mm_id, e);
-                break;
-            }
-            _ => {}
-        }
-    }
-
-    // Unregister on disconnect
-    state.mm_registry.unregister(mm_uuid);
-    info!("Market maker {} unregistered", mm_id);
+    // Use the mm-websocket-server crate to handle the connection
+    let _ = mm_websocket_server::handle_mm_connection(
+        socket,
+        mm_uuid,
+        connection_id,
+        handler,
+        rx,
+    )
+    .await;
 }
 
 #[derive(Deserialize)]

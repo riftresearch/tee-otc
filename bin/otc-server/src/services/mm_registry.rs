@@ -32,6 +32,7 @@ type Result<T, E = MMRegistryError> = std::result::Result<T, E>;
 
 pub struct MarketMakerConnection {
     pub id: Uuid,
+    pub connection_id: Uuid, // Unique per connection instance
     pub sender: mpsc::Sender<ProtocolMessage<MMRequest>>,
     pub protocol_version: String,
 }
@@ -60,17 +61,20 @@ impl MMRegistry {
     pub fn register(
         &self,
         market_maker_id: Uuid,
+        connection_id: Uuid,
         sender: mpsc::Sender<ProtocolMessage<MMRequest>>,
         protocol_version: String,
     ) {
         info!(
             market_maker_id = %market_maker_id,
+            connection_id = %connection_id,
             protocol_version = %protocol_version,
             "Registering market maker connection"
         );
 
         let connection = MarketMakerConnection {
             id: market_maker_id,
+            connection_id,
             sender,
             protocol_version,
         };
@@ -78,9 +82,35 @@ impl MMRegistry {
         self.connections.insert(market_maker_id, connection);
     }
 
-    pub fn unregister(&self, market_maker_id: Uuid) {
-        info!(market_maker_id = %market_maker_id, "Unregistering market maker connection");
-        self.connections.remove(&market_maker_id);
+    /// Unregister a market maker connection only if the connection_id matches
+    ///
+    /// This prevents a race condition where:
+    /// 1. Connection A registers
+    /// 2. Connection B registers (overwrites A)
+    /// 3. Connection A calls unregister (should NOT remove B)
+    ///
+    /// Returns true if the connection was removed, false if it didn't match or wasn't found
+    pub fn unregister(&self, market_maker_id: Uuid, connection_id: Uuid) -> bool {
+        // Use remove_if to atomically check and remove only if connection_id matches
+        let removed = self.connections.remove_if(&market_maker_id, |_, conn| {
+            conn.connection_id == connection_id
+        }).is_some();
+
+        if removed {
+            info!(
+                market_maker_id = %market_maker_id,
+                connection_id = %connection_id,
+                "Unregistered market maker connection"
+            );
+        } else {
+            info!(
+                market_maker_id = %market_maker_id,
+                connection_id = %connection_id,
+                "Skipped unregister - connection_id mismatch or not found (likely already replaced by new connection)"
+            );
+        }
+
+        removed
     }
 
     #[must_use]
@@ -260,37 +290,6 @@ impl MMRegistry {
         }
     }
 
-    pub async fn send_ping(&self, market_maker_id: &Uuid) -> Result<()> {
-        let (protocol_version, sender) = {
-            let connection = self.connections.get(market_maker_id).ok_or_else(|| {
-                MMRegistryError::MarketMakerNotConnected {
-                    market_maker_id: market_maker_id.to_string(),
-                }
-            })?;
-
-            (
-                connection.protocol_version.clone(),
-                connection.sender.clone(),
-            )
-        };
-
-        let ping = ProtocolMessage {
-            version: protocol_version,
-            sequence: 0,
-            payload: MMRequest::Ping {
-                request_id: Uuid::new_v4(),
-                timestamp: utc::now(),
-            },
-        };
-
-        sender
-            .send(ping)
-            .await
-            .map_err(|e| MMRegistryError::MessageSendError { source: e })?;
-
-        Ok(())
-    }
-
     pub async fn validate_quote(
         &self,
         market_maker_id: &Uuid,
@@ -391,16 +390,43 @@ mod tests {
         let registry = MMRegistry::new();
         let (tx, _rx) = mpsc::channel(10);
         let mm_id = Uuid::new_v4();
+        let conn_id = Uuid::new_v4();
 
         // Register a market maker
-        registry.register(mm_id, tx, "1.0.0".to_string());
+        registry.register(mm_id, conn_id, tx, "1.0.0".to_string());
         assert!(registry.is_connected(mm_id));
         assert_eq!(registry.get_connection_count(), 1);
 
-        // Unregister
-        registry.unregister(mm_id);
+        // Unregister with correct connection_id
+        assert!(registry.unregister(mm_id, conn_id));
         assert!(!registry.is_connected(mm_id));
         assert_eq!(registry.get_connection_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_unregister_race_condition() {
+        let registry = MMRegistry::new();
+        let mm_id = Uuid::new_v4();
+        
+        // Connection A registers
+        let (tx_a, _rx_a) = mpsc::channel(10);
+        let conn_id_a = Uuid::new_v4();
+        registry.register(mm_id, conn_id_a, tx_a, "1.0.0".to_string());
+        assert!(registry.is_connected(mm_id));
+        
+        // Connection B registers (overwrites A)
+        let (tx_b, _rx_b) = mpsc::channel(10);
+        let conn_id_b = Uuid::new_v4();
+        registry.register(mm_id, conn_id_b, tx_b, "1.0.0".to_string());
+        assert!(registry.is_connected(mm_id));
+        
+        // Connection A tries to unregister - should NOT remove connection B
+        assert!(!registry.unregister(mm_id, conn_id_a));
+        assert!(registry.is_connected(mm_id), "Connection B should still be registered");
+        
+        // Connection B unregisters - should succeed
+        assert!(registry.unregister(mm_id, conn_id_b));
+        assert!(!registry.is_connected(mm_id));
     }
 
     #[tokio::test]
