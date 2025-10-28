@@ -146,7 +146,7 @@ impl DepositStore for DepositRepository {
     }
 
     async fn get_latest_deposit_vault_timestamp(&self) -> DepositRepositoryResult<Option<DateTime<Utc>>> {
-        let row: Option<(DateTime<Utc>,)> = sqlx::query_as(
+        let row: Option<(Option<DateTime<Utc>>,)> = sqlx::query_as(
             r#"
             SELECT MAX(created_at)
             FROM mm_deposits
@@ -155,7 +155,7 @@ impl DepositStore for DepositRepository {
         .fetch_optional(&self.pool)
         .await.context(DatabaseSnafu)?;
 
-        Ok(row.map(|t| t.0))
+        Ok(row.and_then(|t| t.0))
     }
 
     async fn take_deposits_that_fill_lot(&self, lot: &Lot, max_deposits: Option<usize>) -> DepositRepositoryResult<FillStatus> {

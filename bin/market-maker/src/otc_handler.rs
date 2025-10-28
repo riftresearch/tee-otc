@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use crate::db::{Deposit, DepositRepository, DepositStore, PaymentRepository, QuoteRepository};
 use crate::payment_manager::PaymentManager;
 use crate::websocket_client::MessageHandler;
-use otc_protocols::mm::{MMRequest, MMResponse, MMStatus, NetworkBatch, ProtocolMessage};
+use otc_protocols::mm::{MMRequest, MMResponse, NetworkBatch, ProtocolMessage};
 use std::sync::Arc;
 use tracing::{error, info, warn};
 
@@ -282,23 +282,6 @@ impl OTCMessageHandler {
                     payload: response,
                 })
             }
-
-            MMRequest::Ping { request_id, .. } => {
-                let response = MMResponse::Pong {
-                    request_id: *request_id,
-                    status: MMStatus::Active,
-                    version: env!("CARGO_PKG_VERSION").to_string(),
-                    timestamp: utc::now(),
-                };
-
-                Some(ProtocolMessage {
-                    version: msg.version.clone(),
-                    sequence: msg.sequence + 1,
-                    payload: response,
-                })
-            }
-
-            MMRequest::Pong { .. } => None,
         }
     }
 }

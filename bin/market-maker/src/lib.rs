@@ -3,7 +3,6 @@ mod balance_strat;
 mod batch_monitor;
 pub mod bitcoin_wallet;
 pub mod cb_bitcoin_converter;
-mod config;
 pub mod db;
 pub mod evm_wallet;
 mod liquidity_cache;
@@ -51,8 +50,8 @@ use crate::{
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("Configuration error: {}", source))]
-    Config { source: config::ConfigError },
+    #[snafu(display("Configuration error: {}", context))]
+    Config { context: String },
 
     #[snafu(display("WebSocket client error: {}", source))]
     WebSocketClient { source: websocket_client::WebSocketError },
@@ -328,11 +327,8 @@ pub async fn run_market_maker(
 ) -> Result<()> {
     let cancellation_token = CancellationToken::new();
     let mut join_set: JoinSet<Result<()>> = JoinSet::new();
-    let market_maker_id = Uuid::parse_str(&args.market_maker_id).map_err(|e| Error::Config {
-        source: config::ConfigError::InvalidUuid {
-            uuid: args.market_maker_id,
-            error: e,
-        },
+    let market_maker_id = Uuid::parse_str(&args.market_maker_id).map_err(|_| Error::Config {
+        context: format!("Invalid UUID: {}", args.market_maker_id),
     })?;
 
     info!("Starting market maker with ID: {}", market_maker_id);

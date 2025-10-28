@@ -119,25 +119,6 @@ impl RFQMessageHandler {
                 }
                 None
             }
-            RFQRequest::Ping {
-                request_id,
-                timestamp: _,
-            } => {
-                let response = RFQResponse::Pong {
-                    request_id: *request_id,
-                    timestamp: utc::now(),
-                };
-
-                Some(ProtocolMessage {
-                    version: msg.version.clone(),
-                    sequence: msg.sequence,
-                    payload: response,
-                })
-            }
-            RFQRequest::Pong { .. } => {
-                // Keep-alive acknowledgment from server, nothing to do
-                None
-            }
             RFQRequest::LiquidityRequest {
                 request_id,
                 timestamp: _,
