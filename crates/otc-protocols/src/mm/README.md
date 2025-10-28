@@ -43,14 +43,12 @@ let json = serde_json::to_string(&message)?;
 - `ValidateQuote`: Check if MM will fill a quote
 - `UserDeposited`: Notify MM of user deposit
 - `SwapComplete`: Provide user's private key
-- `Ping`: Health check
 
 ### Responses (MM → Server)
 
 - `QuoteValidated`: Accept/reject quote
 - `DepositInitiated`: MM has sent funds
 - `SwapCompleteAck`: Acknowledge completion
-- `Pong`: Health response
 - `Error`: Error response
 
 ## Versioning

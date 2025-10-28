@@ -49,18 +49,6 @@ pub enum RFQRequest {
         timestamp: DateTime<Utc>,
     },
 
-    /// Ping for keepalive
-    Ping {
-        request_id: Uuid,
-        timestamp: DateTime<Utc>,
-    },
-
-    /// Pong response to keepalive ping
-    Pong {
-        request_id: Uuid,
-        timestamp: DateTime<Utc>,
-    },
-
     /// Request for maximum swap sizes from MM
     LiquidityRequest {
         request_id: Uuid,
@@ -86,18 +74,6 @@ pub enum RFQResponse {
     QuoteResponse {
         request_id: Uuid,
         quote: RFQResult<Quote>,
-        timestamp: DateTime<Utc>,
-    },
-
-    /// Pong response
-    Pong {
-        request_id: Uuid,
-        timestamp: DateTime<Utc>,
-    },
-
-    /// Ping for keepalive initiated by market maker
-    Ping {
-        request_id: Uuid,
         timestamp: DateTime<Utc>,
     },
 
