@@ -38,6 +38,7 @@ pub trait DepositStore {
     async fn store_deposit(&self, deposit: &Deposit, swap_settlement_timestamp: DateTime<Utc>, associated_swap_id: Uuid) -> DepositRepositoryResult<()>;
     async fn get_latest_deposit_vault_timestamp(&self) -> DepositRepositoryResult<Option<DateTime<Utc>>>;
     async fn peek_all_available_deposits(&self, chain: Option<String>) -> DepositRepositoryResult<Vec<Deposit>>;
+    async fn unreserve_deposits(&self, private_keys: &[String]) -> DepositRepositoryResult<usize>;
 }
 
 #[derive(Clone)]
@@ -363,5 +364,28 @@ impl DepositStore for DepositRepository {
         }
 
         Ok(deposits)
+    }
+
+    async fn unreserve_deposits(&self, private_keys: &[String]) -> DepositRepositoryResult<usize> {
+        if private_keys.is_empty() {
+            return Ok(0);
+        }
+
+        let result = sqlx::query(
+            r#"
+            UPDATE mm_deposits
+            SET status = 'available',
+                reserved_by = NULL,
+                reserved_at = NULL
+            WHERE private_key = ANY($1)
+              AND status = 'reserved'
+            "#,
+        )
+        .bind(private_keys)
+        .execute(&self.pool)
+        .await
+        .context(DatabaseSnafu)?;
+
+        Ok(result.rows_affected() as usize)
     }
 }

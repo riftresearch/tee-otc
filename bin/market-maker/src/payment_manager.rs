@@ -421,6 +421,7 @@ async fn process_batch(
                 "Batch payment failed for {:?}: swap_ids={:?}, error={}",
                 chain_type, swap_ids, e
             );
+            // here
 
             // Clear in-flight tracking to allow retry on next reconnect replay
             for swap_id in &swap_ids {

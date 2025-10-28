@@ -183,9 +183,11 @@ impl Wallet for EVMWallet {
         }
 
         let mut funding_executions = Vec::new();
+        let mut reserved_deposit_keys = Vec::new();
+        
         if let Some(deposit_repository) = &self.deposit_repository {
             for payment in &payments {
-                let (consolidation_executions, _) = get_funding_executions_from_deposits(
+                let (consolidation_executions, fill_status) = get_funding_executions_from_deposits(
                     deposit_repository,
                     &payment.lot,
                     &self.provider,
@@ -193,6 +195,16 @@ impl Wallet for EVMWallet {
                     self.max_deposits_per_lot,
                 )
                 .await?;
+
+                // Track deposit keys for potential unreserving on failure
+                match fill_status {
+                    FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
+                        reserved_deposit_keys.extend(
+                            deposits.iter().map(|d| d.private_key.clone())
+                        );
+                    }
+                    FillStatus::Empty => {}
+                }
 
                 funding_executions.extend(consolidation_executions);
                 if funding_executions.len() >= self.max_deposits_per_lot {
@@ -221,14 +233,40 @@ impl Wallet for EVMWallet {
             .map_err(|e| WalletError::TransactionCreationFailed {
                 reason: e.to_string(),
             })?;
+        
         match broadcast_result {
             transaction_broadcaster::TransactionExecutionResult::Success(tx_receipt) => {
                 info!("Payment created for swap [evm_wallet] {tx_receipt:?}");
                 Ok(tx_receipt.transaction_hash.to_string())
             }
-            _ => Err(WalletError::TransactionCreationFailed {
-                reason: format!("{broadcast_result:?}"),
-            }),
+            _ => {
+                // Broadcast failed - unreserve the deposits so they can be used again
+                if !reserved_deposit_keys.is_empty() {
+                    if let Some(deposit_repository) = &self.deposit_repository {
+                        match deposit_repository.unreserve_deposits(&reserved_deposit_keys).await {
+                            Ok(count) => {
+                                tracing::warn!(
+                                    "Unreserved {} deposits after broadcast failure: {:?}",
+                                    count,
+                                    broadcast_result
+                                );
+                            }
+                            Err(unreserve_err) => {
+                                tracing::error!(
+                                    "Failed to unreserve {} deposits after broadcast failure. \
+                                    Original error: {:?}, Unreserve error: {:?}",
+                                    reserved_deposit_keys.len(),
+                                    broadcast_result,
+                                    unreserve_err
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(WalletError::TransactionCreationFailed {
+                    reason: format!("{broadcast_result:?}"),
+                })
+            }
         }
     }
 
@@ -331,6 +369,12 @@ impl Wallet for EVMWallet {
                     deposits
                 }
             };
+            
+            // Track deposit keys for potential unreserving on failure
+            let reserved_deposit_keys: Vec<String> = deposits
+                .iter()
+                .map(|d| d.private_key.clone())
+                .collect();
  
             // Sum the amount in this batch
             let mut batch_amount = U256::from(0);
@@ -385,6 +429,25 @@ impl Wallet for EVMWallet {
                     iterations += 1;
                 }
                 _ => {
+                    // Broadcast failed - unreserve the deposits so they can be used again
+                    match deposit_repository.unreserve_deposits(&reserved_deposit_keys).await {
+                        Ok(count) => {
+                            tracing::warn!(
+                                "Unreserved {} deposits after consolidation broadcast failure: {:?}",
+                                count,
+                                broadcast_result
+                            );
+                        }
+                        Err(unreserve_err) => {
+                            tracing::error!(
+                                "Failed to unreserve {} deposits after consolidation broadcast failure. \
+                                Original error: {:?}, Unreserve error: {:?}",
+                                reserved_deposit_keys.len(),
+                                broadcast_result,
+                                unreserve_err
+                            );
+                        }
+                    }
                     return Err(WalletError::TransactionCreationFailed {
                         reason: format!("Consolidation broadcast failed: {broadcast_result:?}"),
                     });

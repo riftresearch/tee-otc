@@ -526,6 +526,8 @@ impl WalletTrait for BitcoinWallet {
         }
 
         let mut foreign_utxos = Vec::new();
+        let mut reserved_deposit_keys = Vec::new();
+        
         if let Some(deposit_repository) = self.deposit_repository.clone() {
             for payment in &payments {
                 if foreign_utxos.len() >= self.max_deposits_per_lot {
@@ -542,6 +544,7 @@ impl WalletTrait for BitcoinWallet {
                     })? {
                     FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
                         for deposit in deposits {
+                            reserved_deposit_keys.push(deposit.private_key.clone());
                             let utxos = self.deposit_to_foreign_utxos(deposit).await?;
                             foreign_utxos.extend(utxos);
                         }
@@ -558,14 +561,43 @@ impl WalletTrait for BitcoinWallet {
             "Broadcasting bitcoin tx w/ foreign_utxos: {:?}",
             foreign_utxos
         );
+        
         // Send transaction request to the broadcaster
-        self.tx_broadcaster
+        match self.tx_broadcaster
             .broadcast_transaction(payments, foreign_utxos, mm_payment_validation, None)
             .await
-            .map_err(|e| WalletError::BitcoinWalletClient {
-                source: e,
-                loc: location!(),
-            })
+        {
+            Ok(txid) => Ok(txid),
+            Err(e) => {
+                // Broadcast failed - unreserve the deposits so they can be used again
+                if !reserved_deposit_keys.is_empty() {
+                    if let Some(deposit_repository) = &self.deposit_repository {
+                        match deposit_repository.unreserve_deposits(&reserved_deposit_keys).await {
+                            Ok(count) => {
+                                tracing::warn!(
+                                    "Unreserved {} deposits after broadcast failure: {:?}",
+                                    count,
+                                    e
+                                );
+                            }
+                            Err(unreserve_err) => {
+                                tracing::error!(
+                                    "Failed to unreserve {} deposits after broadcast failure. \
+                                    Original error: {:?}, Unreserve error: {:?}",
+                                    reserved_deposit_keys.len(),
+                                    e,
+                                    unreserve_err
+                                );
+                            }
+                        }
+                    }
+                }
+                Err(WalletError::BitcoinWalletClient {
+                    source: e,
+                    loc: location!(),
+                })
+            }
+        }
     }
 
     async fn balance(&self, token: &TokenIdentifier) -> WalletResult<WalletBalance> {
@@ -635,6 +667,12 @@ impl WalletTrait for BitcoinWallet {
             match fill_status {
                 FillStatus::Empty => break,
                 FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
+                    // Track deposit keys for potential unreserving on failure
+                    let reserved_deposit_keys: Vec<String> = deposits
+                        .iter()
+                        .map(|d| d.private_key.clone())
+                        .collect();
+                    
                     // Sum the amount in this batch
                     let mut batch_amount = U256::from(0);
                     for deposit in &deposits {
@@ -673,7 +711,7 @@ impl WalletTrait for BitcoinWallet {
                     );
 
                     // Broadcast the consolidation transaction
-                    let tx_hash = self
+                    match self
                         .tx_broadcaster
                         .broadcast_transaction(
                             vec![payment],
@@ -682,14 +720,38 @@ impl WalletTrait for BitcoinWallet {
                             None, // No explicit fee
                         )
                         .await
-                        .map_err(|e| WalletError::BitcoinWalletClient {
-                            source: e,
-                            loc: location!(),
-                        })?;
-
-                    info!("Consolidation transaction successful: {}", tx_hash);
-                    tx_hashes.push(tx_hash);
-                    iterations += 1;
+                    {
+                        Ok(tx_hash) => {
+                            info!("Consolidation transaction successful: {}", tx_hash);
+                            tx_hashes.push(tx_hash);
+                            iterations += 1;
+                        }
+                        Err(e) => {
+                            // Broadcast failed - unreserve the deposits so they can be used again
+                            match deposit_repository.unreserve_deposits(&reserved_deposit_keys).await {
+                                Ok(count) => {
+                                    tracing::warn!(
+                                        "Unreserved {} deposits after consolidation broadcast failure: {:?}",
+                                        count,
+                                        e
+                                    );
+                                }
+                                Err(unreserve_err) => {
+                                    tracing::error!(
+                                        "Failed to unreserve {} deposits after consolidation broadcast failure. \
+                                        Original error: {:?}, Unreserve error: {:?}",
+                                        reserved_deposit_keys.len(),
+                                        e,
+                                        unreserve_err
+                                    );
+                                }
+                            }
+                            return Err(WalletError::BitcoinWalletClient {
+                                source: e,
+                                loc: location!(),
+                            });
+                        }
+                    }
                 }
             }
         }
