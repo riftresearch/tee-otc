@@ -1,3 +1,7 @@
+mod test_proxy;
+
+pub use test_proxy::TestProxy;
+
 use std::{
     env::current_dir,
     net::{IpAddr, Ipv4Addr},
