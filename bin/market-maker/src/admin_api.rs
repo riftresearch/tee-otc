@@ -230,7 +230,7 @@ async fn consolidate_ethereum(
         };
 
         // Use the wallet's consolidate method
-        match evm_wallet.consolidate(&lot, 350).await {
+        match evm_wallet.consolidate(&lot, 200).await {
             Ok(summary) => {
                 if summary.iterations > 0 {
                     info!(
