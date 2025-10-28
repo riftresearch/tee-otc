@@ -3313,7 +3313,7 @@ dependencies = [
 [[package]]
 name = "esplora-client"
 version = "0.12.1"
-source = "git+https://github.com/riftresearch/rust-esplora-client?rev=4009ba4be0d73ed7126e91ef8d39e8f560190053#4009ba4be0d73ed7126e91ef8d39e8f560190053"
+source = "git+https://github.com/riftresearch/rust-esplora-client?rev=b749fb95e204c7d5f5c1fa83d499a8600d72a103#b749fb95e204c7d5f5c1fa83d499a8600d72a103"
 dependencies = [
  "bitcoin",
  "hex-conservative 0.2.1",
@@ -4143,7 +4143,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -4388,6 +4388,8 @@ dependencies = [
  "rfq-server",
  "serde",
  "serde_json",
+ "snafu",
+ "socket2 0.6.1",
  "sqlx",
  "tokio",
  "tracing",
@@ -4956,6 +4958,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "mm-websocket-server"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axum 0.7.9",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "snafu",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "mock_instant"
 version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5325,6 +5342,7 @@ name = "otc-server"
 version = "0.9.0"
 dependencies = [
  "alloy 1.0.30",
+ "async-trait",
  "axum 0.7.9",
  "bitcoin",
  "bitcoincore-rpc-async",
@@ -5339,6 +5357,7 @@ dependencies = [
  "getrandom 0.2.16",
  "metrics",
  "metrics-exporter-prometheus",
+ "mm-websocket-server",
  "otc-auth",
  "otc-chains",
  "otc-models",
@@ -5772,7 +5791,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.32",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "thiserror 2.0.16",
  "tokio",
  "tracing",
@@ -5809,7 +5828,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.6.0",
+ "socket2 0.5.10",
  "tracing",
  "windows-sys 0.60.2",
 ]
@@ -6090,6 +6109,7 @@ name = "rfq-server"
 version = "0.9.0"
 dependencies = [
  "alloy 1.0.30",
+ "async-trait",
  "axum 0.7.9",
  "blockchain-utils",
  "chainalysis-address-screener",
@@ -6099,6 +6119,7 @@ dependencies = [
  "futures-util",
  "metrics",
  "metrics-exporter-prometheus",
+ "mm-websocket-server",
  "otc-auth",
  "otc-models",
  "otc-protocols",
@@ -6833,12 +6854,12 @@ dependencies = [
 
 [[package]]
 name = "socket2"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "233504af464074f9d066d7b5416c5f9b894a5862a6506e306f7b816cdd6f1807"
+checksum = "17129e116933cf371d018bb80ae557e889637989d8638274fb25622827b03881"
 dependencies = [
  "libc",
- "windows-sys 0.59.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -7358,7 +7379,7 @@ dependencies = [
  "pin-project-lite",
  "signal-hook-registry",
  "slab",
- "socket2 0.6.0",
+ "socket2 0.6.1",
  "tokio-macros",
  "tracing",
  "windows-sys 0.59.0",

@@ -29,13 +29,14 @@ eip3009-erc20-contract = {path = "crates/eip3009-erc20-contract"}
 utc = {path = "crates/utc"}
 otc-auth = {path = "crates/otc-auth"}
 chainalysis-address-screener = { path = "crates/chainalysis-address-screener" }
+mm-websocket-server = { path = "crates/mm-websocket-server" }
 
 # All of the following dependences (before the empty line) are implicitly linked to the same version, if one of them is updated they must all be updated simultaneously 
 bitcoin = { version = "0.32.0", default-features = false, features = ["serde", "base64", "secp-recovery"] }
 bitcoincore-rpc-async = { git = "https://github.com/riftresearch/rust-bitcoincore-rpc-async", rev = "c50734a50f2af2f8a9be3f03b98832dd04e788b1" }
 corepc-node = { version = "0.8.0", features = ["29_0", "download"] }
 electrsd = { git = "https://github.com/RCasatta/electrsd", rev = "bdc97e879bad82e13e69c74d898271db12224f44", features = ["corepc-node_29_0", "esplora_a33e97e1", "legacy"] }
-esplora-client = {git = "https://github.com/riftresearch/rust-esplora-client" , rev = "4009ba4be0d73ed7126e91ef8d39e8f560190053", features = ["async", "tokio"]}
+esplora-client = {git = "https://github.com/riftresearch/rust-esplora-client" , rev = "b749fb95e204c7d5f5c1fa83d499a8600d72a103", features = ["async", "tokio"]}
 
 alloy = { version = "1.0.23", features = ["full", "node-bindings", "json-rpc", "eip712"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -88,6 +89,8 @@ crossterm = "0.27"
 dotenvy = "0.15"
 ratatui = "0.28"
 eyre = "0.6.12"
+socket2 = "0.6.1"
+ezsockets = { version = "0.7.0", features = ["client", "native_client"] }
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3
@@ -95,4 +98,4 @@ opt-level = 3
 [patch.crates-io]
 corepc-node = { git = "https://github.com/alpinevm/corepc", rev = "2b21b2bfeb4b4c8bc71fccba87d86054a648f242" }
 sqlx-sqlite = { path = "sqlx-sqlite-shim" }
-esplora-client = {git = "https://github.com/riftresearch/rust-esplora-client" , rev = "4009ba4be0d73ed7126e91ef8d39e8f560190053"}
+esplora-client = {git = "https://github.com/riftresearch/rust-esplora-client" , rev = "b749fb95e204c7d5f5c1fa83d499a8600d72a103"}

@@ -17,6 +17,8 @@ otc-chains = { workspace = true }
 otc-protocols = { workspace = true }
 otc-auth = { workspace=true }
 utc = {workspace=true}
+mm-websocket-server = { workspace = true }
+async-trait = { workspace = true }
 
 tokio = { workspace = true }
 serde = { workspace = true }
