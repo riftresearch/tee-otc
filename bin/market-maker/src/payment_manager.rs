@@ -289,7 +289,7 @@ fn spawn_batch_processor(
             }
 
             // Process the batch (filtering and processing handled in helper)
-            process_batch(
+            if let Err(e) = process_batch(
                 chain_type,
                 &wallet,
                 &payment_recorder,
@@ -297,7 +297,14 @@ fn spawn_batch_processor(
                 &in_flight_payments,
                 queued_payments,
             )
-            .await;
+            .await
+            {
+                error!(
+                    "Critical error processing batch for {:?}: {}. Market maker will shut down.",
+                    chain_type, e
+                );
+                return Err(e);
+            }
         }
     });
 }
@@ -310,7 +317,7 @@ async fn process_batch(
     otc_response_tx: &UnboundedSender<ProtocolMessage<MMResponse>>,
     in_flight_payments: &Arc<DashMap<Uuid, ()>>,
     queued_payments: Vec<MarketMakerQueuedPayment>,
-) {
+) -> crate::Result<()> {
     // Split queued payments into eligible and ineligible (near refund window)
     let (eligible_payments, ineligible_payments): (Vec<_>, Vec<_>) = queued_payments
         .into_iter()
@@ -334,7 +341,7 @@ async fn process_batch(
     }
 
     if eligible_payments.is_empty() {
-        return;
+        return Ok(());
     }
 
     info!(
@@ -350,7 +357,7 @@ async fn process_batch(
                 "No market maker batch could be created for {:?}: queued_payments={:?}",
                 chain_type, eligible_payments
             );
-            return;
+            return Ok(());
         }
     };
 
@@ -421,14 +428,18 @@ async fn process_batch(
                 "Batch payment failed for {:?}: swap_ids={:?}, error={}",
                 chain_type, swap_ids, e
             );
-            // here
 
-            // Clear in-flight tracking to allow retry on next reconnect replay
+            // Clear in-flight tracking before crashing
             for swap_id in &swap_ids {
                 in_flight_payments.remove(swap_id);
             }
+
+            // Return error to crash the market maker
+            return Err(e.into());
         }
     }
+    
+    Ok(())
 }
 
 #[cfg(test)]
