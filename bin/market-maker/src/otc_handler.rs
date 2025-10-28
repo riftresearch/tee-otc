@@ -1,5 +1,7 @@
+use async_trait::async_trait;
 use crate::db::{Deposit, DepositRepository, DepositStore, PaymentRepository, QuoteRepository};
 use crate::payment_manager::PaymentManager;
+use crate::websocket_client::MessageHandler;
 use otc_protocols::mm::{MMRequest, MMResponse, MMStatus, NetworkBatch, ProtocolMessage};
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -297,6 +299,31 @@ impl OTCMessageHandler {
             }
 
             MMRequest::Pong { .. } => None,
+        }
+    }
+}
+
+#[async_trait]
+impl MessageHandler for OTCMessageHandler {
+    async fn handle_text(&self, text: &str) -> Option<String> {
+        match serde_json::from_str::<ProtocolMessage<MMRequest>>(text) {
+            Ok(msg) => {
+                if let Some(response) = self.handle_request(&msg).await {
+                    match serde_json::to_string(&response) {
+                        Ok(json) => Some(json),
+                        Err(e) => {
+                            error!("Failed to serialize OTC response: {}", e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+            Err(e) => {
+                error!("Failed to parse OTC message: {}", e);
+                None
+            }
         }
     }
 }

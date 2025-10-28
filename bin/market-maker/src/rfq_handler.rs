@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse, RFQResult};
 use std::{sync::Arc, time::Instant};
 use tracing::{error, info};
@@ -5,6 +6,7 @@ use uuid::Uuid;
 
 use crate::db::QuoteRepository;
 use crate::liquidity_cache::LiquidityCache;
+use crate::websocket_client::MessageHandler;
 use crate::wrapped_bitcoin_quoter::WrappedBitcoinQuoter;
 use crate::QUOTE_LATENCY_METRIC;
 
@@ -176,4 +178,29 @@ fn record_quote_latency(start: &Instant, status: &'static str, reason: &'static 
         "reason" => reason
     )
     .record(elapsed);
+}
+
+#[async_trait]
+impl MessageHandler for RFQMessageHandler {
+    async fn handle_text(&self, text: &str) -> Option<String> {
+        match serde_json::from_str::<ProtocolMessage<RFQRequest>>(text) {
+            Ok(msg) => {
+                if let Some(response) = self.handle_request(&msg).await {
+                    match serde_json::to_string(&response) {
+                        Ok(json) => Some(json),
+                        Err(e) => {
+                            error!("Failed to serialize RFQ response: {}", e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+            Err(e) => {
+                error!("Failed to parse RFQ message: {}", e);
+                None
+            }
+        }
+    }
 }

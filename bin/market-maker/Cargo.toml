@@ -24,6 +24,7 @@ console-subscriber = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio-tungstenite = { workspace = true }
+ezsockets = { version = "0.7.0", features = ["client", "native_client"] }
 futures-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }

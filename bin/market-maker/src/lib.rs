@@ -7,13 +7,12 @@ mod config;
 pub mod db;
 pub mod evm_wallet;
 mod liquidity_cache;
-mod otc_client;
 mod otc_handler;
 pub mod payment_manager;
 pub mod price_oracle;
-mod rfq_client;
 mod rfq_handler;
 pub mod wallet;
+mod websocket_client;
 mod wrapped_bitcoin_quoter;
 
 use blockchain_utils::shutdown_signal;
@@ -26,7 +25,6 @@ use alloy::{providers::Provider, signers::local::PrivateKeySigner};
 use bdk_wallet::bitcoin;
 use blockchain_utils::{create_websocket_wallet_provider, handle_background_thread_result};
 use clap::Parser;
-use config::Config;
 use otc_models::ChainType;
 use reqwest::Url;
 use snafu::{prelude::*, ResultExt};
@@ -56,11 +54,8 @@ pub enum Error {
     #[snafu(display("Configuration error: {}", source))]
     Config { source: config::ConfigError },
 
-    #[snafu(display("Client error: {}", source))]
-    Client {
-        #[snafu(source(from(otc_client::ClientError, Box::new)))]
-        source: Box<otc_client::ClientError>,
-    },
+    #[snafu(display("WebSocket client error: {}", source))]
+    WebSocketClient { source: websocket_client::WebSocketError },
 
     #[snafu(display("Bitcoin wallet error: {}", source))]
     BitcoinWallet {
@@ -147,14 +142,6 @@ impl From<blockchain_utils::ProviderError> for Error {
 impl From<wallet::WalletError> for Error {
     fn from(error: wallet::WalletError) -> Self {
         Error::GenericWallet {
-            source: Box::new(error),
-        }
-    }
-}
-
-impl From<otc_client::ClientError> for Error {
-    fn from(error: otc_client::ClientError) -> Self {
-        Error::Client {
             source: Box::new(error),
         }
     }
@@ -492,55 +479,66 @@ pub async fn run_market_maker(
         &mut payment_manager_join_set,
     ));
 
-    let otc_fill_client = otc_client::OtcFillClient::new(
-        Config {
-            market_maker_id,
-            api_secret: args.api_secret.clone(),
-            otc_ws_url: args.otc_ws_url.clone(),
-            reconnect_interval_secs: 5,
-            max_reconnect_attempts: 250,
-        },
+    // Set up OTC WebSocket client
+    let otc_handler = otc_handler::OTCMessageHandler::new(
         quote_repository.clone(),
         deposit_repository.clone(),
         payment_manager.clone(),
         payment_repository.clone(),
-        otc_response_rx,
     );
-    join_set.spawn(async move { otc_fill_client.run().await.map_err(Error::from) });
+    let otc_ws_client = websocket_client::WebSocketClient::new(
+        args.otc_ws_url.clone(),
+        market_maker_id.to_string(),
+        args.api_secret.clone(),
+        otc_handler,
+    );
+    let (otc_handle, otc_future) = otc_ws_client.connect().await.context(WebSocketClientSnafu)?;
+    
+    // Spawn OTC WebSocket connection (ezsockets handles reconnection automatically)
+    join_set.spawn(async move {
+        otc_future.await.context(WebSocketClientSnafu)
+    });
+    
+    // Spawn OTC response forwarder task for unsolicited MMResponse messages
+    let otc_handle_for_forwarder = otc_handle.clone();
+    join_set.spawn(async move {
+        let mut otc_response_rx = otc_response_rx;
+        while let Some(response_msg) = otc_response_rx.recv().await {
+            if let Err(e) = otc_handle_for_forwarder.send(&response_msg) {
+                tracing::error!("Failed to send unsolicited MMResponse: {}", e);
+            }
+        }
+        tracing::info!("OTC response forwarder task ended");
+        Ok(())
+    });
 
     // Create liquidity cache for RFQ liquidity requests
     let liquidity_cache = Arc::new(liquidity_cache::LiquidityCache::new(wallet_manager.clone(), balance_strategy.clone()));
 
+    // Make sure fees + balances are initialized before quotes can be computed
+    wrapped_bitcoin_quoter
+        .ensure_cache_ready()
+        .await
+        .context(WrappedBitcoinQuoterSnafu)?;
+
+    // Set up RFQ WebSocket client
     let rfq_handler = rfq_handler::RFQMessageHandler::new(
         market_maker_id,
         wrapped_bitcoin_quoter.clone(),
         quote_repository,
         liquidity_cache,
     );
-
-    // Add RFQ client for handling quote requests
-    let mut rfq_client = rfq_client::RfqClient::new(
-        Config {
-            market_maker_id,
-            api_secret: args.api_secret.clone(),
-            otc_ws_url: args.otc_ws_url,
-            reconnect_interval_secs: 5,
-            max_reconnect_attempts: 5,
-        },
-        rfq_handler,
+    let rfq_ws_client = websocket_client::WebSocketClient::new(
         args.rfq_ws_url,
+        market_maker_id.to_string(),
+        args.api_secret.clone(),
+        rfq_handler,
     );
-    // make sure fees + balances are initiailized before quotes can be computed
-    wrapped_bitcoin_quoter
-        .ensure_cache_ready()
-        .await
-        .context(WrappedBitcoinQuoterSnafu)?;
+    let (_rfq_handle, rfq_future) = rfq_ws_client.connect().await.context(WebSocketClientSnafu)?;
+    
+    // Spawn RFQ WebSocket connection (ezsockets handles reconnection automatically)
     join_set.spawn(async move {
-        rfq_client.run().await.map_err(|e| Error::Client {
-            source: Box::new(otc_client::ClientError::BackgroundThreadExited {
-                source: Box::new(e),
-            }),
-        })
+        rfq_future.await.context(WebSocketClientSnafu)
     });
 
     let coinbase_client = CoinbaseClient::new(
