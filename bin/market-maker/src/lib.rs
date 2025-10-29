@@ -509,7 +509,11 @@ pub async fn run_market_maker(
     });
 
     // Create liquidity cache for RFQ liquidity requests
-    let liquidity_cache = Arc::new(liquidity_cache::LiquidityCache::new(wallet_manager.clone(), balance_strategy.clone()));
+    let liquidity_cache = Arc::new(liquidity_cache::LiquidityCache::new(
+        wallet_manager.clone(),
+        balance_strategy.clone(),
+        &mut join_set,
+    ));
 
     // Make sure fees + balances are initialized before quotes can be computed
     wrapped_bitcoin_quoter

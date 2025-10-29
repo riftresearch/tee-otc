@@ -3,77 +3,83 @@ use crate::wallet::{WalletManager, WalletResult};
 use otc_models::{constants::SUPPORTED_TOKENS_BY_CHAIN, ChainType, Currency, TokenIdentifier};
 use otc_protocols::rfq::TradingPairLiquidity;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tokio::task::JoinSet;
+use tracing::{error, info, warn};
 
-const CACHE_TTL: Duration = Duration::from_secs(60);
-
-struct CachedLiquidity {
-    trading_pairs: Vec<TradingPairLiquidity>,
-    computed_at: Instant,
-}
-
-impl CachedLiquidity {
-    fn is_valid(&self) -> bool {
-        self.computed_at.elapsed() < CACHE_TTL
-    }
-}
+const CACHE_UPDATE_INTERVAL: Duration = Duration::from_secs(60);
 
 pub struct LiquidityCache {
-    cached_data: Arc<RwLock<Option<CachedLiquidity>>>,
-    wallet_manager: Arc<WalletManager>,
-    balance_strategy: Arc<QuoteBalanceStrategy>,
+    cached_data: Arc<RwLock<Vec<TradingPairLiquidity>>>,
 }
 
 impl LiquidityCache {
+    /// Create a new liquidity cache and spawn a background task to keep it updated.
+    ///
+    /// The background task will periodically compute liquidity and update the cache.
+    /// `get_liquidity()` will always return the cached data without blocking on computation.
     #[must_use]
-    pub fn new(wallet_manager: Arc<WalletManager>, balance_strategy: Arc<QuoteBalanceStrategy>) -> Self {
-        Self {
-            cached_data: Arc::new(RwLock::new(None)),
-            wallet_manager,
-            balance_strategy,
-        }
-    }
+    pub fn new(
+        wallet_manager: Arc<WalletManager>,
+        balance_strategy: Arc<QuoteBalanceStrategy>,
+        join_set: &mut JoinSet<crate::Result<()>>,
+    ) -> Self {
+        let cached_data = Arc::new(RwLock::new(Vec::new()));
+        let cached_data_task = cached_data.clone();
 
-    /// Get liquidity data, using cache if valid, otherwise recomputing
-    pub async fn get_liquidity(&self) -> Vec<TradingPairLiquidity> {
-        // Check if cache is valid
-        {
-            let cache = self.cached_data.read().await;
-            if let Some(cached) = cache.as_ref() {
-                if cached.is_valid() {
-                    info!("Returning cached liquidity data");
-                    return cached.trading_pairs.clone();
+        // Spawn background task to update the cache periodically
+        join_set.spawn(async move {
+            let mut interval = tokio::time::interval(CACHE_UPDATE_INTERVAL);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+            loop {
+                interval.tick().await;
+
+                info!("Computing liquidity update in background task");
+                match Self::compute_liquidity_static(
+                    &wallet_manager,
+                    &balance_strategy,
+                )
+                .await
+                {
+                    Ok(trading_pairs) => {
+                        let mut cache = cached_data_task.write().await;
+                        *cache = trading_pairs;
+                        info!("Liquidity cache updated successfully");
+                    }
+                    Err(e) => {
+                        error!("Failed to compute liquidity in background task: {}", e);
+                    }
                 }
             }
-        }
+        });
 
-        // Cache is invalid or doesn't exist, recompute
-        info!("Computing fresh liquidity data");
-        match self.compute_liquidity().await {
-            Ok(trading_pairs) => {
-                let mut cache = self.cached_data.write().await;
-                *cache = Some(CachedLiquidity {
-                    trading_pairs: trading_pairs.clone(),
-                    computed_at: Instant::now(),
-                });
-                trading_pairs
-            }
-            Err(e) => {
-                warn!("Failed to compute liquidity: {}", e);
-                // Return empty vec on error
-                Vec::new()
-            }
+        Self {
+            cached_data,
         }
     }
 
-    /// Compute liquidity for all supported trading pairs
-    async fn compute_liquidity(&self) -> WalletResult<Vec<TradingPairLiquidity>> {
+    /// Get the current cached liquidity data.
+    ///
+    /// This method always returns immediately with the cached data and never blocks on computation.
+    /// The cache is updated asynchronously by a background task.
+    pub async fn get_liquidity(&self) -> Vec<TradingPairLiquidity> {
+        let cache = self.cached_data.read().await;
+        cache.clone()
+    }
+
+    /// Static method to compute liquidity for all supported trading pairs.
+    ///
+    /// This is used by the background task and doesn't require `&self`.
+    async fn compute_liquidity_static(
+        wallet_manager: &WalletManager,
+        balance_strategy: &QuoteBalanceStrategy,
+    ) -> WalletResult<Vec<TradingPairLiquidity>> {
         let mut trading_pairs = Vec::new();
 
         // Get all registered chains
-        let registered_chains = self.wallet_manager.registered_chains();
+        let registered_chains = wallet_manager.registered_chains();
 
         // For each chain, compute liquidity for all supported tokens
         for from_chain in &registered_chains {
@@ -88,14 +94,15 @@ impl LiquidityCache {
                         if let Some(to_tokens) = SUPPORTED_TOKENS_BY_CHAIN.get(to_chain) {
                             for to_token in to_tokens {
                                 // Get wallet for the destination chain
-                                if let Some(to_wallet) = self.wallet_manager.get(*to_chain) {
+                                if let Some(to_wallet) = wallet_manager.get(*to_chain) {
                                     // Get balance for the TO token (what MM can provide)
                                     match to_wallet.balance(to_token).await {
                                         Ok(to_balance) => {
                                             // Compute max amount based on TO token's balance.
                                             // This represents the maximum OUTPUT the MM can provide.
-                                            let max_output_capacity = self.balance_strategy.max_output_amount(to_balance.total_balance);
-                                            
+                                            let max_output_capacity = balance_strategy
+                                                .max_output_amount(to_balance.total_balance);
+
                                             // TradingPairLiquidity.max_amount represents max INPUT from user's perspective.
                                             //
                                             // Ideally: max_input should be set such that output(max_input) ≈ capacity
@@ -112,7 +119,8 @@ impl LiquidityCache {
 
                                             // Get decimals for both tokens
                                             let to_decimals = get_token_decimals(*to_chain, to_token);
-                                            let from_decimals = get_token_decimals(*from_chain, from_token);
+                                            let from_decimals =
+                                                get_token_decimals(*from_chain, from_token);
 
                                             trading_pairs.push(TradingPairLiquidity {
                                                 from: Currency {
