@@ -49,3 +49,6 @@ mod rfq_reconnection_test;
 
 #[cfg(test)]
 mod connection_reset_test;
+
+#[cfg(test)]
+mod liquidity_locking_test;

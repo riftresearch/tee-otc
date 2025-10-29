@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use crate::db::{Deposit, DepositRepository, DepositStore, PaymentRepository, QuoteRepository};
+use crate::liquidity_lock::{LiquidityLockManager, LockedLiquidity};
 use crate::payment_manager::PaymentManager;
 use crate::websocket_client::MessageHandler;
 use otc_protocols::mm::{MMRequest, MMResponse, NetworkBatch, ProtocolMessage};
@@ -12,6 +13,7 @@ pub struct OTCMessageHandler {
     deposit_repository: Arc<DepositRepository>,
     payment_manager: Arc<PaymentManager>,
     payment_repository: Arc<PaymentRepository>,
+    liquidity_lock_manager: Arc<LiquidityLockManager>,
 }
 
 impl OTCMessageHandler {
@@ -20,12 +22,14 @@ impl OTCMessageHandler {
         deposit_repository: Arc<DepositRepository>,
         payment_manager: Arc<PaymentManager>,
         payment_repository: Arc<PaymentRepository>,
+        liquidity_lock_manager: Arc<LiquidityLockManager>,
     ) -> Self {
         Self {
             quote_repository,
             deposit_repository,
             payment_manager,
             payment_repository,
+            liquidity_lock_manager,
         }
     }
 
@@ -184,7 +188,7 @@ impl OTCMessageHandler {
 
             MMRequest::UserDeposited {
                 swap_id,
-
+                quote_id,
                 user_tx_hash,
                 ..
             } => {
@@ -194,7 +198,32 @@ impl OTCMessageHandler {
                     user_tx_hash = user_tx_hash
                 );
 
-                // TODO: Lock up funds for confirmed user deposits
+                // Lock up funds for confirmed user deposits
+                match self.quote_repository.get_quote(*quote_id).await {
+                    Ok(quote) => {
+                        let locked = LockedLiquidity {
+                            from: quote.from.currency.clone(),
+                            to: quote.to.currency.clone(),
+                            amount: quote.to.amount,
+                            created_at: utc::now(),
+                        };
+                        self.liquidity_lock_manager.lock(*swap_id, locked).await;
+                        info!(
+                            message = "Locked liquidity for swap",
+                            swap_id = %swap_id,
+                            quote_id = %quote_id,
+                            amount = %quote.to.amount
+                        );
+                    }
+                    Err(e) => {
+                        warn!(
+                            message = "Failed to retrieve quote for liquidity locking",
+                            swap_id = %swap_id,
+                            quote_id = %quote_id,
+                            error = %e
+                        );
+                    }
+                }
 
                 None // For now, we don't respond to this
             }
@@ -227,6 +256,17 @@ impl OTCMessageHandler {
                         expected_lot,
                     )
                     .await;
+
+                // Unlock liquidity if payment was queued successfully
+                if matches!(response, MMResponse::PaymentQueued { .. }) {
+                    if let Some(locked) = self.liquidity_lock_manager.unlock(*swap_id).await {
+                        info!(
+                            message = "Unlocked liquidity for swap",
+                            swap_id = %swap_id,
+                            amount = %locked.amount
+                        );
+                    }
+                }
 
                 info!(
                     message = "Payment manager response",

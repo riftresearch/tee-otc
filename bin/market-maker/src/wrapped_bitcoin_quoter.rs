@@ -2,14 +2,14 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::balance_strat::QuoteBalanceStrategy;
+use crate::liquidity_cache::LiquidityCache;
 use crate::price_oracle::BitcoinEtherPriceOracle;
-use crate::wallet::{WalletBalance, WalletManager};
+use crate::wallet::WalletManager;
 use alloy::eips::BlockNumberOrTag;
 use alloy::providers::DynProvider;
 use alloy::{primitives::U256, providers::Provider};
 use blockchain_utils::{compute_protocol_fee_sats, inverse_compute_protocol_fee};
-use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest, TokenIdentifier};
+use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest};
 use otc_protocols::rfq::{FeeSchedule, RFQResult};
 use snafu::{Location, ResultExt, Snafu};
 use tokio::sync::RwLock;
@@ -19,7 +19,6 @@ use uuid::Uuid;
 
 const QUOTE_EXPIRATION_TIME: Duration = Duration::from_secs(60 * 5);
 const FEE_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
-const BALANCE_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Snafu)]
 pub enum WrappedBitcoinQuoterError {
@@ -40,14 +39,13 @@ pub struct WrappedBitcoinQuoter {
     trade_spread_bps: u64,
     wallet_registry: Arc<WalletManager>,
     fee_map: Arc<RwLock<HashMap<ChainType, u64>>>,
-    balance_map: Arc<RwLock<HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>>>>,
-    balance_strategy: Arc<QuoteBalanceStrategy>,
+    liquidity_cache: Arc<LiquidityCache>,
 }
 
 impl WrappedBitcoinQuoter {
     pub fn new(
         wallet_registry: Arc<WalletManager>,
-        balance_strategy: Arc<QuoteBalanceStrategy>,
+        liquidity_cache: Arc<LiquidityCache>,
         btc_eth_price_oracle: BitcoinEtherPriceOracle,
         esplora_client: esplora_client::AsyncClient,
         eth_provider: DynProvider,
@@ -71,23 +69,11 @@ impl WrappedBitcoinQuoter {
             })
         });
 
-        let balance_map = Arc::new(RwLock::new(HashMap::new()));
-        let balance_map_clone = balance_map.clone();
-        let wallet_registry_clone = wallet_registry.clone();
-        join_set.spawn(async move {
-            Self::balance_update_loop(wallet_registry_clone, balance_map_clone)
-                .await
-                .map_err(|e| crate::Error::BackgroundThread {
-                    source: Box::new(e),
-                })
-        });
-
         Self {
             wallet_registry,
             trade_spread_bps,
             fee_map,
-            balance_map,
-            balance_strategy,
+            liquidity_cache,
         }
     }
 
@@ -98,7 +84,7 @@ impl WrappedBitcoinQuoter {
             if start_time.elapsed() > timeout {
                 return FeeUpdateTimeoutSnafu.fail();
             }
-            if !self.fee_map.read().await.is_empty() && !self.balance_map.read().await.is_empty() {
+            if !self.fee_map.read().await.is_empty() {
                 return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -192,51 +178,6 @@ impl WrappedBitcoinQuoter {
         }
     }
 
-    async fn balance_update_loop(
-        wallet_registry: Arc<WalletManager>,
-        balance_map: Arc<RwLock<HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>>>>,
-    ) -> Result<()> {
-        loop {
-            let mut updated_balances: HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>> =
-                HashMap::new();
-
-            for chain in wallet_registry.registered_chains() {
-                let Some(wallet) = wallet_registry.get(chain) else {
-                    continue;
-                };
-
-                let Some(tokens) = constants::SUPPORTED_TOKENS_BY_CHAIN.get(&chain) else {
-                    continue;
-                };
-
-                let mut token_balances = HashMap::new();
-                for token in tokens {
-                    match wallet.balance(token).await {
-                        Ok(balance) => {
-                            token_balances.insert(token.clone(), balance);
-                        }
-                        Err(error) => {
-                            warn!(
-                                "Failed to refresh cached balance for chain {:?}, token {:?}: {:?}",
-                                chain, token, error
-                            );
-                        }
-                    }
-                }
-
-                if !token_balances.is_empty() {
-                    updated_balances.insert(chain, token_balances);
-                }
-            }
-
-            {
-                let mut guard = balance_map.write().await;
-                *guard = updated_balances;
-            }
-
-            tokio::time::sleep(BALANCE_UPDATE_INTERVAL).await;
-        }
-    }
 
     /// Compute a quote for the given amount and quote mode.
     /// Note that fill_chain is the chain that the market maker will fill the quote on.
@@ -345,40 +286,24 @@ impl WrappedBitcoinQuoter {
             return Err("No wallet configured for chain".to_string());
         }
 
-        let cached_balance = self.cached_balance_for(chain, token).await;
-
-        let Some(balance) = cached_balance else {
-            warn!(
-                "Cannot fill quote {}: no cached balance for chain {:?} and token {:?}",
-                quote.id, chain, token
-            );
-            return Err("Failed to refresh wallet balance".to_string());
-        };
-
+        // Use LiquidityCache to check if quote can be filled
         if !self
-            .balance_strategy
-            .can_fill_quote(quote.to.amount, balance.total_balance)
+            .liquidity_cache
+            .can_fill_quote_for_pair(
+                &quote.from.currency,
+                &quote.to.currency,
+                quote.to.amount,
+            )
+            .await
         {
             warn!(
-                "Cannot fill quote {}: insufficient balance for chain {:?} token {:?}; available {:?}",
-                quote.id, chain, token, balance.total_balance
+                "Cannot fill quote {}: insufficient balance for chain {:?} token {:?}",
+                quote.id, chain, token
             );
             return Err("Insufficient balance to fulfill quote".to_string());
         }
 
         Ok(())
-    }
-
-    async fn cached_balance_for(
-        &self,
-        chain: ChainType,
-        token: &TokenIdentifier,
-    ) -> Option<WalletBalance> {
-        let guard = self.balance_map.read().await;
-        guard
-            .get(&chain)
-            .and_then(|balances| balances.get(token))
-            .cloned()
     }
 }
 

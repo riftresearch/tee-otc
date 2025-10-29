@@ -6,6 +6,7 @@ pub mod cb_bitcoin_converter;
 pub mod db;
 pub mod evm_wallet;
 mod liquidity_cache;
+mod liquidity_lock;
 mod otc_handler;
 pub mod payment_manager;
 pub mod price_oracle;
@@ -420,11 +421,22 @@ pub async fn run_market_maker(
         balance_strat::QuoteBalanceStrategy::new(args.balance_utilization_threshold_bps),
     );
 
+    // Create liquidity lock manager for tracking locked liquidity
+    let liquidity_lock_manager = Arc::new(liquidity_lock::LiquidityLockManager::new(&mut join_set));
+
+    // Create liquidity cache BEFORE WrappedBitcoinQuoter (it needs it)
+    let liquidity_cache = Arc::new(liquidity_cache::LiquidityCache::new(
+        wallet_manager.clone(),
+        balance_strategy.clone(),
+        liquidity_lock_manager.clone(),
+        &mut join_set,
+    ));
+
     let btc_eth_price_oracle = price_oracle::BitcoinEtherPriceOracle::new(&mut join_set);
 
     let wrapped_bitcoin_quoter = Arc::new(WrappedBitcoinQuoter::new(
         wallet_manager.clone(),
-        balance_strategy.clone(),
+        liquidity_cache.clone(),
         btc_eth_price_oracle,
         esplora_client,
         provider.clone().erased(),
@@ -481,6 +493,7 @@ pub async fn run_market_maker(
         deposit_repository.clone(),
         payment_manager.clone(),
         payment_repository.clone(),
+        liquidity_lock_manager.clone(),
     );
     let otc_ws_client = websocket_client::WebSocketClient::new(
         args.otc_ws_url.clone(),
@@ -508,12 +521,7 @@ pub async fn run_market_maker(
         Ok(())
     });
 
-    // Create liquidity cache for RFQ liquidity requests
-    let liquidity_cache = Arc::new(liquidity_cache::LiquidityCache::new(
-        wallet_manager.clone(),
-        balance_strategy.clone(),
-        &mut join_set,
-    ));
+    // LiquidityCache was already created above (needed by WrappedBitcoinQuoter)
 
     // Make sure fees + balances are initialized before quotes can be computed
     wrapped_bitcoin_quoter

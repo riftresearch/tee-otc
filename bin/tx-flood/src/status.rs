@@ -27,7 +27,7 @@ impl SwapUpdate {
             amount: None,
             deposit_chain: None,
             sender_address: None,
-            timestamp: Utc::now(),
+            timestamp: utc::now(),
         }
     }
 
@@ -43,7 +43,7 @@ impl SwapUpdate {
             amount: Some(amount),
             deposit_chain: Some(deposit_chain),
             sender_address: None,
-            timestamp: Utc::now(),
+            timestamp: utc::now(),
         }
     }
 
@@ -60,7 +60,7 @@ impl SwapUpdate {
             amount: Some(amount),
             deposit_chain: Some(deposit_chain),
             sender_address: Some(sender_address),
-            timestamp: Utc::now(),
+            timestamp: utc::now(),
         }
     }
 }

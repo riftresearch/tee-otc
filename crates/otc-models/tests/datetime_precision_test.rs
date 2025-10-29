@@ -1,12 +1,12 @@
 use alloy::primitives::U256;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime};
 use otc_models::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
 use uuid::Uuid;
 
 #[test]
 fn test_datetime_precision_affects_hash() {
     // Create a datetime with nanosecond precision
-    let now = Utc::now();
+    let now = utc::now();
 
     // Simulate PostgreSQL round-trip (microsecond precision)
     let timestamp_micros = now.timestamp_micros();
