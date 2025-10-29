@@ -6,7 +6,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
-use tracing::{error, info, warn};
+use tracing::{error, warn};
 
 const CACHE_UPDATE_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -36,7 +36,6 @@ impl LiquidityCache {
             loop {
                 interval.tick().await;
 
-                info!("Computing liquidity update in background task");
                 match Self::compute_liquidity_static(
                     &wallet_manager,
                     &balance_strategy,
@@ -46,7 +45,6 @@ impl LiquidityCache {
                     Ok(trading_pairs) => {
                         let mut cache = cached_data_task.write().await;
                         *cache = trading_pairs;
-                        info!("Liquidity cache updated successfully");
                     }
                     Err(e) => {
                         error!("Failed to compute liquidity in background task: {}", e);
