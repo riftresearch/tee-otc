@@ -72,6 +72,7 @@ services:
       - "50102:50102"
       - "50103:50103"
       - "50104:50104"
+      - "8080:8080"
 
   otc-server:
     image: !reset null
@@ -217,6 +218,7 @@ services:
     ports:
       - "9000:9000"
       - "6669:6669"
+      - "8080:8080"
     depends_on:
       mm-postgres:
         condition: service_healthy
@@ -252,7 +254,7 @@ services:
       COINBASE_EXCHANGE_API_KEY: ""
       COINBASE_EXCHANGE_API_PASSPHRASE: ""
       COINBASE_EXCHANGE_API_SECRET: ""
-      COINBASE_EXCHANGE_API_BASE_URL: https://api.exchange.coinbase.com
+      COINBASE_EXCHANGE_API_BASE_URL: http://devnet:8080
       AUTO_MANAGE_INVENTORY: false
       BITCOIN_BATCH_INTERVAL_SECS: 2
       BITCOIN_BATCH_SIZE: 100

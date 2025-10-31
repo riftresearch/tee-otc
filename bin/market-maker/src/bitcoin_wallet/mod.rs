@@ -475,6 +475,7 @@ impl WalletTrait for BitcoinWallet {
         &self,
         tx_hash: &str,
         confirmations: u64,
+        poll_interval: Duration,
     ) -> Result<(), WalletError> {
         let txid = Txid::from_str(tx_hash).map_err(|e| WalletError::ParseAddressFailed {
             context: e.to_string(),
@@ -505,7 +506,7 @@ impl WalletTrait for BitcoinWallet {
                 }
             }
 
-            tokio::time::sleep(Duration::from_secs(12)).await;
+            tokio::time::sleep(poll_interval).await;
         }
 
         Ok(())

@@ -530,6 +530,7 @@ mod tests {
             &self,
             _tx_hash: &str,
             _confirmations: u64,
+            _poll_interval: std::time::Duration,
         ) -> crate::wallet::WalletResult<()> {
             Ok(())
         }

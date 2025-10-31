@@ -314,20 +314,6 @@ impl LiquidityCache {
         // Calculate available balance
         let available_balance = balance.total_balance.saturating_sub(locked_amount);
 
-        // Log if there's locked liquidity
-        if locked_amount > U256::ZERO {
-            tracing::info!(
-                from_chain = ?from.chain,
-                from_token = ?from.token,
-                to_chain = ?to.chain,
-                to_token = ?to.token,
-                total_balance = %balance.total_balance,
-                locked_amount = %locked_amount,
-                available_balance = %available_balance,
-                "Liquidity locked for trading pair"
-            );
-        }
-
         Some(available_balance)
     }
 }

@@ -5,7 +5,7 @@ use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
 use otc_models::ChainType;
 use otc_models::TokenIdentifier;
 use snafu::{Location, Snafu};
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::oneshot;
 
 use crate::bitcoin_wallet::BitcoinWalletError;
@@ -173,7 +173,17 @@ pub trait Wallet: Send + Sync {
     /// Notes:
     /// - Does not guarantee confirmation if the transaction is permanently invalid (e.g., double spend).
     /// - Requires an active connection to a node that tracks the mempool and blockchain state.
-    async fn guarantee_confirmations(&self, tx_hash: &str, confirmations: u64) -> WalletResult<()>;
+    ///
+    /// # Arguments
+    /// * `tx_hash` - The transaction hash to wait for
+    /// * `confirmations` - The number of confirmations required
+    /// * `poll_interval` - How often to poll the chain for confirmation status
+    async fn guarantee_confirmations(
+        &self,
+        tx_hash: &str,
+        confirmations: u64,
+        poll_interval: Duration,
+    ) -> WalletResult<()>;
 
     /// Return the available balance for the given token
     async fn balance(&self, token: &TokenIdentifier) -> WalletResult<WalletBalance>;
@@ -272,6 +282,7 @@ mod tests {
             &self,
             _tx_hash: &str,
             _confirmations: u64,
+            _poll_interval: Duration,
         ) -> WalletResult<()> {
             Ok(())
         }

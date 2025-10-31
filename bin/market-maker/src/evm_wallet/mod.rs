@@ -475,6 +475,7 @@ impl Wallet for EVMWallet {
         &self,
         tx_hash: &str,
         confirmations: u64,
+        poll_interval: Duration,
     ) -> Result<(), WalletError> {
         let tx_hash = TxHash::from_str(tx_hash).map_err(|e| WalletError::ParseAddressFailed {
             context: e.to_string(),
@@ -502,7 +503,7 @@ impl Wallet for EVMWallet {
                     }
                 }
                 None => {
-                    tokio::time::sleep(Duration::from_secs(12)).await;
+                    tokio::time::sleep(poll_interval).await;
                 }
             }
         }

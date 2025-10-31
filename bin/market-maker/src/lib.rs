@@ -278,6 +278,10 @@ pub struct MarketMakerArgs {
     #[arg(long, env = "AUTO_MANAGE_INVENTORY", default_value = "false")]
     pub auto_manage_inventory: bool,
 
+    /// Rebalancing poll interval in seconds - how often to check inventory and trigger rebalancing if needed
+    #[arg(long, env = "REBALANCE_POLL_INTERVAL_SECS", default_value = "60")]
+    pub rebalance_poll_interval_secs: u64,
+
     /// Bitcoin batch payment interval in seconds
     #[arg(long, env = "BITCOIN_BATCH_INTERVAL_SECS", default_value = "24")]
     pub bitcoin_batch_interval_secs: u64,
@@ -305,6 +309,18 @@ pub struct MarketMakerArgs {
     /// Maximum number of deposits to collect per lot for Bitcoin
     #[arg(long, env = "BITCOIN_MAX_DEPOSITS_PER_LOT", default_value = "100")]
     pub bitcoin_max_deposits_per_lot: usize,
+
+    /// Confirmation polling interval in seconds - how often to poll for transaction confirmations
+    #[arg(long, env = "CONFIRMATION_POLL_INTERVAL_SECS", default_value = "12")]
+    pub confirmation_poll_interval_secs: u64,
+
+    /// Number of Bitcoin confirmations required before crediting deposit to Coinbase (default: 3 for production safety)
+    #[arg(long, env = "BTC_COINBASE_CONFIRMATIONS", default_value = "3")]
+    pub btc_coinbase_confirmations: u32,
+
+    /// Number of Ethereum (cbBTC) confirmations required before crediting deposit to Coinbase (default: 36 for production safety)
+    #[arg(long, env = "CBBTC_COINBASE_CONFIRMATIONS", default_value = "36")]
+    pub cbbtc_coinbase_confirmations: u32,
 
     /// Enable tokio console subscriber
     #[arg(long, env = "ENABLE_TOKIO_CONSOLE_SUBSCRIBER", default_value = "false")]
@@ -339,7 +355,6 @@ pub async fn run_market_maker(
         setup_metrics(&mut join_set, addr)?;
     }
 
-    let admin_api_addr = args.admin_api_listen_addr;
 
     let database = Arc::new(
         Database::connect(
@@ -400,7 +415,7 @@ pub async fn run_market_maker(
         .expect("Should have been able to ensure EIP-7702 delegation");
 
     // Setup admin API server if address is provided
-    if let Some(addr) = admin_api_addr {
+    if let Some(addr) = args.admin_api_listen_addr {
         info!("Setting up admin API listener on {}", addr);
         setup_admin_api(
             &mut join_set,
@@ -566,9 +581,12 @@ pub async fn run_market_maker(
         BandsParams {
             target_bps: args.inventory_target_ratio_bps,
             band_width_bps: args.rebalance_tolerance_bps,
-            poll_interval: Duration::from_secs(60),
+            poll_interval: Duration::from_secs(args.rebalance_poll_interval_secs),
         },
         args.auto_manage_inventory,
+        Duration::from_secs(args.confirmation_poll_interval_secs),
+        args.btc_coinbase_confirmations,
+        args.cbbtc_coinbase_confirmations,
     );
 
     join_set.spawn(async move { conversion_actor.await.context(ConversionActorSnafu) });

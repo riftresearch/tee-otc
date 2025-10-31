@@ -374,6 +374,8 @@ pub async fn convert_btc_to_cbbtc(
     sender_wallet: &dyn Wallet,
     amount_sats: u64,
     recipient_address: &str,
+    confirmation_poll_interval: Duration,
+    btc_coinbase_confirmations: u32,
 ) -> Result<String> {
     info!("Starting BTC -> cbBTC conversion for {} sats", amount_sats);
     if sender_wallet.chain_type() != ChainType::Bitcoin {
@@ -437,7 +439,7 @@ pub async fn convert_btc_to_cbbtc(
 
     // wait for the btc to be confirmed
     sender_wallet
-        .guarantee_confirmations(&btc_tx_hash, 3) // 2 confirmations for btc transactions to credit on coinbase we do + 1 to be safe
+        .guarantee_confirmations(&btc_tx_hash, btc_coinbase_confirmations as u64, confirmation_poll_interval)
         .await
         .context(WalletSnafu)?;
 
@@ -481,6 +483,8 @@ pub async fn convert_cbbtc_to_btc(
     sender_wallet: &dyn Wallet,
     amount_sats: u64,
     recipient_address: &str,
+    confirmation_poll_interval: Duration,
+    cbbtc_coinbase_confirmations: u32,
 ) -> Result<String> {
     info!("Starting cbBTC -> BTC conversion for {} sats", amount_sats);
     if sender_wallet.chain_type() != ChainType::Ethereum {
@@ -546,7 +550,7 @@ pub async fn convert_cbbtc_to_btc(
 
     // wait for the cbbtc to be confirmed
     sender_wallet
-        .guarantee_confirmations(&cbbtc_tx_hash, 36) // 35 confirmations for cbbtc transactions to credit on coinbase we do + 1 to be safe
+        .guarantee_confirmations(&cbbtc_tx_hash, cbbtc_coinbase_confirmations as u64, confirmation_poll_interval)
         .await
         .context(WalletSnafu)?;
 

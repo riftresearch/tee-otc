@@ -260,6 +260,8 @@ pub async fn build_mm_test_args(
     devnet: &devnet::RiftDevnet,
     connect_options: &PgConnectOptions,
 ) -> MarketMakerArgs {
+    let coinbase_exchange_api_base_url = format!("http://127.0.0.1:{}", devnet.coinbase_mock_server_port.unwrap_or(8080));
+    let auto_manage_inventory = devnet.coinbase_mock_server_port.is_some();
     let db_url = create_test_database(connect_options).await.unwrap();
     MarketMakerArgs {
         enable_tokio_console_subscriber: false,
@@ -290,12 +292,16 @@ pub async fn build_mm_test_args(
         db_min_connections: 2,
         inventory_target_ratio_bps: 5000,
         rebalance_tolerance_bps: 2500,
+        rebalance_poll_interval_secs: 5,
         balance_utilization_threshold_bps: 9500, // 95%, require headroom so 100% utilization is rejected in tests
-        coinbase_exchange_api_base_url: "https://api.coinbase.com".parse().unwrap(), // TODO: This needs to be a test server url
+        confirmation_poll_interval_secs: 1, // Fast polling for tests since blocks are mined every 1s
+        btc_coinbase_confirmations: 2, // Reduced for tests (production: 3)
+        cbbtc_coinbase_confirmations: 3, // Greatly reduced for tests (production: 36)
+        coinbase_exchange_api_base_url: coinbase_exchange_api_base_url.parse().unwrap(),
         coinbase_exchange_api_key: "".to_string(),
         coinbase_exchange_api_passphrase: "".to_string(),
         coinbase_exchange_api_secret: "".to_string(),
-        auto_manage_inventory: false,
+        auto_manage_inventory: auto_manage_inventory,
         metrics_listen_addr: None,
         batch_monitor_interval_secs: 5,
         ethereum_max_deposits_per_lot: 350,

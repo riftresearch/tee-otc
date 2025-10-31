@@ -52,3 +52,6 @@ mod connection_reset_test;
 
 #[cfg(test)]
 mod liquidity_locking_test;
+
+#[cfg(test)]
+mod auto_rebalance_test;

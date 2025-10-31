@@ -1,11 +1,13 @@
 //! `lib.rs` — central library code.
 
 pub mod bitcoin_devnet;
+pub mod coinbase_mock_server;
 pub mod evm_devnet;
 pub mod token_indexerd;
 
 pub use bitcoin_devnet::BitcoinDevnet;
 use blockchain_utils::P2WPKHBitcoinWallet;
+pub use coinbase_mock_server::WithdrawalProcessingMode;
 pub use evm_devnet::EthDevnet;
 
 use evm_devnet::ForkConfig;
@@ -309,10 +311,12 @@ pub type Result<T, E = DevnetError> = std::result::Result<T, E>;
 /// - an `EthDevnet`
 /// - an optional `RiftIndexer` and `RiftIndexerServer`
 pub struct RiftDevnet {
-    pub bitcoin: BitcoinDevnet,
-    pub ethereum: EthDevnet,
+    pub bitcoin: Arc<BitcoinDevnet>,
+    pub ethereum: Arc<EthDevnet>,
     pub otc_server_config_dir: TempDir,
     pub join_set: JoinSet<Result<()>>,
+    pub coinbase_mock_server_handle: Option<tokio::task::JoinHandle<Result<()>>>,
+    pub coinbase_mock_server_port: Option<u16>,
 }
 
 impl RiftDevnet {
@@ -324,6 +328,43 @@ impl RiftDevnet {
     #[must_use]
     pub fn builder_for_cached() -> RiftDevnetBuilder {
         RiftDevnetBuilder::for_cached()
+    }
+
+    /// Start the Coinbase mock server with the given processing mode.
+    /// If a listener is provided, it will be used (and its port extracted).
+    /// Returns the port number the server is bound to.
+    pub async fn start_coinbase_mock_server(
+        &mut self,
+        listener: Option<tokio::net::TcpListener>,
+        processing_mode: WithdrawalProcessingMode,
+    ) -> Result<u16> {
+        use crate::coinbase_mock_server::CoinbaseMockServer;
+        
+        let (listener, port) = if let Some(listener) = listener {
+            let port = listener.local_addr()
+                .map_err(|e| eyre::eyre!("Failed to get local address: {}", e))?
+                .port();
+            (listener, port)
+        } else {
+            // If no listener provided, bind to a random port
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+                .await
+                .map_err(|e| eyre::eyre!("Failed to bind to random port: {}", e))?;
+            let port = listener.local_addr()
+                .map_err(|e| eyre::eyre!("Failed to get local address: {}", e))?
+                .port();
+            (listener, port)
+        };
+        
+        let server = CoinbaseMockServer::new().with_processing_mode(processing_mode);
+        let bitcoin_arc = self.bitcoin.clone();
+        let ethereum_arc = self.ethereum.clone();
+        let handle = server
+            .start(listener, bitcoin_arc, ethereum_arc)
+            .await?;
+        self.coinbase_mock_server_handle = Some(handle);
+        self.coinbase_mock_server_port = Some(port);
+        Ok(port)
     }
 }
 
@@ -337,6 +378,7 @@ pub struct RiftDevnetBuilder {
     using_esplora: bool,
     token_indexer_database_url: Option<String>,
     bitcoin_mining_mode: crate::bitcoin_devnet::MiningMode,
+    coinbase_mock_server_config: Option<WithdrawalProcessingMode>,
 }
 
 impl RiftDevnetBuilder {
@@ -357,6 +399,7 @@ impl RiftDevnetBuilder {
             using_esplora: true,
             token_indexer_database_url: None,
             bitcoin_mining_mode: crate::bitcoin_devnet::MiningMode::default(),
+            coinbase_mock_server_config: None,
         }
     }
 
@@ -404,6 +447,14 @@ impl RiftDevnetBuilder {
         self.using_esplora = value;
         self
     }
+
+    /// Enable the Coinbase mock server with default settings (port 8080, Realistic mode).
+    #[must_use]
+    pub fn with_coinbase_mock_server(mut self, processing_mode: WithdrawalProcessingMode) -> Self {
+        self.coinbase_mock_server_config = Some(processing_mode);
+        self
+    }
+
 
     pub async fn build(self) -> Result<(crate::RiftDevnet, u64)> {
         // dont bother with the cache if we're in interactive mode for now
@@ -531,13 +582,51 @@ impl RiftDevnetBuilder {
 
         let config_dir = get_new_temp_dir()?;
 
-        // 11) Return the final devnet
-        let devnet = crate::RiftDevnet {
-            bitcoin: bitcoin_devnet,
-            ethereum: ethereum_devnet,
+        // 11) Create the devnet
+        let mut devnet = crate::RiftDevnet {
+            bitcoin: Arc::new(bitcoin_devnet),
+            ethereum: Arc::new(ethereum_devnet),
             otc_server_config_dir: config_dir,
             join_set,
+            coinbase_mock_server_handle: None,
+            coinbase_mock_server_port: None,
         };
+
+        // 12) Start Coinbase mock server if enabled
+        if let Some(config) = self.coinbase_mock_server_config {
+            // Bind to random port and keep listener alive
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .map_err(|e| eyre::eyre!("Failed to bind to random port: {}", e))?;
+            
+            let port = listener
+                .local_addr()
+                .map_err(|e| eyre::eyre!("Failed to get local address: {}", e))?
+                .port();
+            
+            devnet
+                .start_coinbase_mock_server(Some(listener), config)
+                .await
+                .map_err(|e| eyre::eyre!("Failed to start Coinbase mock server: {}", e))?;
+            info!(
+                "[Devnet Builder] Coinbase mock server started on port {} with mode {:?}",
+                port, config
+            );
+        } else if self.interactive {
+            // Auto-enable in interactive mode with fixed port 8080
+            let listener = tokio::net::TcpListener::bind(("0.0.0.0", 8080))
+                .await
+                .map_err(|e| eyre::eyre!("Failed to bind to port 8080: {}", e))?;
+            
+            devnet
+                .start_coinbase_mock_server(Some(listener), WithdrawalProcessingMode::Manual)
+                .await
+                .map_err(|e| eyre::eyre!("Failed to start Coinbase mock server: {}", e))?;
+            info!(
+                "[Devnet Builder] Coinbase mock server auto-started in interactive mode on port 8080 with mode {:?}",
+                WithdrawalProcessingMode::Manual
+            );
+        }
         info!(
             "[Devnet Builder] Devnet setup took {:?}",
             build_start.elapsed()
@@ -584,7 +673,7 @@ impl RiftDevnetBuilder {
                 )
             })?;
 
-        ethereum_devnet
+        let _tx_hash = ethereum_devnet
             .mint_cbbtc(
                 market_maker_ethereum_address,
                 alloy::primitives::U256::from(funding_amount),
@@ -625,7 +714,7 @@ impl RiftDevnetBuilder {
         let funding_amount = bitcoin::Amount::from_btc(1000.0).unwrap().to_sat();
 
         // Fund demo_account with cbBTC
-        ethereum_devnet
+        let _tx_hash = ethereum_devnet
             .mint_cbbtc(
                 demo_account.ethereum_address,
                 alloy::primitives::U256::from(funding_amount),
@@ -697,6 +786,11 @@ impl RiftDevnetBuilder {
                 bitcoin_devnet.esplora_url.as_ref().unwrap()
             );
         }
+
+        println!(
+            "Coinbase Mock API URL:       http://0.0.0.0:{}",
+            crate::coinbase_mock_server::COINBASE_MOCK_SERVER_PORT
+        );
 
         match self.bitcoin_mining_mode {
             crate::bitcoin_devnet::MiningMode::Interval(interval) => {

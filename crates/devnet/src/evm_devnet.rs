@@ -108,14 +108,14 @@ impl EthDevnet {
         Ok(())
     }
 
-    pub async fn mint_cbbtc(&self, address: Address, amount: U256) -> Result<()> {
-        self.cbbtc_contract
+    pub async fn mint_cbbtc(&self, address: Address, amount: U256) -> Result<String> {
+        let receipt = self.cbbtc_contract
             .mint(address, amount)
             .send()
             .await?
             .get_receipt()
             .await?;
-        Ok(())
+        Ok(receipt.transaction_hash.to_string())
     }
 
     /*

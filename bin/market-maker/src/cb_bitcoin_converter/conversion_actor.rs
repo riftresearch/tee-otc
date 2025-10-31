@@ -81,6 +81,9 @@ pub async fn run_rebalancer(
     evm_wallet: Arc<dyn Wallet>,
     params: BandsParams,
     execute_rebalance: bool,
+    confirmation_poll_interval: Duration,
+    btc_coinbase_confirmations: u32,
+    cbbtc_coinbase_confirmations: u32,
 ) -> Result<()> {
     let btc_token = TokenIdentifier::Native;
     let cbbtc_token = TokenIdentifier::Address(CB_BTC_CONTRACT_ADDRESS.to_string());
@@ -198,6 +201,8 @@ pub async fn run_rebalancer(
                             btc_wallet.as_ref(),
                             trade_sats,
                             &recv,
+                            confirmation_poll_interval,
+                            btc_coinbase_confirmations,
                         )
                         .await
                         .context(ConvertSnafu)?;
@@ -221,6 +226,8 @@ pub async fn run_rebalancer(
                             evm_wallet.as_ref(),
                             trade_sats,
                             &recv,
+                            confirmation_poll_interval,
+                            cbbtc_coinbase_confirmations,
                         )
                         .await
                         .context(ConvertSnafu)?;
