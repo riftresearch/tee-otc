@@ -3,7 +3,7 @@ use ezsockets::ClientConfig;
 use serde::Serialize;
 use snafu::prelude::*;
 use std::sync::Arc;
-use tracing::{info, warn};
+use tracing::{Instrument, info, warn};
 
 #[derive(Debug, Snafu)]
 pub enum WebSocketError {
@@ -79,6 +79,9 @@ impl<H: MessageHandler> WebSocketClient<H> {
             .header("X-API-ID", &self.api_key_id)
             .header("X-API-SECRET", &self.api_secret);
 
+        // let span = tracing::info_span!("ws_client", client = self.handler.handler_name());
+        // let _span_guard = span.enter();
+
         let handler = self.handler.clone();
         let (client, future) = ezsockets::connect(
             move |client| EzSocketAdapter {
@@ -95,6 +98,8 @@ impl<H: MessageHandler> WebSocketClient<H> {
             future.await.context(ConnectionSnafu)?;
             Ok(())
         };
+
+        // drop(_span_guard);
 
         Ok((handle, wrapped_future))
     }

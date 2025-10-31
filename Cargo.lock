@@ -3383,8 +3383,7 @@ dependencies = [
 [[package]]
 name = "ezsockets"
 version = "0.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7169dbf87852437222a3b9799dfd580dc690f92b6ee972691caeb2580095a7d7"
+source = "git+https://github.com/alpinevm/ezsockets?rev=eecf28915836e1142bb5bbf74ce8fd007adbf690#eecf28915836e1142bb5bbf74ce8fd007adbf690"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -4148,7 +4147,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.1",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -4378,6 +4377,7 @@ dependencies = [
  "bitcoincore-rpc-async",
  "blockchain-utils",
  "chrono",
+ "console-subscriber",
  "ctor",
  "devnet",
  "eip3009-erc20-contract",
@@ -5796,7 +5796,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.32",
- "socket2 0.5.10",
+ "socket2 0.6.1",
  "thiserror 2.0.16",
  "tokio",
  "tracing",
@@ -5833,7 +5833,7 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.1",
  "tracing",
  "windows-sys 0.60.2",
 ]

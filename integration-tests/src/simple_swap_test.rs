@@ -4,6 +4,7 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy::{primitives::U256, providers::Provider};
 
 use bitcoincore_rpc_async::RpcApi;
+use blockchain_utils::init_logger;
 use devnet::bitcoin_devnet::MiningMode;
 use devnet::{MultichainAccount, RiftDevnet};
 use evm_token_indexer_client::TokenIndexerClient;

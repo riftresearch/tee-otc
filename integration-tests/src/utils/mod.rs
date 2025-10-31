@@ -16,7 +16,7 @@ use alloy::{
     signers::{local::PrivateKeySigner, SignerSync},
 };
 use bitcoincore_rpc_async::Auth;
-use blockchain_utils::create_websocket_wallet_provider;
+use blockchain_utils::{create_websocket_wallet_provider, init_logger};
 use ctor::ctor;
 use devnet::MultichainAccount;
 use market_maker::{evm_wallet::EVMWallet, MarketMakerArgs};
@@ -402,11 +402,6 @@ pub async fn build_test_user_ethereum_wallet(
 fn init_test_tracing() {
     let has_nocapture = std::env::args().any(|arg| arg == "--nocapture" || arg == "--show-output");
     if has_nocapture {
-        tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                EnvFilter::new("info,otc_server=debug,otc_chains=debug,market-maker=debug")
-            }))
-            .try_init()
-            .ok();
+        init_logger("info,otc_server=debug,otc_chains=debug,market-maker=debug", None::<console_subscriber::ConsoleLayer>).expect("Logger should initialize");
     }
 }

@@ -99,3 +99,4 @@ opt-level = 3
 corepc-node = { git = "https://github.com/alpinevm/corepc", rev = "2b21b2bfeb4b4c8bc71fccba87d86054a648f242" }
 sqlx-sqlite = { path = "sqlx-sqlite-shim" }
 esplora-client = {git = "https://github.com/riftresearch/rust-esplora-client" , rev = "b749fb95e204c7d5f5c1fa83d499a8600d72a103"}
+ezsockets = { git = "https://github.com/alpinevm/ezsockets", rev = "eecf28915836e1142bb5bbf74ce8fd007adbf690"}

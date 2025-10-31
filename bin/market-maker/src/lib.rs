@@ -30,7 +30,7 @@ use reqwest::Url;
 use snafu::{prelude::*, ResultExt};
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
-use tracing::info;
+use tracing::{info, Instrument};
 
 use axum::{
     extract::State, http::header, http::StatusCode, response::IntoResponse, routing::get, Router,
@@ -516,12 +516,14 @@ pub async fn run_market_maker(
         args.api_secret.clone(),
         otc_handler,
     );
-    let (otc_handle, otc_future) = otc_ws_client.connect().await.context(WebSocketClientSnafu)?;
+    let (otc_handle, otc_future) = otc_ws_client.connect().instrument(tracing::info_span!("ws", client = "otc")).await.context(WebSocketClientSnafu)?;
     
     // Spawn OTC WebSocket connection (ezsockets handles reconnection automatically)
-    join_set.spawn(async move {
-        otc_future.await.context(WebSocketClientSnafu)
-    });
+    join_set.spawn(
+        async move {
+            otc_future.await.context(WebSocketClientSnafu)
+        }
+    );
     
     // Spawn OTC response forwarder task for unsolicited MMResponse messages
     let otc_handle_for_forwarder = otc_handle.clone();
@@ -557,12 +559,14 @@ pub async fn run_market_maker(
         args.api_secret.clone(),
         rfq_handler,
     );
-    let (_rfq_handle, rfq_future) = rfq_ws_client.connect().await.context(WebSocketClientSnafu)?;
+    let (_rfq_handle, rfq_future) = rfq_ws_client.connect().instrument(tracing::info_span!("ws", client = "rfq")).await.context(WebSocketClientSnafu)?;
     
     // Spawn RFQ WebSocket connection (ezsockets handles reconnection automatically)
-    join_set.spawn(async move {
-        rfq_future.await.context(WebSocketClientSnafu)
-    });
+    join_set.spawn(
+        async move {
+            rfq_future.await.context(WebSocketClientSnafu)
+        }
+    );
 
     let coinbase_client = CoinbaseClient::new(
         args.coinbase_exchange_api_base_url,

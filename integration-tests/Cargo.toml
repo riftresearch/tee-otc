@@ -39,3 +39,4 @@ eip3009-erc20-contract = {workspace = true}
 metrics = {workspace = true}
 socket2 = {workspace = true}
 snafu = {workspace = true}
+console-subscriber = {workspace = true}
