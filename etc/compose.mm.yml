@@ -29,11 +29,7 @@ configs:
           access: proxy
           url: http://mm-prometheus:9090
           isDefault: true
-        - name: Tempo
-          uid: tempo-mm
-          type: tempo
-          access: proxy
-          url: http://mm-tempo:3200
+
 
   grafana-dashboard-provider-mm:
     content: |
@@ -45,45 +41,6 @@ configs:
           type: file
           options:
             path: /etc/grafana/provisioning/dashboards
-
-  tempo-config-mm:
-    content: |
-      server:
-        http_listen_port: 3200
-        grpc_server_max_recv_msg_size: 268435456  
-        grpc_server_max_send_msg_size: 268435456  
-      querier:
-        frontend_worker:
-          grpc_client_config:
-            max_send_msg_size: 268435456
-            max_recv_msg_size: 268435456
-      distributor:
-        receivers:
-          otlp:
-            protocols:
-              http:
-                endpoint: 0.0.0.0:4318
-              grpc:
-                endpoint: 0.0.0.0:4317
-      ingester:
-        max_block_duration: 5m
-        trace_idle_period: 10s
-        max_block_bytes: 10485760
-      storage:
-        trace:
-          backend: local
-          local:
-            path: /tmp/tempo/traces
-          wal:
-            path: /tmp/tempo/wal
-      compactor:
-        compaction:
-          block_retention: 48h
-      overrides:
-        ingestion_burst_size_bytes: 100000000
-        ingestion_rate_limit_bytes: 50000000
-        max_traces_per_user: 10000
-        max_bytes_per_trace: 104857600
 
   grafana-node-dashboard-mm:
     content: | 
@@ -1106,8 +1063,6 @@ services:
       INVENTORY_TARGET_RATIO_BPS: ${INVENTORY_TARGET_RATIO_BPS}
       REBALANCE_TOLERANCE_BPS: ${REBALANCE_TOLERANCE_BPS}
       AUTO_MANAGE_INVENTORY: ${AUTO_MANAGE_INVENTORY}
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://mm-tempo:4318
-      OTEL_SERVICE_NAME: market-maker
 
     networks:
       - mm-network
@@ -1153,26 +1108,9 @@ services:
     networks:
       - mm-network
 
-  mm-tempo:
-    image: grafana/tempo:2.6.1
-    container_name: mm-tempo
-    restart: unless-stopped
-    user: "0:0"
-    command: ["-config.file=/etc/tempo.yml"]
-    ports:
-      - "3200:3200"
-      - "4317:4317"
-      - "4318:4318"
-    volumes:
-      - mm_tempo_data:/tmp/tempo
-    configs:
-      - source: tempo-config-mm
-        target: /etc/tempo.yml
-    networks:
-      - mm-network
 
   mm-grafana:
-    image: grafana/grafana:10.4.2
+    image: grafana/grafana:12.2.1
     container_name: mm-grafana
     restart: unless-stopped
     ports:
@@ -1198,4 +1136,3 @@ volumes:
   mm_postgres_data:
   market_maker_bitcoin_wallet_db_data:
   mm_prometheus_data:
-  mm_tempo_data:

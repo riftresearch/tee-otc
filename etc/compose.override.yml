@@ -260,9 +260,6 @@ services:
       BITCOIN_BATCH_SIZE: 100
       ETHEREUM_BATCH_INTERVAL_SECS: 2
       ETHEREUM_BATCH_SIZE: 392
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://mm-tempo:4318
-      OTEL_SERVICE_NAME: market-maker
-      OTEL_EXPORTER_OTLP_HEADERS: X-Scope-OrgID=single-tenant
 
     volumes: []
     networks:
@@ -273,10 +270,6 @@ services:
     volumes: []
   
   mm-prometheus:
-    volumes: []
-  
-  mm-tempo:
-    user: "0:0"
     volumes: []
   
   mm-grafana:
