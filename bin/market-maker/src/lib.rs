@@ -2,7 +2,6 @@ mod admin_api;
 mod balance_strat;
 mod batch_monitor;
 pub mod bitcoin_wallet;
-pub mod cb_bitcoin_converter;
 pub mod db;
 pub mod evm_wallet;
 mod liquidity_cache;
@@ -11,6 +10,7 @@ mod otc_handler;
 pub mod payment_manager;
 pub mod price_oracle;
 mod rfq_handler;
+mod rebalancer;
 pub mod wallet;
 mod websocket_client;
 mod wrapped_bitcoin_quoter;
@@ -38,11 +38,12 @@ use axum::{
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder, PrometheusHandle};
 use tokio::net::TcpListener;
 use uuid::Uuid;
-
+use coinbase_exchange_client::CoinbaseClient;
 use crate::payment_manager::PaymentManager;
+use crate::rebalancer::BandsParams;
+use crate::rebalancer::run_rebalancer;
 use crate::{
     bitcoin_wallet::BitcoinWallet,
-    cb_bitcoin_converter::{coinbase_client::CoinbaseClient, run_rebalancer, BandsParams},
     db::Database,
     evm_wallet::EVMWallet,
     wallet::WalletManager,
@@ -99,16 +100,19 @@ pub enum Error {
     #[snafu(display("Payment repository error: {}", source))]
     PaymentRepository { source: db::PaymentRepositoryError },
 
-    #[snafu(display("Coinbase client error: {}", source))]
-    CoinbaseClientError {
-        #[snafu(source(from(cb_bitcoin_converter::coinbase_client::ConversionError, Box::new)))]
-        source: Box<cb_bitcoin_converter::coinbase_client::ConversionError>,
+    #[snafu(display("Coinbase exchange client error: {source} at {loc:#?}"))]
+    CoinbaseExchangeClientError {
+        source: coinbase_exchange_client::CoinbaseExchangeClientError,
+        #[snafu(implicit)]
+        loc: snafu::Location,
     },
 
-    #[snafu(display("Conversion actor error: {}", source))]
-    ConversionActor {
-        #[snafu(source(from(cb_bitcoin_converter::ConversionActorError, Box::new)))]
-        source: Box<cb_bitcoin_converter::ConversionActorError>,
+    #[snafu(display("Rebalancer error: {source} at {loc:#?}"))]
+    RebalancerError {
+        #[snafu(source(from(rebalancer::RebalancerError, Box::new)))]
+        source: Box<rebalancer::RebalancerError>,
+        #[snafu(implicit)]
+        loc: snafu::Location,
     },
 
     #[snafu(display("Failed to install metrics recorder: {}", source))]
@@ -574,7 +578,7 @@ pub async fn run_market_maker(
         args.coinbase_exchange_api_passphrase,
         args.coinbase_exchange_api_secret,
     )
-    .context(CoinbaseClientSnafu)?;
+    .context(CoinbaseExchangeClientSnafu)?;
 
     // Run rebalancer, even if auto manage inventory is disabled
     // b/c it's still useful to track the balance of the wallets in metrics
@@ -593,7 +597,7 @@ pub async fn run_market_maker(
         args.cbbtc_coinbase_confirmations,
     );
 
-    join_set.spawn(async move { conversion_actor.await.context(ConversionActorSnafu) });
+    join_set.spawn(async move { conversion_actor.await.context(RebalancerSnafu) });
 
 
     tokio::select! { 

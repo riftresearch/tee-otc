@@ -30,6 +30,7 @@ utc = {path = "crates/utc"}
 otc-auth = {path = "crates/otc-auth"}
 chainalysis-address-screener = { path = "crates/chainalysis-address-screener" }
 mm-websocket-server = { path = "crates/mm-websocket-server" }
+coinbase-exchange-client = { path = "crates/coinbase-exchange-client" }
 
 # All of the following dependences (before the empty line) are implicitly linked to the same version, if one of them is updated they must all be updated simultaneously 
 bitcoin = { version = "0.32.0", default-features = false, features = ["serde", "base64", "secp-recovery"] }

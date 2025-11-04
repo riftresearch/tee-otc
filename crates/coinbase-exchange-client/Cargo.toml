@@ -1,0 +1,21 @@
+[package]
+name = "coinbase-exchange-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+reqwest = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+base64 = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+snafu = { workspace = true }
+utc = { workspace = true }
+url = { workspace = true }
+tracing = { workspace = true }
+otc-models = { workspace = true }
+
+tokio = {workspace=true}

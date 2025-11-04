@@ -1,23 +1,26 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use alloy::primitives::U256;
 use alloy::primitives::utils::format_units;
-use otc_models::{TokenIdentifier, CB_BTC_CONTRACT_ADDRESS};
+use otc_chains::traits::Payment;
+use otc_models::{CB_BTC_CONTRACT_ADDRESS, ChainType, Currency, Lot, TokenIdentifier};
 use snafu::{Location, ResultExt};
 use tokio::time::sleep;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use metrics::{counter, gauge, histogram};
 
-use crate::cb_bitcoin_converter::coinbase_client::{
-    convert_btc_to_cbbtc, convert_cbbtc_to_btc, CoinbaseClient, ConversionError,
+use coinbase_exchange_client::{
+    CoinbaseClient, CoinbaseExchangeClientError, WithdrawalStatus
 };
+
 use crate::wallet::{Wallet, WalletError};
 
 const BPS_DENOM: u64 = 10_000;
 
 #[derive(Debug, snafu::Snafu)]
-pub enum ConversionActorError {
+pub enum RebalancerError {
     #[snafu(display("Failed to get balance: {}", source))]
     GetBalance {
         source: WalletError,
@@ -25,15 +28,37 @@ pub enum ConversionActorError {
         loc: Location,
     },
 
-    #[snafu(display("Failed to convert: {}", source))]
-    Convert {
-        source: ConversionError,
+    #[snafu(display("Wallet operation failed: {}", source))]
+    Wallet {
+        source: WalletError,
         #[snafu(implicit)]
         loc: Location,
     },
+
+    #[snafu(display("Insufficient balance: requested {}, available {}", requested_amount, available_amount))]
+    InsufficientBalance {
+        requested_amount: U256,
+        available_amount: U256,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
+    #[snafu(display("Failed to convert: {}", source))]
+    CoinbaseExchangeClientError {
+        source: CoinbaseExchangeClientError,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
+    #[snafu(display("Invalid conversion request: {reason} at {loc}"))]
+    InvalidConversionRequest {
+        reason: String,
+        #[snafu(implicit)]
+        loc: snafu::Location,
+    },
 }
 
-type Result<T, E = ConversionActorError> = std::result::Result<T, E>;
+type Result<T, E = RebalancerError> = std::result::Result<T, E>;
 
 #[derive(Clone, Debug)]
 pub struct BandsParams {
@@ -204,8 +229,7 @@ pub async fn run_rebalancer(
                             confirmation_poll_interval,
                             btc_coinbase_confirmations,
                         )
-                        .await
-                        .context(ConvertSnafu)?;
+                        .await?;
                         let secs = t0.elapsed().as_secs_f64();
                         histogram!("mm_convert_duration_seconds", "direction" => "btc_to_cbbtc")
                             .record(secs);
@@ -229,8 +253,7 @@ pub async fn run_rebalancer(
                             confirmation_poll_interval,
                             cbbtc_coinbase_confirmations,
                         )
-                        .await
-                        .context(ConvertSnafu)?;
+                        .await?;
                         let secs = t0.elapsed().as_secs_f64();
                         histogram!("mm_convert_duration_seconds", "direction" => "cbbtc_to_btc")
                             .record(secs);
@@ -247,3 +270,225 @@ pub async fn run_rebalancer(
         sleep(params.poll_interval).await;
     }
 }
+
+
+/// Send BTC from the sender's bitcoin wallet
+pub async fn convert_btc_to_cbbtc(
+    coinbase_client: &CoinbaseClient,
+    sender_wallet: &dyn Wallet,
+    amount_sats: u64,
+    recipient_address: &str,
+    confirmation_poll_interval: Duration,
+    btc_coinbase_confirmations: u32,
+) -> Result<String> {
+    info!("Starting BTC -> cbBTC conversion for {} sats", amount_sats);
+    if sender_wallet.chain_type() != ChainType::Bitcoin {
+        return InvalidConversionRequestSnafu {
+            reason: "Sender wallet is not a bitcoin wallet".to_string(),
+        }
+        .fail();
+    }
+
+    // check if the sender wallet can fill the lot
+    let lot = Lot {
+        currency: Currency {
+            chain: ChainType::Bitcoin,
+            token: TokenIdentifier::Native,
+            decimals: 8,
+        },
+        amount: U256::from(amount_sats),
+    };
+
+    let available_balance = sender_wallet
+        .balance(&TokenIdentifier::Native)
+        .await
+        .context(WalletSnafu)?
+        .total_balance;
+
+    if available_balance < lot.amount {
+        return InsufficientBalanceSnafu {
+            requested_amount: lot.amount,
+            available_amount: available_balance,
+        }
+        .fail();
+    }
+
+    info!("Consolidating bitcoin deposits before rebalance");
+    let consolidation_summary = sender_wallet.consolidate(&Lot {
+        currency: Currency {
+            chain: ChainType::Bitcoin,
+            token: TokenIdentifier::Native,
+            decimals: 8,
+        },
+        amount: U256::MAX,
+    }, 100).await.context(WalletSnafu)?;
+    info!("Consolidation summary during rebalance: {:?}", consolidation_summary);
+
+    let btc_account_id = coinbase_client.get_btc_account_id().await.context(CoinbaseExchangeClientSnafu)?;
+
+    // get btc deposit address
+    let btc_deposit_address = coinbase_client
+        .get_btc_deposit_address(&btc_account_id, ChainType::Bitcoin)
+        .await.context(CoinbaseExchangeClientSnafu)?;
+
+    // send the btc to the deposit address
+    let payments = vec![Payment {
+        lot: lot.clone(),
+        to_address: btc_deposit_address,
+    }];
+    let btc_tx_hash = sender_wallet
+        .create_batch_payment(payments, None)
+        .await
+        .context(WalletSnafu)?;
+
+    // wait for the btc to be confirmed
+    sender_wallet
+        .guarantee_confirmations(&btc_tx_hash, btc_coinbase_confirmations as u64, confirmation_poll_interval)
+        .await
+        .context(WalletSnafu)?;
+
+    // at this point, the btc is confirmed and should be credited to our coinbase btc account
+    // now we can send the btc to eth which will implicitly convert it to cbbtc
+
+    let withdrawal_id = coinbase_client
+        .withdraw_bitcoin(recipient_address, &amount_sats, ChainType::Ethereum)
+        .await.context(CoinbaseExchangeClientSnafu)?;
+
+    let start_time = Instant::now();
+    loop {
+        let withdrawal_status = coinbase_client
+            .get_withdrawal_status(&withdrawal_id)
+            .await.context(CoinbaseExchangeClientSnafu)?;
+        match withdrawal_status {
+            WithdrawalStatus::Completed(tx_hash) => {
+                return Ok(tx_hash);
+            }
+            WithdrawalStatus::Pending => {
+                if start_time.elapsed() > Duration::from_secs(60 * 60) {
+                    warn!(
+                        "Coinbase withdrawal with id {} has been pending for more than 1 hour",
+                        withdrawal_id
+                    );
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            WithdrawalStatus::Cancelled => {
+                return InvalidConversionRequestSnafu {
+                    reason: "Withdrawal cancelled".to_string(),
+                }
+                .fail();
+            }
+        }
+    }
+}
+
+pub async fn convert_cbbtc_to_btc(
+    coinbase_client: &CoinbaseClient,
+    sender_wallet: &dyn Wallet,
+    amount_sats: u64,
+    recipient_address: &str,
+    confirmation_poll_interval: Duration,
+    cbbtc_coinbase_confirmations: u32,
+) -> Result<String> {
+    info!("Starting cbBTC -> BTC conversion for {} sats", amount_sats);
+    if sender_wallet.chain_type() != ChainType::Ethereum {
+        return InvalidConversionRequestSnafu {
+            reason: "Sender wallet is not an ethereum wallet".to_string(),
+        }
+        .fail();
+    }
+
+    let cbbtc = TokenIdentifier::Address(CB_BTC_CONTRACT_ADDRESS.to_string());
+
+    // check if the sender wallet can fill the lot
+    let lot = Lot {
+        currency: Currency {
+            chain: ChainType::Ethereum,
+            token: cbbtc.clone(),
+            decimals: 8,
+        },
+        amount: U256::from(amount_sats),
+    };
+
+    let available_balance = sender_wallet
+        .balance(&cbbtc)
+        .await
+        .context(WalletSnafu)?
+        .total_balance;
+
+    if available_balance < lot.amount {
+        return InsufficientBalanceSnafu {
+            requested_amount: lot.amount,
+            available_amount: available_balance,
+        }
+        .fail();
+    }
+
+    info!("Consolidating cbbtc deposits before rebalance");
+    let consolidation_summary = sender_wallet.consolidate(&Lot {
+        currency: Currency {
+            chain: ChainType::Ethereum,
+            token: cbbtc.clone(),
+            decimals: 8,
+        },
+        amount: U256::MAX,
+    }, 200).await.context(WalletSnafu)?;
+    info!("Consolidation summary during rebalance: {:?}", consolidation_summary);
+
+    let btc_account_id = coinbase_client.get_btc_account_id().await.context(CoinbaseExchangeClientSnafu)?;
+
+    // get the cbbtc deposit address
+    let cbbtc_deposit_address = coinbase_client
+        .get_btc_deposit_address(&btc_account_id, ChainType::Ethereum)
+        .await.context(CoinbaseExchangeClientSnafu)?;
+
+    // send the cbbtc to the deposit address
+    let payments = vec![Payment {
+        lot: lot.clone(),
+        to_address: cbbtc_deposit_address,
+    }];
+    let cbbtc_tx_hash = sender_wallet
+        .create_batch_payment(payments, None)
+        .await
+        .context(WalletSnafu)?;
+
+    // wait for the cbbtc to be confirmed
+    sender_wallet
+        .guarantee_confirmations(&cbbtc_tx_hash, cbbtc_coinbase_confirmations as u64, confirmation_poll_interval)
+        .await
+        .context(WalletSnafu)?;
+
+    // at this point, the cbbtc is confirmed and should be credited to our coinbase btc account
+    // now we can send the btc to eth which will implicitly convert it to cbbtc
+    let withdrawal_id = coinbase_client
+        .withdraw_bitcoin(recipient_address, &amount_sats, ChainType::Bitcoin)
+        .await.context(CoinbaseExchangeClientSnafu)?;
+    let start_time = Instant::now();
+    loop {
+        let withdrawal_status = coinbase_client
+            .get_withdrawal_status(&withdrawal_id)
+            .await.context(CoinbaseExchangeClientSnafu)?;
+        match withdrawal_status {
+            WithdrawalStatus::Completed(tx_hash) => {
+                return Ok(tx_hash);
+            }
+            WithdrawalStatus::Pending => {
+                if start_time.elapsed() > Duration::from_secs(60 * 60) {
+                    warn!(
+                        "Coinbase withdrawal with id {} has been pending for more than 1 hour",
+                        withdrawal_id
+                    );
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+            WithdrawalStatus::Cancelled => {
+                return InvalidConversionRequestSnafu {
+                    reason: "Withdrawal cancelled".to_string(),
+                }
+                .fail();
+            }
+        }
+    }
+}
+
+

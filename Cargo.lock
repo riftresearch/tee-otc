@@ -2491,6 +2491,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "coinbase-exchange-client"
+version = "0.10.0"
+dependencies = [
+ "base64 0.22.1",
+ "hmac",
+ "otc-models",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2",
+ "snafu",
+ "tokio",
+ "tracing",
+ "url",
+ "utc",
+]
+
+[[package]]
 name = "coins-ledger"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4750,6 +4768,7 @@ dependencies = [
  "blockchain-utils",
  "chrono",
  "clap",
+ "coinbase-exchange-client",
  "console-subscriber",
  "dashmap",
  "eip3009-erc20-contract",

@@ -218,7 +218,7 @@ services:
     ports:
       - "9000:9000"
       - "6669:6669"
-      - "8080:8080"
+      - "8081:8081"
     depends_on:
       mm-postgres:
         condition: service_healthy
@@ -229,8 +229,8 @@ services:
       rfq-server:
         condition: service_started
     environment:
-      ENABLE_TOKIO_CONSOLE_SUBSCRIBER: true
-      RUST_LOG: info
+      ENABLE_TOKIO_CONSOLE_SUBSCRIBER: false
+      RUST_LOG: info,opentelemetry_otlp=debug,tracing_opentelemetry=debug,opentelemetry=debug
       METRICS_LISTEN_ADDR: 0.0.0.0:9000
       MM_TAG: test-mm
       MM_ID: a4c6da0d-a071-40ea-b69c-e23d49327d42
@@ -255,11 +255,14 @@ services:
       COINBASE_EXCHANGE_API_PASSPHRASE: ""
       COINBASE_EXCHANGE_API_SECRET: ""
       COINBASE_EXCHANGE_API_BASE_URL: http://devnet:8080
-      AUTO_MANAGE_INVENTORY: false
+      AUTO_MANAGE_INVENTORY: true
       BITCOIN_BATCH_INTERVAL_SECS: 2
       BITCOIN_BATCH_SIZE: 100
       ETHEREUM_BATCH_INTERVAL_SECS: 2
       ETHEREUM_BATCH_SIZE: 392
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://mm-tempo:4318
+      OTEL_SERVICE_NAME: market-maker
+      OTEL_EXPORTER_OTLP_HEADERS: X-Scope-OrgID=single-tenant
 
     volumes: []
     networks:
@@ -270,6 +273,10 @@ services:
     volumes: []
   
   mm-prometheus:
+    volumes: []
+  
+  mm-tempo:
+    user: "0:0"
     volumes: []
   
   mm-grafana:

@@ -144,7 +144,12 @@ impl EVMWallet {
                     source: e,
                     loc: location!(),
                 })?;
-        info!("Receipt: {:?}", receipt);
+        info!(
+            "Receipt: tx={}, status={:?}, gas_used={:?}",
+            receipt.transaction_hash,
+            receipt.status(),
+            receipt.gas_used
+        );
 
         Ok(())
     }
@@ -236,7 +241,12 @@ impl Wallet for EVMWallet {
         
         match broadcast_result {
             transaction_broadcaster::TransactionExecutionResult::Success(tx_receipt) => {
-                info!("Payment created for swap [evm_wallet] {tx_receipt:?}");
+                info!(
+                    "Payment created for swap [evm_wallet] tx={}, status={:?}, gas_used={:?}",
+                    tx_receipt.transaction_hash,
+                    tx_receipt.status(),
+                    tx_receipt.gas_used
+                );
                 Ok(tx_receipt.transaction_hash.to_string())
             }
             _ => {
