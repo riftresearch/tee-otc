@@ -1,9 +1,9 @@
 use async_trait::async_trait;
 use ezsockets::ClientConfig;
 use serde::Serialize;
-use snafu::prelude::*;
+use snafu::{location, prelude::*};
 use std::sync::Arc;
-use tracing::{Instrument, info, warn};
+use tracing::{info, warn};
 
 #[derive(Debug, Snafu)]
 pub enum WebSocketError {
@@ -132,9 +132,17 @@ impl ezsockets::ClientExt for EzSocketAdapter {
     type Call = String;
 
     async fn on_text(&mut self, text: ezsockets::Utf8Bytes) -> std::result::Result<(), ezsockets::Error> {
-        if let Some(response_json) = self.handler.handle_text_message(text.as_ref()).await {
-            let _ = self.client.text(response_json);
-        }
+        let handler = self.handler.clone();
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            if let Some(response_json) = handler.handle_text_message(text.as_ref()).await {
+                tokio::task::spawn_blocking(move || {
+                    if let Err(e) = client.text(response_json) {
+                        warn!("Failed to send response: {} at {}", e, location!());
+                    }
+                });
+            }
+        });
         Ok(())
     }
 
@@ -145,7 +153,12 @@ impl ezsockets::ClientExt for EzSocketAdapter {
 
     async fn on_call(&mut self, call: Self::Call) -> std::result::Result<(), ezsockets::Error> {
         // This is called when handle.send() is used via client.call()
-        let _ = self.client.text(call);
+        let client = self.client.clone();
+        tokio::task::spawn_blocking(move || {
+            if let Err(e) = client.text(call) {
+                warn!("Failed to send call: {} at {}", e, location!());
+            }
+        });
         Ok(())
     }
 }
