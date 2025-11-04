@@ -326,6 +326,10 @@ pub struct MarketMakerArgs {
     #[arg(long, env = "CBBTC_COINBASE_CONFIRMATIONS", default_value = "36")]
     pub cbbtc_coinbase_confirmations: u32,
 
+    /// Loki logging URL (if provided, logs will be shipped to Loki)
+    #[arg(long, env = "LOKI_URL")]
+    pub loki_url: Option<String>,
+
     /// Enable tokio console subscriber
     #[arg(long, env = "ENABLE_TOKIO_CONSOLE_SUBSCRIBER", default_value = "false")]
     pub enable_tokio_console_subscriber: bool,

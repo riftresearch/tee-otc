@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use blockchain_utils::{handle_background_thread_result, init_logger, shutdown_signal};
 use clap::{Parser, Subcommand};
 use devnet::bitcoin_devnet::MiningMode;
@@ -77,6 +79,7 @@ async fn run_server(
     let mut devnet_builder = RiftDevnet::builder()
         .interactive(true)
         .using_esplora(true)
+        .with_coinbase_mock_server(devnet::WithdrawalProcessingMode::Fixed(Duration::from_secs(30)))
         .bitcoin_mining_mode(MiningMode::Interval(5));
 
     for address in fund_address {

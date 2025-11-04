@@ -593,7 +593,22 @@ impl RiftDevnetBuilder {
         };
 
         // 12) Start Coinbase mock server if enabled
-        if let Some(config) = self.coinbase_mock_server_config {
+        if self.interactive {
+            // Auto-enable in interactive mode with fixed port 8080
+            let listener = tokio::net::TcpListener::bind(("0.0.0.0", 8080))
+                .await
+                .map_err(|e| eyre::eyre!("Failed to bind to port 8080: {}", e))?;
+            
+            devnet
+                .start_coinbase_mock_server(Some(listener), self.coinbase_mock_server_config.unwrap_or(WithdrawalProcessingMode::default()))
+                .await
+                .map_err(|e| eyre::eyre!("Failed to start Coinbase mock server: {}", e))?;
+            info!(
+                "[Devnet Builder] Coinbase mock server started on port 8080 with mode {:?}",
+                self.coinbase_mock_server_config.unwrap_or(WithdrawalProcessingMode::default())
+            );
+        }
+        else if let Some(config) = self.coinbase_mock_server_config {
             // Bind to random port and keep listener alive
             let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
                 .await
@@ -611,20 +626,6 @@ impl RiftDevnetBuilder {
             info!(
                 "[Devnet Builder] Coinbase mock server started on port {} with mode {:?}",
                 port, config
-            );
-        } else if self.interactive {
-            // Auto-enable in interactive mode with fixed port 8080
-            let listener = tokio::net::TcpListener::bind(("0.0.0.0", 8080))
-                .await
-                .map_err(|e| eyre::eyre!("Failed to bind to port 8080: {}", e))?;
-            
-            devnet
-                .start_coinbase_mock_server(Some(listener), WithdrawalProcessingMode::Manual)
-                .await
-                .map_err(|e| eyre::eyre!("Failed to start Coinbase mock server: {}", e))?;
-            info!(
-                "[Devnet Builder] Coinbase mock server auto-started in interactive mode on port 8080 with mode {:?}",
-                WithdrawalProcessingMode::Manual
             );
         }
         info!(

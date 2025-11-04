@@ -28,6 +28,7 @@ ezsockets = {workspace = true}
 futures-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
+tracing-loki = { workspace = true }
 snafu = { workspace = true }
 clap = { workspace = true }
 uuid = { workspace = true }

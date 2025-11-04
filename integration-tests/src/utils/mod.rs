@@ -306,6 +306,7 @@ pub async fn build_mm_test_args(
         batch_monitor_interval_secs: 5,
         ethereum_max_deposits_per_lot: 350,
         bitcoin_max_deposits_per_lot: 100,
+        loki_url: None,
     }
 }
 

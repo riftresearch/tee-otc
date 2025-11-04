@@ -47,6 +47,7 @@ tokio-util = "0.7"
 console-subscriber = "0.4.1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-loki = "0.2.6"
 snafu = { version = "0.8", features = ["std"] }
 axum = { version = "0.7", features = ["ws"] }
 tower-http = { version = "0.6", features = ["cors"] }

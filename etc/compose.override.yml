@@ -260,6 +260,7 @@ services:
       BITCOIN_BATCH_SIZE: 100
       ETHEREUM_BATCH_INTERVAL_SECS: 2
       ETHEREUM_BATCH_SIZE: 392
+      LOKI_URL: http://mm-loki:3100
 
     volumes: []
     networks:
