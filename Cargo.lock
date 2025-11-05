@@ -3401,7 +3401,7 @@ dependencies = [
 [[package]]
 name = "ezsockets"
 version = "0.7.0"
-source = "git+https://github.com/alpinevm/ezsockets?rev=eecf28915836e1142bb5bbf74ce8fd007adbf690#eecf28915836e1142bb5bbf74ce8fd007adbf690"
+source = "git+https://github.com/alpinevm/ezsockets?rev=04d7f38569e93528e116803c3892ab528d5c4e5c#04d7f38569e93528e116803c3892ab528d5c4e5c"
 dependencies = [
  "async-channel",
  "async-trait",
@@ -7501,9 +7501,8 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite-wasm"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdedcaa28c04d697d2286d386594ccfcdbbead98114fd52576c943ab9b32820c"
+version = "0.6.0"
+source = "git+https://github.com/alpinevm/tokio-tungstenite-wasm?rev=12304df48e69cb957a0b048e9e43d107ce16976f#12304df48e69cb957a0b048e9e43d107ce16976f"
 dependencies = [
  "bytes",
  "futures-channel",
