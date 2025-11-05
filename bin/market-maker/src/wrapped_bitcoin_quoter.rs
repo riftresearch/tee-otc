@@ -11,7 +11,7 @@ use alloy::{primitives::U256, providers::Provider};
 use blockchain_utils::{compute_protocol_fee_sats, inverse_compute_protocol_fee};
 use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest};
 use otc_protocols::rfq::{FeeSchedule, RFQResult};
-use snafu::{Location, ResultExt, Snafu};
+use snafu::{Location, Snafu};
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
 use tracing::{info, warn};
@@ -148,10 +148,17 @@ impl WrappedBitcoinQuoter {
                 }
             };
 
-            let sats_per_vbyte_by_confirmations = esplora_client
+            let sats_per_vbyte_by_confirmations = match esplora_client
                 .get_fee_estimates()
                 .await
-                .context(EsploraSnafu)?;
+                {
+                    Ok(estimates) => estimates,
+                    Err(e) => {
+                        warn!("Failed to get fee estimates from esplora: {:?}", e);
+                        tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
+                        continue;
+                    }
+                };
             let sats_per_vbyte = sats_per_vbyte_by_confirmations.get(&1).unwrap_or(&1.5);
             let sats_per_vbyte = sats_per_vbyte * fee_safety_multiplier;
 
