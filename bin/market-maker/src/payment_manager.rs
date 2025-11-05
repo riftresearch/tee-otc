@@ -2,6 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use alloy::primitives::U256;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use dashmap::{mapref::entry::Entry, DashMap};
@@ -16,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::{db::PaymentRepository, wallet::WalletManager};
+use crate::{balance_strat::QuoteBalanceStrategy, db::PaymentRepository, wallet::WalletManager};
 use otc_protocols::mm::ProtocolMessage;
 
 // For tests
@@ -258,6 +259,12 @@ fn spawn_batch_processor(
             chain_type, config.interval_secs, config.batch_size
         );
 
+        // Payments that couldn't fit in previous batches due to balance constraints
+        let mut retry_payments: Vec<MarketMakerQueuedPayment> = Vec::new();
+        
+        // Allow 10% margin for network fees (TODO: This is overkill and temporary)
+        let balance_strategy = QuoteBalanceStrategy::new(9000);
+
         loop {
             // Check for cancellation before processing
             if cancellation_token.is_cancelled() {
@@ -267,25 +274,92 @@ fn spawn_batch_processor(
                 );
                 return Ok(());
             }
-            // Drain up to batch_size items from the channel
-            let mut queued_payments = Vec::new();
-            while queued_payments.len() < config.batch_size {
+
+            let mut queued_payments: Vec<MarketMakerQueuedPayment> = Vec::new();
+            let mut pending_payments: Vec<MarketMakerQueuedPayment> = Vec::new();
+            
+            // First, collect retry payments from previous iteration
+            pending_payments.append(&mut retry_payments);
+            
+            // Then drain up to batch_size items from the channel
+            while pending_payments.len() < config.batch_size {
                 match rx.try_recv() {
-                    Ok(payment) => queued_payments.push(payment),
+                    Ok(payment) => pending_payments.push(payment),
                     Err(_) => break, // Channel is empty
                 }
             }
 
-            // If we don't have a full batch, wait for the interval before processing
-            if queued_payments.len() < config.batch_size {
+            // If we don't have any pending payments, wait for the interval
+            if pending_payments.is_empty() {
+                interval.tick().await;
+                continue;
+            }
+
+            // Get wallet balance for balance checking
+            let total_wallet_balance = wallet.balance(&pending_payments[0].lot.currency.token).await?.total_balance;
+            
+            // Process each payment, adding to batch if it fits within balance constraints
+            let mut cumulative_amount = U256::ZERO;
+            let mut processed_count = 0;
+            
+            for payment in &pending_payments {
+                let new_amount = cumulative_amount + payment.lot.amount;
+                
+                // Check if adding this payment would exceed balance constraints
+                if balance_strategy.can_fill_quote(new_amount, total_wallet_balance) {
+                    cumulative_amount = new_amount;
+                    queued_payments.push(payment.clone());
+                    processed_count += 1;
+                    
+                    // Stop if we've reached batch size
+                    if queued_payments.len() >= config.batch_size {
+                        break;
+                    }
+                } else {
+                    // Can't fit this payment, save for retry
+                    retry_payments.push(payment.clone());
+                    processed_count += 1;
+                }
+            }
+            
+            // Move any unprocessed payments back to retry queue
+            if processed_count < pending_payments.len() {
+                retry_payments.extend(pending_payments.into_iter().skip(processed_count));
+            }
+
+            // If we don't have a full batch and haven't exhausted pending payments, wait for interval
+            if queued_payments.len() < config.batch_size && retry_payments.is_empty() {
                 if queued_payments.is_empty() {
-                    // No items at all, wait for interval
+                    // No items could be added, wait for interval
                     interval.tick().await;
                     continue;
                 } else {
                     // Have some items but not a full batch, wait for interval then process
                     interval.tick().await;
                 }
+            }
+
+            if queued_payments.is_empty() {
+                // All payments failed balance check, log and wait
+                warn!(
+                    "No payments could be added to batch for {:?}: total_wallet_balance={}, retry_queue_size={}",
+                    chain_type, total_wallet_balance, retry_payments.len()
+                );
+                interval.tick().await;
+                continue;
+            }
+
+            let total_batch_amount = cumulative_amount;
+            info!(
+                "Processing batch for {:?}: {} payments, total_amount={}, wallet_balance={}",
+                chain_type, queued_payments.len(), total_batch_amount, total_wallet_balance
+            );
+            if !retry_payments.is_empty() { 
+                info!(
+                    "Retrying {} payments for {:?} on next iteration...",
+                    retry_payments.len(),
+                    chain_type
+                );
             }
 
             // Process the batch (filtering and processing handled in helper)
@@ -295,7 +369,7 @@ fn spawn_batch_processor(
                 &payment_recorder,
                 &otc_response_tx,
                 &in_flight_payments,
-                queued_payments,
+                &queued_payments,
             )
             .await
             {
@@ -316,7 +390,7 @@ async fn process_batch(
     payment_recorder: &Arc<dyn BatchPaymentRecorder>,
     otc_response_tx: &UnboundedSender<ProtocolMessage<MMResponse>>,
     in_flight_payments: &Arc<DashMap<Uuid, ()>>,
-    queued_payments: Vec<MarketMakerQueuedPayment>,
+    queued_payments: &[MarketMakerQueuedPayment],
 ) -> crate::Result<()> {
     // Split queued payments into eligible and ineligible (near refund window)
     let (eligible_payments, ineligible_payments): (Vec<_>, Vec<_>) = queued_payments
@@ -350,7 +424,8 @@ async fn process_batch(
         chain_type
     );
 
-    let payment_batch = match eligible_payments.to_market_maker_batch() {
+    let collected_payments: Vec<MarketMakerQueuedPayment> = eligible_payments.iter().map(|&p| p.clone()).collect();
+    let payment_batch = match collected_payments.as_slice().to_market_maker_batch() {
         Some(payment_batch) => payment_batch,
         None => {
             error!(
@@ -539,9 +614,11 @@ mod tests {
             &self,
             _token: &TokenIdentifier,
         ) -> crate::wallet::WalletResult<crate::wallet::WalletBalance> {
+            // Return a large balance so tests can process payments
+            let large_balance = U256::from(1_000_000_000u64);
             Ok(crate::wallet::WalletBalance {
-                total_balance: U256::ZERO,
-                native_balance: U256::ZERO,
+                total_balance: large_balance,
+                native_balance: large_balance,
                 deposit_key_balance: U256::ZERO,
             })
         }
