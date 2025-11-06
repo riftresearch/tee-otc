@@ -1575,7 +1575,7 @@ services:
 
       POSTGRES_INITDB_ARGS: "--data-checksums"
     volumes:
-      - otc_postgres_data:/var/lib/postgresql/data
+      - otc_postgres_data_v2:/var/lib/postgresql/data
       - pg_secrets:/run/postgres-secrets:ro
     configs:
       - source: postgres-conf
@@ -1682,7 +1682,7 @@ services:
     platform: linux/amd64
 
   otc-server:
-    image: riftresearch/otc-server:0.10.2
+    image: riftresearch/otc-server:0.10.3
     restart: unless-stopped
     container_name: tee-otc-server
     depends_on:
@@ -1858,7 +1858,7 @@ services:
       cadvisor:
         condition: service_started
     volumes:
-      - prometheus_data_2:/prometheus
+      - prometheus_data_v3:/prometheus
     configs:
       - source: prometheus-config
         target: /etc/prometheus/prometheus.yml
@@ -1902,10 +1902,10 @@ networks:
         - subnet: 172.21.0.0/16
 
 volumes:
-  otc_postgres_data:
+  otc_postgres_data_v2:
   bitcoin_data:
   otc_server_config_data:
-  prometheus_data_2:
+  prometheus_data_v3:
   reth_logs:
   eth_jwt_data:
   lighthouse_data:
