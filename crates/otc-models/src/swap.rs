@@ -4,7 +4,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub const MM_NEVER_DEPOSITS_TIMEOUT: Duration = Duration::minutes(60);
+pub const MM_NEVER_DEPOSITS_TIMEOUT: Duration = Duration::minutes(60 * 24); // 24 hours
 pub const MM_DEPOSIT_NEVER_CONFIRMED_TIMEOUT: Duration = Duration::minutes(60 * 24); // 24 hours
 pub const MM_DEPOSIT_RISK_WINDOW: Duration = Duration::minutes(10); // if one of the refund cases is within this window the market maker should consider this risky
 

@@ -287,7 +287,7 @@ async fn test_refund_from_bitcoin_user_deposit(
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     // now refund the swap (advance time so that the swap can be refunded)
-    MockClock::advance_system_time(Duration::from_secs(60 * 61));
+    MockClock::advance_system_time(Duration::from_secs(60 * 60 * 24 + 60)); // 24 hours + 1 minute
     let refund_payload = RefundPayload {
         swap_id: response_json.swap_id,
         refund_recipient: user_account.bitcoin_wallet.address.to_string(),
@@ -592,7 +592,7 @@ async fn test_refund_from_evm_user_deposit(
     }
 
     // Now refund the swap (advance time so that the swap can be refunded)
-    MockClock::advance_system_time(Duration::from_secs(60 * 61));
+    MockClock::advance_system_time(Duration::from_secs(60 * 60 * 24 + 60)); // 24 hours + 1 minute
     let signer = PrivateKeySigner::from_signing_key(
         SigningKey::from_bytes(&user_account.secret_bytes.into()).unwrap(),
     );
