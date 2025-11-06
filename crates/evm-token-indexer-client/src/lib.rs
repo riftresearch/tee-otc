@@ -5,24 +5,24 @@ use snafu::{ResultExt, Snafu};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
-    #[snafu(display("Failed to build HTTP client: {source}"))]
+    #[snafu(display("Failed to build HTTP client: {source:?}"))]
     BuildClient { source: reqwest::Error },
 
-    #[snafu(display("Failed to send request: {source}"))]
+    #[snafu(display("Failed to send request: {source:?} at {loc}"))]
     Request {
         source: reqwest::Error,
         #[snafu(implicit)]
         loc: snafu::Location,
     },
 
-    #[snafu(display("Failed to parse response: {source}"))]
+    #[snafu(display("Failed to parse response: {source:?}"))]
     ParseResponse {
         source: reqwest::Error,
         #[snafu(implicit)]
         loc: snafu::Location,
     },
 
-    #[snafu(display("Invalid base URL: {source}"))]
+    #[snafu(display("Invalid base URL: {source:?}"))]
     InvalidUrl {
         source: url::ParseError,
         #[snafu(implicit)]
