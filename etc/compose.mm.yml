@@ -1126,6 +1126,7 @@ services:
   mm-postgres:
     image: postgres:16-alpine
     container_name: mm-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: pass
@@ -1169,6 +1170,7 @@ services:
 
   market-maker:
     container_name: market-maker
+    restart: unless-stopped
     build:
       context: ..
       dockerfile_inline: |
