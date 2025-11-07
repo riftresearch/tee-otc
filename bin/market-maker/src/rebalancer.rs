@@ -100,6 +100,97 @@ fn sats_to_target(total_sats: u64, target_bps: u64, r_bps: u64) -> u64 {
     }
 }
 
+/// Continuously records market maker balance and inventory metrics.
+///
+/// This function runs in its own loop, periodically querying wallet balances
+/// and updating Prometheus-style gauges for monitoring.
+pub async fn run_inventory_metrics_reporter(
+    btc_wallet: Arc<dyn Wallet>,
+    evm_wallet: Arc<dyn Wallet>,
+    poll_interval: Duration,
+) -> Result<()> {
+    let btc_token = TokenIdentifier::Native;
+    let cbbtc_token = TokenIdentifier::Address(CB_BTC_CONTRACT_ADDRESS.to_string());
+
+    loop {
+        counter!("mm_loop_iterations_total").increment(1);
+
+        // Query all balances
+        let btc_balance = btc_wallet
+            .balance(&btc_token)
+            .await
+            .context(GetBalanceSnafu)?;
+        let btc = btc_balance.total_balance.to::<u64>();
+
+        let cbbtc_balance = evm_wallet
+            .balance(&cbbtc_token)
+            .await
+            .context(GetBalanceSnafu)?;
+        let cbbtc = cbbtc_balance.total_balance.to::<u64>();
+
+        let total_sats = btc.saturating_add(cbbtc);
+
+        let eth_balance = evm_wallet
+            .balance(&TokenIdentifier::Native)
+            .await
+            .context(GetBalanceSnafu)?;
+        let eth_native = eth_balance.total_balance;
+        let eth_native_str: String = format_units(eth_native, "ether").unwrap();
+        let eth_native_f64 = eth_native_str.parse::<f64>().unwrap();
+
+        // Record primary balance gauges
+        gauge!("mm_balance_sats", "asset" => "btc").set(btc as f64);
+        gauge!("mm_balance_sats", "asset" => "cbbtc").set(cbbtc as f64);
+        gauge!("mm_total_sats").set(total_sats as f64);
+        gauge!("mm_eth_balance_ether").set(eth_native_f64);
+
+        // Record native vs deposit key balance breakdown
+        let btc_native = btc_balance.native_balance.to::<u64>();
+        let btc_deposit_key = btc_balance.deposit_key_balance.to::<u64>();
+        let cbbtc_native = cbbtc_balance.native_balance.to::<u64>();
+        let cbbtc_deposit_key = cbbtc_balance.deposit_key_balance.to::<u64>();
+
+        gauge!("mm_native_balance_sats", "asset" => "btc").set(btc_native as f64);
+        gauge!("mm_native_balance_sats", "asset" => "cbbtc").set(cbbtc_native as f64);
+        gauge!("mm_deposit_key_balance_sats", "asset" => "btc").set(btc_deposit_key as f64);
+        gauge!("mm_deposit_key_balance_sats", "asset" => "cbbtc").set(cbbtc_deposit_key as f64);
+
+        // Calculate and record inventory ratio
+        let r_bps = if total_sats == 0 {
+            0
+        } else {
+            ratio_bps(btc, cbbtc)
+        };
+        gauge!("mm_inventory_ratio_bps").set(r_bps as f64);
+
+        // Log detailed inventory breakdown
+        debug!(
+            "inventory: btc={} sats, cbbtc={} sats, total={}, ratio_bps={}",
+            btc, cbbtc, total_sats, r_bps
+        );
+
+        if total_sats > 0 {
+            let btc_pct = (btc as f64 / total_sats as f64) * 100.0;
+            let cbbtc_pct = (cbbtc as f64 / total_sats as f64) * 100.0;
+
+            debug!(
+                message = "detailed inventory breakdown",
+                btc_total_sats = btc,
+                btc_native_sats = btc_native,
+                btc_deposit_key_sats = btc_deposit_key,
+                btc_percentage = %format!("{:.2}%", btc_pct),
+                cbbtc_total_sats = cbbtc,
+                cbbtc_native_sats = cbbtc_native,
+                cbbtc_deposit_key_sats = cbbtc_deposit_key,
+                cbbtc_percentage = %format!("{:.2}%", cbbtc_pct),
+                total_sats = total_sats
+            );
+        }
+
+        sleep(poll_interval).await;
+    }
+}
+
 pub async fn run_rebalancer(
     coinbase_client: CoinbaseClient,
     btc_wallet: Arc<dyn Wallet>,
@@ -128,59 +219,10 @@ pub async fn run_rebalancer(
 
         let total_sats = btc.saturating_add(cbbtc);
 
-        let eth_balance = evm_wallet
-            .balance(&TokenIdentifier::Native)
-            .await
-            .context(GetBalanceSnafu)?;
-        let eth_native = eth_balance.total_balance;
-        let eth_native_str: String = format_units(eth_native, "ether").unwrap();
-        let eth_native_f64 = eth_native_str.parse::<f64>().unwrap();
-
-        // --- metrics: snapshot every loop, even if no rebalance ---
-        counter!("mm_loop_iterations_total").increment(1);
-        gauge!("mm_balance_sats", "asset" => "btc").set(btc as f64);
-        gauge!("mm_balance_sats", "asset" => "cbbtc").set(cbbtc as f64);
-        gauge!("mm_total_sats").set(total_sats as f64);
-        gauge!("mm_eth_balance_ether").set(eth_native_f64);
-
-        // Native vs deposit key balance metrics
-        let btc_native = btc_balance.native_balance.to::<u64>();
-        let btc_deposit_key = btc_balance.deposit_key_balance.to::<u64>();
-        let cbbtc_native = cbbtc_balance.native_balance.to::<u64>();
-        let cbbtc_deposit_key = cbbtc_balance.deposit_key_balance.to::<u64>();
-
-        gauge!("mm_native_balance_sats", "asset" => "btc").set(btc_native as f64);
-        gauge!("mm_native_balance_sats", "asset" => "cbbtc").set(cbbtc_native as f64);
-        gauge!("mm_deposit_key_balance_sats", "asset" => "btc").set(btc_deposit_key as f64);
-        gauge!("mm_deposit_key_balance_sats", "asset" => "cbbtc").set(cbbtc_deposit_key as f64);
-
-        debug!(
-            "inventory: btc={} sats, cbbtc={} sats, total={}",
-            btc, cbbtc, total_sats
-        );
         if total_sats == 0 {
-            gauge!("mm_inventory_ratio_bps").set(0.0);
             sleep(params.poll_interval).await;
             continue;
         }
-
-        // Log detailed balance information with human-readable percentages
-        let btc_pct = (btc as f64 / total_sats as f64) * 100.0;
-        let cbbtc_pct = (cbbtc as f64 / total_sats as f64) * 100.0;
-
-        // this info is shown in metrics, so we don't need to log it here
-        debug!(
-            message = "detailed inventory breakdown",
-            btc_total_sats = btc,
-            btc_native_sats = btc_native,
-            btc_deposit_key_sats = btc_deposit_key,
-            btc_percentage = %format!("{:.2}%", btc_pct),
-            cbbtc_total_sats = cbbtc,
-            cbbtc_native_sats = cbbtc_native,
-            cbbtc_deposit_key_sats = cbbtc_deposit_key,
-            cbbtc_percentage = %format!("{:.2}%", cbbtc_pct),
-            total_sats = total_sats
-        );
 
         // --- symmetric band around target ---
         let lo = params
@@ -190,7 +232,6 @@ pub async fn run_rebalancer(
         let hi = (params.target_bps + params.band_width_bps).min(BPS_DENOM);
 
         let r_bps = ratio_bps(btc, cbbtc);
-        gauge!("mm_inventory_ratio_bps").set(r_bps as f64);
 
         let side = if r_bps < lo {
             Some(Side::CbbtcToBtc) // below lower band → BTC ratio too low, need more BTC
@@ -355,10 +396,19 @@ pub async fn convert_btc_to_cbbtc(
     // at this point, the btc is confirmed and should be credited to our coinbase btc account
     // now we can send the btc to eth which will implicitly convert it to cbbtc
     let t0 = Instant::now();
-    let withdrawal_id = coinbase_client
-        .withdraw_bitcoin(recipient_address, &amount_sats, ChainType::Ethereum)
-        .await.context(CoinbaseExchangeClientSnafu)?;
-    info!("Withdrew bitcoin request submitted: {}, duration: {:?}", withdrawal_id, t0.elapsed());
+    let withdrawal_id = loop {
+        let withdrawal_id = coinbase_client
+            .withdraw_bitcoin(recipient_address, &amount_sats, ChainType::Bitcoin)
+            .await.context(CoinbaseExchangeClientSnafu);
+        if let Ok(withdrawal_id) = withdrawal_id {
+            break withdrawal_id;
+        } else {
+            error!("Failed to submit withdrawal: {:?}", withdrawal_id.err());
+            tokio::time::sleep(Duration::from_secs(60)).await; //retry once a minute forever
+            error!("Retrying withdrawal...");
+        }
+    };
+    info!("Withdraw cbbtc request submitted successfully: {}, duration: {:?}", withdrawal_id, t0.elapsed());
     let start_time = Instant::now();
     loop {
         let withdrawal_status = coinbase_client
@@ -473,10 +523,19 @@ pub async fn convert_cbbtc_to_btc(
     // at this point, the cbbtc is confirmed and should be credited to our coinbase btc account
     // now we can send the btc to eth which will implicitly convert it to cbbtc
     let t0 = Instant::now();
-    let withdrawal_id = coinbase_client
-        .withdraw_bitcoin(recipient_address, &amount_sats, ChainType::Bitcoin)
-        .await.context(CoinbaseExchangeClientSnafu)?;
-    info!("Withdrew cbbtc request submitted: {}, duration: {:?}", withdrawal_id, t0.elapsed());
+    let withdrawal_id = loop { 
+        let withdrawal_id = coinbase_client
+            .withdraw_bitcoin(recipient_address, &amount_sats, ChainType::Bitcoin)
+            .await.context(CoinbaseExchangeClientSnafu);
+        if let Ok(withdrawal_id) = withdrawal_id {
+            break withdrawal_id;
+        } else {
+            error!("Failed to submit withdrawal: {:?}", withdrawal_id.err());
+            tokio::time::sleep(Duration::from_secs(60)).await; //retry once a minute forever
+            error!("Retrying withdrawal...");
+        }
+    };
+    info!("Withdraw btc request submitted successfully: {}, duration: {:?}", withdrawal_id, t0.elapsed());
     let start_time = Instant::now();
     loop {
         let withdrawal_status = coinbase_client

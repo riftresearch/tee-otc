@@ -41,6 +41,7 @@ use uuid::Uuid;
 use coinbase_exchange_client::CoinbaseClient;
 use crate::payment_manager::PaymentManager;
 use crate::rebalancer::BandsParams;
+use crate::rebalancer::run_inventory_metrics_reporter;
 use crate::rebalancer::run_rebalancer;
 use crate::{
     bitcoin_wallet::BitcoinWallet,
@@ -602,6 +603,14 @@ pub async fn run_market_maker(
     );
 
     join_set.spawn(async move { conversion_actor.await.context(RebalancerSnafu) });
+
+    // run inventory metrics reporter
+    let inventory_metrics_reporter = run_inventory_metrics_reporter(
+        bitcoin_wallet.clone(),
+        evm_wallet.clone(),
+        Duration::from_secs(args.rebalance_poll_interval_secs),
+    );
+    join_set.spawn(async move { inventory_metrics_reporter.await.context(RebalancerSnafu) });
 
 
     tokio::select! { 

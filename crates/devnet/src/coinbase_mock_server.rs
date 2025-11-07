@@ -192,8 +192,13 @@ async fn execute_withdrawal(
     crypto_address: &str,
     amount_sats: u64,
 ) -> Result<String, (StatusCode, Json<serde_json::Value>)> {
-    match network {
-        "bitcoin" => {
+    // Detect address type to determine actual destination
+    // This simulates Coinbase's automatic BTC->cbBTC conversion when withdrawing to Ethereum
+    let is_ethereum_address = Address::from_str(crypto_address).is_ok();
+    
+    match (network, is_ethereum_address) {
+        // Bitcoin network with Bitcoin address -> send native BTC
+        ("bitcoin", false) => {
             let recipient_addr = BitcoinAddress::from_str(crypto_address)
                 .expect("Address already validated")
                 .assume_checked();
@@ -213,7 +218,8 @@ async fn execute_withdrawal(
                 }
             }
         }
-        "ethereum" => {
+        // Bitcoin network with Ethereum address OR Ethereum network -> mint cbBTC
+        ("bitcoin", true) | ("ethereum", _) => {
             let recipient_addr = Address::from_str(crypto_address)
                 .expect("Address already validated");
 
@@ -356,25 +362,17 @@ async fn create_withdrawal(
         );
     }
 
-    // Validate address format early
-    match network.as_str() {
-        "bitcoin" => {
-            if BitcoinAddress::from_str(&req.crypto_address).is_err() {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": "Invalid Bitcoin address"})),
-                );
-            }
-        }
-        "ethereum" => {
-            if Address::from_str(&req.crypto_address).is_err() {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(json!({"error": "Invalid Ethereum address"})),
-                );
-            }
-        }
-        _ => unreachable!(),
+    // Validate address format - accept both Bitcoin and Ethereum addresses
+    // This simulates Coinbase's feature where you can withdraw BTC to an Ethereum address
+    // (which automatically converts to cbBTC)
+    let is_bitcoin_address = BitcoinAddress::from_str(&req.crypto_address).is_ok();
+    let is_ethereum_address = Address::from_str(&req.crypto_address).is_ok();
+    
+    if !is_bitcoin_address && !is_ethereum_address {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(json!({"error": "Invalid address format"})),
+        );
     }
 
     let withdrawal_id = Uuid::new_v4().to_string();
