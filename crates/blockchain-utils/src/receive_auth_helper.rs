@@ -4,6 +4,7 @@ use alloy::{
     providers::DynProvider,
     signers::{local::PrivateKeySigner, SignerSync},
 };
+use bitcoin::key::rand::Rng;
 use eip3009_erc20_contract::GenericEIP3009ERC20::GenericEIP3009ERC20Instance;
 use eip7702_delegator_contract::EIP7702Delegator::Execution;
 use otc_models::{Lot, TokenIdentifier};
@@ -59,7 +60,11 @@ pub async fn create_receive_with_authorization_execution(
     let value = lot.amount;
     let valid_after = U256::ZERO;
     let valid_before = U256::MAX;
-    let nonce = [0; 32].into();
+    // nonce, mostly zeroed to save on calldata
+    let mut nonce: [u8; 32] = [0; 32];
+    // 64 bits of randomness to inject into the nonce
+    nonce[..8].copy_from_slice(&bitcoin::key::rand::thread_rng().gen_range(0..=u64::MAX).to_le_bytes());
+    let nonce = nonce.into();
 
     /*
      * @notice Receive a transfer with a signed authorization from the payer
@@ -93,7 +98,7 @@ pub async fn create_receive_with_authorization_execution(
         DynSolValue::Uint(value, 256),                                    // value
         DynSolValue::Uint(valid_after, 256),                              // validAfter
         DynSolValue::Uint(valid_before, 256),                             // validBefore
-        DynSolValue::FixedBytes(nonce, 32), // nonce, zeroed to save on calldata
+        DynSolValue::FixedBytes(nonce, 32), 
     ]);
 
     let encoded_message = message_value.abi_encode();
