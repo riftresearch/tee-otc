@@ -591,7 +591,7 @@ impl SwapRepository {
     }
 
     /// Update entire swap record
-    pub async fn update(&self, swap: &Swap) -> OtcServerResult<()> {
+    pub async fn update(&self, swap: &Swap, expected_status: Option<SwapStatus>) -> OtcServerResult<()> {
         let user_deposit_json = swap
             .user_deposit_status
             .as_ref()
@@ -612,36 +612,88 @@ impl SwapRepository {
             .as_ref()
             .map(latest_refund_to_json)
             .transpose()?;
-        sqlx::query(
-            r"
-            UPDATE swaps
-            SET 
-                status = $2,
-                user_deposit_status = $3,
-                mm_deposit_status = $4,
-                settlement_status = $5,
-                latest_refund = $6,
-                failure_reason = $7,
-                failure_at = $8,
-                mm_notified_at = $9,
-                mm_private_key_sent_at = $10,
-                updated_at = $11
-            WHERE id = $1
-            ",
-        )
-        .bind(swap.id)
-        .bind(swap.status)
-        .bind(user_deposit_json)
-        .bind(mm_deposit_json)
-        .bind(settlement_json)
-        .bind(latest_refund_json)
-        .bind(&swap.failure_reason)
-        .bind(swap.failure_at)
-        .bind(swap.mm_notified_at)
-        .bind(swap.mm_private_key_sent_at)
-        .bind(swap.updated_at)
-        .execute(&self.pool)
-        .await?;
+        
+        let result = match expected_status {
+            Some(expected) => {
+                sqlx::query(
+                    r"
+                    UPDATE swaps
+                    SET 
+                        status = $2,
+                        user_deposit_status = $3,
+                        mm_deposit_status = $4,
+                        settlement_status = $5,
+                        latest_refund = $6,
+                        failure_reason = $7,
+                        failure_at = $8,
+                        mm_notified_at = $9,
+                        mm_private_key_sent_at = $10,
+                        updated_at = $11
+                    WHERE id = $1
+                      AND status = $12
+                    ",
+                )
+                .bind(swap.id)
+                .bind(swap.status)
+                .bind(user_deposit_json)
+                .bind(mm_deposit_json)
+                .bind(settlement_json)
+                .bind(latest_refund_json)
+                .bind(&swap.failure_reason)
+                .bind(swap.failure_at)
+                .bind(swap.mm_notified_at)
+                .bind(swap.mm_private_key_sent_at)
+                .bind(swap.updated_at)
+                .bind(expected)
+                .execute(&self.pool)
+                .await?
+            }
+            None => {
+                sqlx::query(
+                    r"
+                    UPDATE swaps
+                    SET 
+                        status = $2,
+                        user_deposit_status = $3,
+                        mm_deposit_status = $4,
+                        settlement_status = $5,
+                        latest_refund = $6,
+                        failure_reason = $7,
+                        failure_at = $8,
+                        mm_notified_at = $9,
+                        mm_private_key_sent_at = $10,
+                        updated_at = $11
+                    WHERE id = $1
+                    ",
+                )
+                .bind(swap.id)
+                .bind(swap.status)
+                .bind(user_deposit_json)
+                .bind(mm_deposit_json)
+                .bind(settlement_json)
+                .bind(latest_refund_json)
+                .bind(&swap.failure_reason)
+                .bind(swap.failure_at)
+                .bind(swap.mm_notified_at)
+                .bind(swap.mm_private_key_sent_at)
+                .bind(swap.updated_at)
+                .execute(&self.pool)
+                .await?
+            }
+        };
+
+        // Check if the update actually modified a row
+        if result.rows_affected() == 0 {
+            return Err(match expected_status {
+                Some(expected) => OtcServerError::InvalidState {
+                    message: format!(
+                        "Update failed: swap {} status was not {:?} (possible concurrent modification)",
+                        swap.id, expected
+                    ),
+                },
+                None => OtcServerError::NotFound,
+            });
+        }
 
         Ok(())
     }
@@ -709,7 +761,18 @@ impl SwapRepository {
         })?;
 
         // Update the database
-        self.update(&swap).await?;
+        self.update(&swap, Some(SwapStatus::WaitingUserDepositInitiated)).await?;
+        Ok(())
+    }
+
+    /// Atomically transition a swap to RefundingUser status from an expected status.
+    /// This prevents race conditions where the swap could be progressing through states
+    /// while a refund is being processed.
+    pub async fn mark_swap_as_refunding_user(&self, swap_id: Uuid, expected_status: SwapStatus) -> OtcServerResult<()> {
+        let mut swap = self.get(swap_id).await?;
+        swap.status = SwapStatus::RefundingUser;
+        // Atomic check will prevent concurrent updates from other threads
+        self.update(&swap, Some(expected_status)).await?;
         Ok(())
     }
 
@@ -726,6 +789,10 @@ impl SwapRepository {
 
         // Get all swaps
         let mut swaps = self.get_swaps(&swap_ids).await?;
+
+        // Store original status for optimistic locking
+        let original_statuses: HashMap<Uuid, SwapStatus> = 
+            swaps.iter().map(|s| (s.id, s.status)).collect();
 
         // Apply state transitions to each swap
         for swap in &mut swaps {
@@ -771,7 +838,13 @@ impl SwapRepository {
                 .map(latest_refund_to_json)
                 .transpose()?;
 
-            sqlx::query(
+            let original_status = original_statuses.get(&swap.id).ok_or_else(|| {
+                OtcServerError::InvalidState {
+                    message: format!("Missing original status for swap {}", swap.id),
+                }
+            })?;
+
+            let result = sqlx::query(
                 r"
                 UPDATE swaps
                 SET 
@@ -786,6 +859,7 @@ impl SwapRepository {
                     mm_private_key_sent_at = $10,
                     updated_at = $11
                 WHERE id = $1
+                  AND status = $12
                 ",
             )
             .bind(swap.id)
@@ -799,8 +873,19 @@ impl SwapRepository {
             .bind(swap.mm_notified_at)
             .bind(swap.mm_private_key_sent_at)
             .bind(swap.updated_at)
+            .bind(original_status)
             .execute(&mut *tx)
             .await?;
+
+            // Check if update succeeded
+            if result.rows_affected() == 0 {
+                return Err(OtcServerError::InvalidState {
+                    message: format!(
+                        "Batch update failed: swap {} status was not {:?} (possible concurrent modification)",
+                        swap.id, original_status
+                    ),
+                });
+            }
         }
 
         tx.commit().await?;
@@ -900,6 +985,10 @@ impl SwapRepository {
         // Get all swaps
         let mut swaps = self.get_swaps(swap_ids).await?;
 
+        // Store original status for optimistic locking
+        let original_statuses: HashMap<Uuid, SwapStatus> = 
+            swaps.iter().map(|s| (s.id, s.status)).collect();
+
         let swap_settlement_timestamp = utc::now();
 
         // Apply state transitions to each swap
@@ -935,7 +1024,13 @@ impl SwapRepository {
                 .map(latest_refund_to_json)
                 .transpose()?;
 
-            sqlx::query(
+            let original_status = original_statuses.get(&swap.id).ok_or_else(|| {
+                OtcServerError::InvalidState {
+                    message: format!("Missing original status for swap {}", swap.id),
+                }
+            })?;
+
+            let result = sqlx::query(
                 r"
                 UPDATE swaps
                 SET 
@@ -950,6 +1045,7 @@ impl SwapRepository {
                     mm_private_key_sent_at = $10,
                     updated_at = $11
                 WHERE id = $1
+                  AND status = $12
                 ",
             )
             .bind(swap.id)
@@ -963,8 +1059,19 @@ impl SwapRepository {
             .bind(swap.mm_notified_at)
             .bind(swap.mm_private_key_sent_at)
             .bind(swap.updated_at)
+            .bind(original_status)
             .execute(&mut *tx)
             .await?;
+
+            // Check if update succeeded
+            if result.rows_affected() == 0 {
+                return Err(OtcServerError::InvalidState {
+                    message: format!(
+                        "Batch settlement failed: swap {} status was not {:?} (possible concurrent modification)",
+                        swap.id, original_status
+                    ),
+                });
+            }
         }
 
         tx.commit().await?;
@@ -983,7 +1090,7 @@ impl SwapRepository {
             .map_err(|e| OtcServerError::InvalidState {
                 message: format!("State transition failed: {e}"),
             })?;
-        self.update(&swap).await?;
+        self.update(&swap, None).await?;
         Ok(())
     }
 
@@ -994,7 +1101,7 @@ impl SwapRepository {
             .map_err(|e| OtcServerError::InvalidState {
                 message: format!("State transition failed: {e}"),
             })?;
-        self.update(&swap).await?;
+        self.update(&swap, None).await?;
         Ok(swap
             .user_deposit_status
             .as_ref()
@@ -1010,7 +1117,7 @@ impl SwapRepository {
             .map_err(|e| OtcServerError::InvalidState {
                 message: format!("State transition failed: {e}"),
             })?;
-        self.update(&swap).await?;
+        self.update(&swap, None).await?;
         Ok(())
     }
 
@@ -1021,7 +1128,7 @@ impl SwapRepository {
             .map_err(|e| OtcServerError::InvalidState {
                 message: format!("State transition failed: {e}"),
             })?;
-        self.update(&swap).await?;
+        self.update(&swap, None).await?;
         Ok(())
     }
 
@@ -1033,7 +1140,7 @@ impl SwapRepository {
                 message: format!("State transition failed: {e}"),
             }
         })?;
-        self.update(&swap).await?;
+        self.update(&swap, None).await?;
         Ok(())
     }
 

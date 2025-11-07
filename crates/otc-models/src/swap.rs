@@ -167,8 +167,9 @@ impl Swap {
     pub fn can_be_refunded(&self) -> Option<RefundSwapReason> {
         if !matches!(
             self.status,
-            SwapStatus::WaitingMMDepositInitiated | SwapStatus::WaitingMMDepositConfirmed
+            SwapStatus::WaitingMMDepositInitiated | SwapStatus::WaitingMMDepositConfirmed | SwapStatus::RefundingUser
         ) {
+            // refunding user is allowed to refund again if previous refund wasn't sufficient for all funds / more funds were deposited after the initial refund
             return None;
         }
         // if the status is not waiting mm deposit initiated or confirmed, then it can't be refunded

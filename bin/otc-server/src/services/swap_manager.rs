@@ -123,6 +123,12 @@ impl SwapManager {
 
         match swap.can_be_refunded() {
             Some(reason) => {
+                // Atomically set the swap to RefundingUser before proceeding. This prevents the
+                // monitoring service from progressing the swap to further states during the refund.
+                // If the swap is already RefundingUser (from a previous refund attempt), skip this step.
+                if !matches!(swap.status, SwapStatus::RefundingUser) { 
+                    self.db.swaps().mark_swap_as_refunding_user(swap_id, swap.status).await.context(DatabaseSnafu)?;
+                }
                 let deposit_chain = self
                     .chain_registry
                     .get(&swap.quote.from.currency.chain)
