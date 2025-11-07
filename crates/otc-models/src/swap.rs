@@ -62,8 +62,10 @@ pub struct Metadata {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum RefundSwapReason {
+    UserInitiatedEarlyRefund,
     MarketMakerNeverInitiatedDeposit,
     MarketMakerDepositNeverConfirmed,
+    UserInitiatedRefundAgain,
 }
 
 /// Returns true if a refund is approaching because the market maker never initiated their deposit.
@@ -161,25 +163,191 @@ mod tests {
             None,
         ));
     }
+
+    #[test]
+    fn allows_immediate_refund_for_insufficient_deposit() {
+        use crate::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
+        use alloy::primitives::{Address, U256};
+
+        // Create a minimal swap in WaitingUserDepositInitiated state
+        let swap = Swap {
+            id: uuid::Uuid::new_v4(),
+            market_maker_id: uuid::Uuid::new_v4(),
+            quote: Quote {
+                id: uuid::Uuid::new_v4(),
+                from: Lot {
+                    currency: Currency {
+                        chain: ChainType::Bitcoin,
+                        token: TokenIdentifier::Native,
+                        decimals: 8,
+                    },
+                    amount: U256::from(10_000_000u64), // 0.1 BTC
+                },
+                to: Lot {
+                    currency: Currency {
+                        chain: ChainType::Ethereum,
+                        token: TokenIdentifier::Native,
+                        decimals: 18,
+                    },
+                    amount: U256::from(500000000000000000u64),
+                },
+                fee_schedule: FeeSchedule {
+                    network_fee_sats: 1000,
+                    liquidity_fee_sats: 2000,
+                    protocol_fee_sats: 500,
+                },
+                market_maker_id: uuid::Uuid::new_v4(),
+                expires_at: utc::now() + Duration::hours(1),
+                created_at: utc::now(),
+            },
+            metadata: Metadata::default(),
+            user_deposit_salt: [0u8; 32],
+            user_deposit_address: "test_address".to_string(),
+            mm_nonce: [0u8; 16],
+            user_destination_address: "0x1234".to_string(),
+            user_evm_account_address: Address::ZERO,
+            status: SwapStatus::WaitingUserDepositInitiated,
+            user_deposit_status: None, // No deposit detected yet, or insufficient
+            mm_deposit_status: None,
+            settlement_status: None,
+            latest_refund: None,
+            failure_reason: None,
+            failure_at: None,
+            mm_notified_at: None,
+            mm_private_key_sent_at: None,
+            created_at: utc::now(),
+            updated_at: utc::now(),
+        };
+
+        // Should allow immediate refund without any time constraints
+        let refund_reason = swap.can_be_refunded();
+        assert!(
+            refund_reason.is_some(),
+            "Swap in WaitingUserDepositInitiated should be refundable immediately"
+        );
+
+        match refund_reason.unwrap() {
+            RefundSwapReason::UserInitiatedEarlyRefund => {
+                // This is the expected reason
+            }
+            other => panic!(
+                "Expected UserInitiatedEarlyRefund, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn early_refund_does_not_require_timeout() {
+        use crate::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
+        use alloy::primitives::{Address, U256};
+
+        // Create a swap that was just created (no time elapsed)
+        let swap = Swap {
+            id: uuid::Uuid::new_v4(),
+            market_maker_id: uuid::Uuid::new_v4(),
+            quote: Quote {
+                id: uuid::Uuid::new_v4(),
+                from: Lot {
+                    currency: Currency {
+                        chain: ChainType::Ethereum,
+                        token: TokenIdentifier::Address(
+                            "0x0000000000000000000000000000000000000001".to_string()
+                        ),
+                        decimals: 8,
+                    },
+                    amount: U256::from(1_000_000u64), // 1 token
+                },
+                to: Lot {
+                    currency: Currency {
+                        chain: ChainType::Bitcoin,
+                        token: TokenIdentifier::Native,
+                        decimals: 8,
+                    },
+                    amount: U256::from(950_000u64),
+                },
+                fee_schedule: FeeSchedule {
+                    network_fee_sats: 1000,
+                    liquidity_fee_sats: 2000,
+                    protocol_fee_sats: 500,
+                },
+                market_maker_id: uuid::Uuid::new_v4(),
+                expires_at: utc::now() + Duration::hours(1),
+                created_at: utc::now(),
+            },
+            metadata: Metadata::default(),
+            user_deposit_salt: [0u8; 32],
+            user_deposit_address: "0xdeposit".to_string(),
+            mm_nonce: [0u8; 16],
+            user_destination_address: "bc1qtest".to_string(),
+            user_evm_account_address: Address::ZERO,
+            status: SwapStatus::WaitingUserDepositInitiated,
+            user_deposit_status: Some(UserDepositStatus {
+                tx_hash: "0xtxhash".to_string(),
+                amount: U256::from(999_999u64), // Insufficient by 1 unit
+                deposit_detected_at: utc::now(), // Just now
+                confirmations: 0,
+                last_checked: utc::now(),
+                confirmed_at: None,
+            }),
+            mm_deposit_status: None,
+            settlement_status: None,
+            latest_refund: None,
+            failure_reason: None,
+            failure_at: None,
+            mm_notified_at: None,
+            mm_private_key_sent_at: None,
+            created_at: utc::now(),
+            updated_at: utc::now(),
+        };
+
+        // Even though this swap was just created (no timeout), it should still be
+        // immediately refundable because it's in WaitingUserDepositInitiated state
+        let refund_reason = swap.can_be_refunded();
+        assert!(
+            refund_reason.is_some(),
+            "Should allow immediate refund even without timeout when in WaitingUserDepositInitiated"
+        );
+
+        assert!(
+            matches!(
+                refund_reason.unwrap(),
+                RefundSwapReason::UserInitiatedEarlyRefund
+            ),
+            "Should return UserInitiatedEarlyRefund reason"
+        );
+    }
 }
 
 impl Swap {
     pub fn can_be_refunded(&self) -> Option<RefundSwapReason> {
+        // Early-stage refund: Allow immediate refund if user deposited but swap hasn't progressed
+        if self.status == SwapStatus::WaitingUserDepositInitiated {
+            // Only allow refund if there are actually funds deposited
+            return Some(RefundSwapReason::UserInitiatedEarlyRefund);
+        }
+
+        if self.status == SwapStatus::RefundingUser { 
+            return Some(RefundSwapReason::UserInitiatedRefundAgain);
+        }
+
+        // Mid/late-stage refunds: Only after MM should have deposited
         if !matches!(
             self.status,
-            SwapStatus::WaitingMMDepositInitiated | SwapStatus::WaitingMMDepositConfirmed | SwapStatus::RefundingUser
+            SwapStatus::WaitingMMDepositInitiated | SwapStatus::WaitingMMDepositConfirmed
         ) {
-            // refunding user is allowed to refund again if previous refund wasn't sufficient for all funds / more funds were deposited after the initial refund
+            // dont allow any other states to be refunded
             return None;
         }
-        // if the status is not waiting mm deposit initiated or confirmed, then it can't be refunded
+
         match &self.mm_deposit_status {
             None => {
-                // This means we must be in WaitingMMDepositInitiated
-                // so we need to see if the user deposit has been confirmed or not
-                let user_deposit = self.user_deposit_status.as_ref().unwrap();
+                // Status is WaitingMMDepositInitiated - MM never initiated deposit
+                let user_deposit = self.user_deposit_status.as_ref().expect(
+                    "User deposit must exist if we reached WaitingMMDepositInitiated"
+                );
                 let user_deposit_confirmed_at = user_deposit.confirmed_at.expect(
-                    "User deposit must be confirmed if we are in WaitingMMDepositInitiated",
+                    "User deposit must be confirmed if we are in WaitingMMDepositInitiated"
                 );
                 let now = utc::now();
                 let diff = now - user_deposit_confirmed_at;
@@ -190,6 +358,7 @@ impl Swap {
                 }
             }
             Some(mm_deposit) => {
+                // Status is WaitingMMDepositConfirmed or RefundingUser - MM deposit not confirming
                 let mm_deposit_detected_at = mm_deposit.deposit_detected_at;
                 let now = utc::now();
                 let diff = now - mm_deposit_detected_at;

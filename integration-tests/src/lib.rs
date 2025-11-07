@@ -58,3 +58,6 @@ mod auto_rebalance_test;
 
 #[cfg(test)]
 mod concurrent_rebalance_test;
+
+#[cfg(test)]
+mod insufficient_deposit_refund_test;

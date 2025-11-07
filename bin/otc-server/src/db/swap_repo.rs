@@ -370,7 +370,7 @@ impl SwapRepository {
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
-            WHERE s.status NOT IN ('settled', 'failed')
+            WHERE s.status NOT IN ('settled', 'failed', 'refunding_user')
               AND NOT (s.updated_at < $1)
             ORDER BY s.created_at DESC
             ",
