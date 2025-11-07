@@ -55,3 +55,6 @@ mod liquidity_locking_test;
 
 #[cfg(test)]
 mod auto_rebalance_test;
+
+#[cfg(test)]
+mod concurrent_rebalance_test;
