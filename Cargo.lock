@@ -1169,7 +1169,7 @@ checksum = "b0674a1ddeecb70197781e945de4b3b8ffb61fa939a5597bcf48503737663100"
 
 [[package]]
 name = "api-key-gen"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "argon2",
  "blockchain-utils",
@@ -2136,7 +2136,7 @@ dependencies = [
 
 [[package]]
 name = "bitcoin-wallet-utils"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "argon2",
  "bitcoin",
@@ -2231,7 +2231,7 @@ dependencies = [
 
 [[package]]
 name = "blockchain-utils"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
  "backoff",
@@ -2406,7 +2406,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chainalysis-address-screener"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "reqwest",
  "serde",
@@ -2492,7 +2492,7 @@ dependencies = [
 
 [[package]]
 name = "coinbase-exchange-client"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "base64 0.22.1",
  "hmac",
@@ -3035,7 +3035,7 @@ dependencies = [
 
 [[package]]
 name = "devnet"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
  "axum 0.7.9",
@@ -3070,7 +3070,7 @@ dependencies = [
 
 [[package]]
 name = "devnet-cli"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
  "blockchain-utils",
@@ -3212,14 +3212,14 @@ dependencies = [
 
 [[package]]
 name = "eip3009-erc20-contract"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
 ]
 
 [[package]]
 name = "eip7702-delegator-contract"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
 ]
@@ -3377,7 +3377,7 @@ dependencies = [
 
 [[package]]
 name = "evm-token-indexer-client"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
  "reqwest",
@@ -4388,7 +4388,7 @@ dependencies = [
 
 [[package]]
 name = "integration-tests"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
  "bitcoin",
@@ -4767,7 +4767,7 @@ dependencies = [
 
 [[package]]
 name = "market-maker"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
  "async-trait",
@@ -5302,7 +5302,7 @@ checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
 name = "otc-auth"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "otc-models",
  "serde",
@@ -5316,7 +5316,7 @@ dependencies = [
 
 [[package]]
 name = "otc-chains"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
  "async-trait",
@@ -5345,7 +5345,7 @@ dependencies = [
 
 [[package]]
 name = "otc-models"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
  "argon2",
@@ -5362,7 +5362,7 @@ dependencies = [
 
 [[package]]
 name = "otc-protocols"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
  "chrono",
@@ -5374,7 +5374,7 @@ dependencies = [
 
 [[package]]
 name = "otc-server"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
  "async-trait",
@@ -6141,7 +6141,7 @@ dependencies = [
 
 [[package]]
 name = "rfq-server"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
  "async-trait",
@@ -7829,7 +7829,7 @@ dependencies = [
 
 [[package]]
 name = "tx-flood"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "alloy 1.0.30",
  "anyhow",
@@ -7982,7 +7982,7 @@ checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "utc"
-version = "0.10.4"
+version = "0.10.5"
 dependencies = [
  "chrono",
  "mock_instant",
