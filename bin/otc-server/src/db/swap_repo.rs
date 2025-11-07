@@ -508,18 +508,22 @@ impl SwapRepository {
 
             let swap_settlement_timestamp: DateTime<Utc> = row.try_get("updated_at")?;
 
-            let lot = lot_from_db(
+            // Build the lot structure from the quote's from fields, but use the actual
+            // on-chain balance from user_deposit_status.amount instead of the quoted amount
+            let mut actual_deposit_lot = lot_from_db(
                 row.try_get::<String, _>("from_chain")?,
                 row.try_get::<serde_json::Value, _>("from_token")?,
                 row.try_get::<String, _>("from_amount")?,
                 row.try_get::<i16, _>("from_decimals")? as u8,
             )?;
+            // Override with the actual on-chain balance from the user's deposit
+            actual_deposit_lot.amount = deposit_status.amount;
 
             swaps.push(SettledSwapNotification {
                 swap_id: row.try_get("swap_id")?,
                 user_deposit_salt,
                 user_deposit_tx_hash: deposit_status.tx_hash,
-                lot,
+                lot: actual_deposit_lot,
                 deposit_chain,
                 swap_settlement_timestamp,
             });

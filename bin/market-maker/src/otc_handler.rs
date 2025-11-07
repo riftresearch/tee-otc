@@ -290,6 +290,7 @@ impl OTCMessageHandler {
                 ..
             } => {
                 tracing::info!(message = "Swap complete, received user's private key", swap_id = %swap_id, user_deposit_tx_hash = %user_deposit_tx_hash);
+                // what's the easiest way to get the amount of btc in the user's deposit on either chain?
 
                 match self
                     .deposit_repository

@@ -401,7 +401,7 @@ impl SwapMonitoringService {
                     let quote_id = swap.quote.id;
                     let user_destination_address = swap.user_destination_address.clone();
                     let mm_nonce = swap.mm_nonce;
-                    let expected_currency = swap.quote.to.clone();
+                    let expected_lot = swap.quote.to.clone();
 
                     tokio::spawn(async move {
                         let _ = mm_registry
@@ -411,7 +411,7 @@ impl SwapMonitoringService {
                                 &quote_id,
                                 &user_destination_address,
                                 mm_nonce,
-                                &expected_currency,
+                                &expected_lot,
                                 user_deposit_confirmed_at,
                             )
                             .await;
@@ -680,7 +680,11 @@ impl SwapMonitoringService {
                         let private_key = user_wallet.private_key().to_string();
                         let user_deposit_tx_hash =
                             swap.user_deposit_status.as_ref().unwrap().tx_hash.clone();
-                        let lot = swap.quote.from.clone();
+                        let mut actual_deposit_lot = swap.quote.from.clone();
+                        // Note: Instead of sending quote.to to the MM, we use swap.user_deposit_status.amount,
+                        // which stores the actual on-chain balance of the user's deposit vault, so the MM doesn't
+                        // have to query the on-chain balance for this private key.
+                        actual_deposit_lot.amount = swap.user_deposit_status.as_ref().expect("user deposit status should be some").amount;
 
                         tokio::spawn(async move {
                             let _ = mm_registry
@@ -688,7 +692,7 @@ impl SwapMonitoringService {
                                     &market_maker_id,
                                     &swap_id,
                                     &private_key,
-                                    &lot,
+                                    &actual_deposit_lot,
                                     &user_deposit_tx_hash,
                                     &swap_settlement_timestamp,
                                 )
