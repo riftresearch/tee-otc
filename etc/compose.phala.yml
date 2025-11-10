@@ -1682,7 +1682,7 @@ services:
     platform: linux/amd64
 
   otc-server:
-    image: riftresearch/otc-server:0.10.6
+    image: riftresearch/otc-server:0.10.7
     restart: unless-stopped
     container_name: tee-otc-server
     depends_on:
