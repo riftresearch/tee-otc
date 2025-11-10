@@ -662,6 +662,16 @@ pub fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
         "Latency in seconds for responding to RFQ quote requests."
     );
 
+    metrics::describe_gauge!(
+        "mm_quote_eth_priority_fee_gwei",
+        "Ethereum max priority fee in gwei (after safety multiplier)"
+    );
+
+    metrics::describe_gauge!(
+        "mm_quote_btc_sats_per_vbyte",
+        "Bitcoin fee rate in sats per vByte (after safety multiplier)"
+    );
+
     if PROMETHEUS_HANDLE.set(shared_handle.clone()).is_err() {
         if let Some(existing) = PROMETHEUS_HANDLE.get() {
             return Ok(existing.clone());

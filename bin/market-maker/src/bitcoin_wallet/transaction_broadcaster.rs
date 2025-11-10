@@ -10,6 +10,7 @@ use bdk_wallet::{
     signer::SignOptions,
     CreateParams, PersistedWallet, Wallet,
 };
+use blockchain_utils::MempoolEsploraFeeExt;
 use esplora_client::OutPoint;
 use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
 use otc_models::ChainType;
@@ -186,14 +187,13 @@ async fn process_transaction(
     if let Some(explicit_absolute_fee) = explicit_absolute_fee {
         tx_builder.fee_absolute(Amount::from_sat(explicit_absolute_fee));
     } else {
-        let fee_estimates = esplora_client
-            .get_fee_estimates()
+        let fee_estimate = esplora_client
+            .get_mempool_fee_estimate_next_block()
             .await
             .map_err(Box::new)
             .context(SyncWalletSnafu)?;
-        let explicit_fee_rate = *fee_estimates.get(&1).unwrap_or(&1.1) as f64;
-        info!("Using fee rate: {:?} sats/vbyte", explicit_fee_rate);
-        let fee_rate = from_sat_per_vb_f64(explicit_fee_rate).unwrap();
+        info!("Using fee rate: {:?} sats/vbyte", fee_estimate);
+        let fee_rate = from_sat_per_vb_f64(fee_estimate).unwrap();
         tx_builder.fee_rate(fee_rate);
     }
 

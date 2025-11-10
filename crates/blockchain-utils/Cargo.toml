@@ -18,3 +18,5 @@ bip39 = {workspace = true}
 otc-models = {workspace=true}
 eip3009-erc20-contract = {workspace=true}
 eip7702-delegator-contract = {workspace=true}
+esplora-client = {workspace=true}
+async-trait = {workspace=true}

@@ -8,13 +8,13 @@ use crate::wallet::WalletManager;
 use alloy::eips::BlockNumberOrTag;
 use alloy::providers::DynProvider;
 use alloy::{primitives::U256, providers::Provider};
-use blockchain_utils::{compute_protocol_fee_sats, inverse_compute_protocol_fee};
+use blockchain_utils::{MempoolEsploraFeeExt, compute_protocol_fee_sats, inverse_compute_protocol_fee};
 use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest};
 use otc_protocols::rfq::{FeeSchedule, RFQResult};
 use snafu::{Location, Snafu};
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 const QUOTE_EXPIRATION_TIME: Duration = Duration::from_secs(60 * 5);
@@ -148,8 +148,8 @@ impl WrappedBitcoinQuoter {
                 }
             };
 
-            let sats_per_vbyte_by_confirmations = match esplora_client
-                .get_fee_estimates()
+            let fee_estimate = match esplora_client
+                .get_mempool_fee_estimate_next_block()
                 .await
                 {
                     Ok(estimates) => estimates,
@@ -159,8 +159,7 @@ impl WrappedBitcoinQuoter {
                         continue;
                     }
                 };
-            let sats_per_vbyte = sats_per_vbyte_by_confirmations.get(&1).unwrap_or(&1.5);
-            let sats_per_vbyte = sats_per_vbyte * fee_safety_multiplier;
+            let sats_per_vbyte = fee_estimate * fee_safety_multiplier;
 
             let send_fee_sats_on_btc = calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault(
                 sats_per_vbyte,
@@ -180,6 +179,9 @@ impl WrappedBitcoinQuoter {
             global_fee_map.insert(ChainType::Bitcoin, send_fee_sats_on_btc);
             global_fee_map.insert(ChainType::Ethereum, send_fee_sats_on_eth);
             drop(global_fee_map);
+
+            metrics::gauge!("mm_quote_eth_priority_fee_gwei").set(max_priority_fee_gwei);
+            metrics::gauge!("mm_quote_btc_sats_per_vbyte").set(sats_per_vbyte);
 
             tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
         }
@@ -303,7 +305,7 @@ impl WrappedBitcoinQuoter {
             )
             .await
         {
-            warn!(
+            debug!(
                 "Cannot fill quote {}: insufficient balance for chain {:?} token {:?}",
                 quote.id, chain, token
             );
