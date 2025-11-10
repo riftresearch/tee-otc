@@ -26,7 +26,7 @@ impl Swap {
         confirmations: u64,
     ) -> TransitionResult {
         ensure!(
-            self.status == SwapStatus::WaitingUserDepositInitiated,
+            matches!(self.status, SwapStatus::WaitingUserDepositInitiated | SwapStatus::WaitingUserDepositConfirmed),
             InvalidTransitionSnafu {
                 from: self.status,
                 to: SwapStatus::WaitingUserDepositConfirmed,
@@ -335,9 +335,13 @@ mod tests {
             "0xabc123"
         );
 
-        // Invalid transition - can't deposit again
+        // Valid transition - can replace deposit (e.g., RBF transaction)
         let result = swap.user_deposit_detected("0xdef456".to_string(), U256::from(1000000u64), 1);
-        assert!(result.is_err());
+        assert!(result.is_ok());
+        assert_eq!(
+            swap.user_deposit_status.as_ref().unwrap().tx_hash,
+            "0xdef456"
+        );
     }
 
     #[test]

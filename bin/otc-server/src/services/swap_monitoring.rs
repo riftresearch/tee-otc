@@ -241,7 +241,7 @@ impl SwapMonitoringService {
 
         match swap.status {
             SwapStatus::WaitingUserDepositInitiated => {
-                self.check_user_deposit(swap).await?;
+                self.check_user_deposit(swap, None).await?;
             }
             SwapStatus::WaitingUserDepositConfirmed => {
                 self.check_user_deposit_confirmation(swap).await?;
@@ -267,7 +267,7 @@ impl SwapMonitoringService {
     }
 
     /// Check for user deposit
-    async fn check_user_deposit(&self, swap: &Swap) -> MonitoringResult<()> {
+    async fn check_user_deposit(&self, swap: &Swap, existent_tx_hash: Option<String>) -> MonitoringResult<()> {
         // Get the quote to know what token/chain to check
         let quote = &swap.quote;
 
@@ -298,6 +298,11 @@ impl SwapMonitoringService {
                 "User deposit detected for swap {}: {} on chain {:?}",
                 swap.id, deposit.tx_hash, quote.from.currency.chain
             );
+
+            if existent_tx_hash.is_some() && existent_tx_hash.unwrap() == deposit.tx_hash {
+                info!("User deposit tx {} for swap {} already detected, skipping", deposit.tx_hash, swap.id);
+                return Ok(());
+            }
 
             // Update swap state
             let user_deposit_status = UserDepositStatus {
@@ -423,6 +428,9 @@ impl SwapMonitoringService {
                     "User deposit tx {} for swap {} not found on chain {:?}",
                     user_deposit.tx_hash, swap.id, quote.from.currency.chain
                 );
+                // If it's not found, it's possible the user deposit was replaced with a different tx, 
+                // so we need to check for a new deposit
+                self.check_user_deposit(swap, Some(user_deposit.tx_hash.clone())).await?;
             }
         }
 

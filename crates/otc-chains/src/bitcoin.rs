@@ -168,15 +168,22 @@ impl ChainOperations for BitcoinChain {
     }
 
     async fn get_tx_status(&self, tx_hash: &str) -> Result<TxStatus> {
-        let tx = self
+        let tx_verbose_result = self
             .rpc_client
             .get_raw_transaction_verbose(&bitcoin::Txid::from_str(tx_hash).unwrap())
-            .await
-            .map_err(|e| crate::Error::BitcoinRpcError {
-                source: e,
-                loc: location!(),
-            })?;
-        debug!("Tx status: {:?}", tx);
+            .await;
+        let tx = match tx_verbose_result {
+            Ok(tx_verbose) => tx_verbose,
+            Err(e) => {
+                if e.to_string().contains("No such mempool or blockchain transaction") {
+                    return Ok(TxStatus::NotFound);
+                }
+                return Err(crate::Error::BitcoinRpcError {
+                    source: e,
+                    loc: location!(),
+                });
+            }
+        };
         if tx.confirmations.unwrap_or(0) > 0 {
             Ok(TxStatus::Confirmed(tx.confirmations.unwrap_or(0)))
         } else {

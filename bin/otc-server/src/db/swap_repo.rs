@@ -750,6 +750,9 @@ impl SwapRepository {
         // First get the swap
         let mut swap = self.get(swap_id).await?;
 
+        // Save the original status for optimistic concurrency check
+        let original_status = swap.status;
+
         // Apply the state transition
         swap.user_deposit_detected(
             deposit_status.tx_hash.clone(),
@@ -760,8 +763,22 @@ impl SwapRepository {
             message: format!("State transition failed: {e}"),
         })?;
 
-        // Update the database
-        self.update(&swap, Some(SwapStatus::WaitingUserDepositInitiated)).await?;
+        // Update the database, allowing update from either WaitingUserDepositInitiated 
+        // or WaitingUserDepositConfirmed (for transaction replacement scenarios)
+        let expected_status = match original_status {
+            SwapStatus::WaitingUserDepositInitiated | SwapStatus::WaitingUserDepositConfirmed => {
+                Some(original_status)
+            }
+            _ => {
+                return Err(OtcServerError::InvalidState {
+                    message: format!(
+                        "Cannot detect user deposit from status {:?}",
+                        original_status
+                    ),
+                });
+            }
+        };
+        self.update(&swap, expected_status).await?;
         Ok(())
     }
 
