@@ -119,9 +119,26 @@ impl SwapMonitoringService {
         let mut interval = time::interval(interval);
 
         loop {
-            if let Err(e) = self.monitor_all_swaps().await {
-                error!("Error monitoring swaps: {}", e);
+            let service = Arc::clone(&self);
+            let handle = tokio::spawn(async move {
+                service.monitor_all_swaps().await
+            });
+
+            match handle.await {
+                Ok(Ok(())) => {
+                    // Success
+                }
+                Ok(Err(e)) => {
+                    error!("Error monitoring swaps: {}", e);
+                }
+                Err(e) if e.is_panic() => {
+                    error!("CRITICAL: Swap monitoring PANICKED: {:?}", e);
+                }
+                Err(e) => {
+                    error!("Swap monitoring task cancelled: {:?}", e);
+                }
             }
+
             interval.tick().await;
         }
     }
@@ -173,8 +190,8 @@ impl SwapMonitoringService {
             let permit = match semaphore.clone().acquire_owned().await {
                 Ok(permit) => permit,
                 Err(e) => {
-                    error!("Failed to acquire semaphore permit: {}", e);
-                    panic!("semaphore should never be closed");
+                    error!("Failed to acquire semaphore permit for swap {}: {}", swap.id, e);
+                    continue;
                 }
             };
             let service = Arc::clone(self);
@@ -191,8 +208,8 @@ impl SwapMonitoringService {
             let permit = match semaphore.clone().acquire_owned().await {
                 Ok(permit) => permit,
                 Err(e) => {
-                    error!("Failed to acquire semaphore permit: {}", e);
-                    panic!("semaphore should never be closed");
+                    error!("Failed to acquire semaphore permit for batch {}: {}", mm_tx_hash, e);
+                    continue;
                 }
             };
             let service = Arc::clone(self);
@@ -299,9 +316,11 @@ impl SwapMonitoringService {
                 swap.id, deposit.tx_hash, quote.from.currency.chain
             );
 
-            if existent_tx_hash.is_some() && existent_tx_hash.unwrap() == deposit.tx_hash {
-                info!("User deposit tx {} for swap {} already detected, skipping", deposit.tx_hash, swap.id);
-                return Ok(());
+            if let Some(existing_hash) = existent_tx_hash {
+                if existing_hash == deposit.tx_hash {
+                    info!("User deposit tx {} for swap {} already detected, skipping", deposit.tx_hash, swap.id);
+                    return Ok(());
+                }
             }
 
             // Update swap state
