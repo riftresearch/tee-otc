@@ -252,11 +252,53 @@ configs:
             - targets:
                 - rfq-server:9000
 
-  grafana-datasource:
+  loki-config:
+    content: |
+      auth_enabled: false
+
+      server:
+        http_listen_port: 3100
+
+      common:
+        path_prefix: /loki
+        storage:
+          filesystem:
+            chunks_directory: /loki/chunks
+            rules_directory: /loki/rules
+        replication_factor: 1
+        ring:
+          kvstore:
+            store: inmemory
+
+      schema_config:
+        configs:
+          - from: 2020-10-24
+            store: boltdb-shipper
+            object_store: filesystem
+            schema: v11
+            index:
+              prefix: index_
+              period: 24h
+
+      limits_config:
+        retention_period: 720h
+        ingestion_rate_mb: 10
+        ingestion_burst_size_mb: 20
+
+      compactor:
+        working_directory: /loki/compactor
+        shared_store: filesystem
+        compaction_interval: 10m
+        retention_enabled: true
+        retention_delete_delay: 2h
+        retention_delete_worker_count: 150
+
+  grafana-datasourcev3:
     content: |
       apiVersion: 1
       deleteDatasources:
         - name: Prometheus
+        - name: Loki
       datasources:
         - name: Prometheus
           uid: PBFA97CFB590B2093
@@ -264,8 +306,14 @@ configs:
           access: proxy
           url: http://prometheus:9090
           isDefault: true
+        - name: Loki
+          uid: LOKI01
+          type: loki
+          access: proxy
+          url: http://otc-loki:3100
+          isDefault: false
 
-  grafana-dashboard-providerv2:
+  grafana-dashboard-providerv3:
     content: |
       apiVersion: 1
       providers:
@@ -277,7 +325,7 @@ configs:
           options:
             path: /etc/grafana/provisioning/dashboards
 
-  grafana-node-dashboardv2:
+  grafana-node-dashboardv3:
     content: |
       {
         "annotations": {
@@ -299,6 +347,7 @@ configs:
         "editable": true,
         "fiscalYearStartMonth": 0,
         "graphTooltip": 1,
+        "id": 1,
         "links": [],
         "panels": [
           {
@@ -906,6 +955,149 @@ configs:
           },
           {
             "datasource": {
+              "type": "loki",
+              "uid": "LOKI01"
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 0,
+              "y": 16
+            },
+            "id": 12,
+            "options": {
+              "dedupStrategy": "none",
+              "enableLogDetails": true,
+              "prettifyLogMessage": false,
+              "showCommonLabels": false,
+              "showLabels": false,
+              "showTime": false,
+              "sortOrder": "Descending",
+              "wrapLogMessage": false
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "loki",
+                  "uid": "LOKI01"
+                },
+                "editorMode": "code",
+                "expr": "{service=\"otc-server\"}\n| json\n| level=~\"(warn|error)\"\n| regexp \"(?:\\\"_spans\\\":\\\\[\\\"(?P<span>[^\\\"]+)\\\")?\"\n| line_format \"{{if .span}}{{.span}} | {{end}}{{._target}}: {{.message}}\"",
+                "queryType": "range",
+                "refId": "A"
+              }
+            ],
+            "title": "Warnings & Errors",
+            "type": "logs"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "Bps"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 12,
+              "y": 16
+            },
+            "id": 4,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "sum by (name) (rate(container_network_receive_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
+                "legendFormat": "RX {{name}}",
+                "range": true,
+                "refId": "A"
+              },
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "sum by (name) (rate(container_network_transmit_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
+                "legendFormat": "TX {{name}}",
+                "range": true,
+                "refId": "B"
+              }
+            ],
+            "title": "Container Network I/O",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
               "type": "prometheus",
               "uid": "PBFA97CFB590B2093"
             },
@@ -968,7 +1160,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 0,
-              "y": 16
+              "y": 24
             },
             "id": 1,
             "options": {
@@ -1063,7 +1255,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 16
+              "y": 24
             },
             "id": 2,
             "options": {
@@ -1092,112 +1284,6 @@ configs:
               }
             ],
             "title": "Container Memory Usage",
-            "type": "timeseries"
-          },
-          {
-            "datasource": {
-              "type": "prometheus",
-              "uid": "PBFA97CFB590B2093"
-            },
-            "fieldConfig": {
-              "defaults": {
-                "color": {
-                  "mode": "palette-classic"
-                },
-                "custom": {
-                  "axisBorderShow": false,
-                  "axisCenteredZero": false,
-                  "axisColorMode": "text",
-                  "axisLabel": "",
-                  "axisPlacement": "auto",
-                  "barAlignment": 0,
-                  "drawStyle": "line",
-                  "fillOpacity": 0,
-                  "gradientMode": "none",
-                  "hideFrom": {
-                    "legend": false,
-                    "tooltip": false,
-                    "viz": false
-                  },
-                  "insertNulls": false,
-                  "lineInterpolation": "linear",
-                  "lineWidth": 1,
-                  "pointSize": 5,
-                  "scaleDistribution": {
-                    "type": "linear"
-                  },
-                  "showPoints": "auto",
-                  "spanNulls": false,
-                  "stacking": {
-                    "group": "A",
-                    "mode": "none"
-                  },
-                  "thresholdsStyle": {
-                    "mode": "off"
-                  }
-                },
-                "mappings": [],
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "red",
-                      "value": 80
-                    }
-                  ]
-                },
-                "unit": "Bps"
-              },
-              "overrides": []
-            },
-            "gridPos": {
-              "h": 8,
-              "w": 24,
-              "x": 0,
-              "y": 24
-            },
-            "id": 4,
-            "options": {
-              "legend": {
-                "calcs": [],
-                "displayMode": "list",
-                "placement": "right",
-                "showLegend": true
-              },
-              "tooltip": {
-                "mode": "single",
-                "sort": "none"
-              }
-            },
-            "targets": [
-              {
-                "datasource": {
-                  "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
-                },
-                "editorMode": "code",
-                "expr": "sum by (name) (rate(container_network_receive_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
-                "legendFormat": "RX {{name}}",
-                "range": true,
-                "refId": "A"
-              },
-              {
-                "datasource": {
-                  "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
-                },
-                "editorMode": "code",
-                "expr": "sum by (name) (rate(container_network_transmit_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
-                "legendFormat": "TX {{name}}",
-                "range": true,
-                "refId": "B"
-              }
-            ],
-            "title": "Container Network I/O",
             "type": "timeseries"
           },
           {
@@ -1495,14 +1581,14 @@ configs:
           "list": []
         },
         "time": {
-          "from": "now-24h",
+          "from": "now-12h",
           "to": "now"
         },
         "timepicker": {},
         "timezone": "",
         "title": "TEE Monitoring dev",
         "uid": "tee-monitoring-dev",
-        "version": 1,
+        "version": 2,
         "weekStart": ""
       }
 
@@ -1709,6 +1795,7 @@ services:
       CONFIG_DIR: /app/config
       DSTACK_SOCK_PATH: /var/run/dstack.sock
       METRICS_LISTEN_ADDR: 0.0.0.0:9000
+      LOKI_URL: http://otc-loki:3100
     ports:
       - "4422:4422"
     expose:
@@ -1869,6 +1956,21 @@ services:
     networks:
       - rift-network
 
+  otc-loki:
+    image: grafana/loki:2.9.10
+    container_name: tee-otc-loki
+    restart: unless-stopped
+    # No port exposure needed - only accessed internally by grafana and otc-server
+    volumes:
+      - otc_loki_data:/loki
+    configs:
+      - source: loki-config
+        target: /etc/loki/local-config.yaml
+    command:
+      - "-config.file=/etc/loki/local-config.yaml"
+    networks:
+      - rift-network
+
   grafana:
     image: grafana/grafana:10.4.2
     container_name: tee-grafana
@@ -1878,15 +1980,17 @@ services:
     depends_on:
       prometheus:
         condition: service_started
+      otc-loki:
+        condition: service_started
     environment:
       GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER}
       GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
     configs:
-      - source: grafana-datasource
+      - source: grafana-datasourcev3
         target: /etc/grafana/provisioning/datasources/prometheus.yml
-      - source: grafana-dashboard-providerv2
+      - source: grafana-dashboard-providerv3
         target: /etc/grafana/provisioning/dashboards/provider.yml
-      - source: grafana-node-dashboardv2
+      - source: grafana-node-dashboardv3
         target: /etc/grafana/provisioning/dashboards/tee-monitoring.json
     networks:
       - rift-network
@@ -1906,6 +2010,7 @@ volumes:
   bitcoin_data:
   otc_server_config_data:
   prometheus_data_v4:
+  otc_loki_data:
   reth_logs:
   eth_jwt_data:
   lighthouse_data:

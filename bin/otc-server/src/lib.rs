@@ -149,6 +149,10 @@ pub struct OtcServerArgs {
     /// Dstack socket path
     #[arg(long, env = "DSTACK_SOCK_PATH", default_value = "/var/run/dstack.sock")]
     pub dstack_sock_path: String,
+
+    /// Loki logging URL (if provided, logs will be shipped to Loki)
+    #[arg(long, env = "LOKI_URL")]
+    pub loki_url: Option<String>,
 }
 
 fn parse_auth(s: &str) -> Result<Auth, String> {
