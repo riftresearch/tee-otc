@@ -1118,7 +1118,8 @@ impl SwapRepository {
             .map_err(|e| OtcServerError::InvalidState {
                 message: format!("State transition failed: {e}"),
             })?;
-        self.update(&swap, None).await?;
+        // only transition to WaitingMMDepositInitiated if the swap is in WaitingUserDepositConfirmed (prevent refund race condition @ pg level)
+        self.update(&swap, Some(SwapStatus::WaitingUserDepositConfirmed)).await?;
         Ok(swap
             .user_deposit_status
             .as_ref()

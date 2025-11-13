@@ -375,6 +375,7 @@ pub async fn build_otc_server_test_args(
         db_max_connections: 10,
         db_min_connections: 2,
         max_concurrent_swaps: 10,
+        loki_url: None,
     }
 }
 

@@ -317,6 +317,154 @@ mod tests {
             "Should return UserInitiatedEarlyRefund reason"
         );
     }
+
+    #[test]
+    fn waiting_user_deposit_confirmed_with_zero_confirmations_can_refund() {
+        use crate::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
+        use alloy::primitives::{Address, U256};
+
+        // Create a swap in WaitingUserDepositConfirmed state with 0 confirmations
+        let swap = Swap {
+            id: uuid::Uuid::new_v4(),
+            market_maker_id: uuid::Uuid::new_v4(),
+            quote: Quote {
+                id: uuid::Uuid::new_v4(),
+                from: Lot {
+                    currency: Currency {
+                        chain: ChainType::Bitcoin,
+                        token: TokenIdentifier::Native,
+                        decimals: 8,
+                    },
+                    amount: U256::from(1_000_000u64),
+                },
+                to: Lot {
+                    currency: Currency {
+                        chain: ChainType::Ethereum,
+                        token: TokenIdentifier::Native,
+                        decimals: 18,
+                    },
+                    amount: U256::from(500000000000000000u64),
+                },
+                fee_schedule: FeeSchedule {
+                    network_fee_sats: 1000,
+                    liquidity_fee_sats: 2000,
+                    protocol_fee_sats: 500,
+                },
+                market_maker_id: uuid::Uuid::new_v4(),
+                expires_at: utc::now() + Duration::hours(1),
+                created_at: utc::now(),
+            },
+            metadata: Metadata::default(),
+            user_deposit_salt: [0u8; 32],
+            user_deposit_address: "bc1qtest".to_string(),
+            mm_nonce: [0u8; 16],
+            user_destination_address: "0x1234".to_string(),
+            user_evm_account_address: Address::ZERO,
+            status: SwapStatus::WaitingUserDepositConfirmed,
+            user_deposit_status: Some(UserDepositStatus {
+                tx_hash: "txhash123".to_string(),
+                amount: U256::from(1_000_000u64),
+                deposit_detected_at: utc::now(),
+                confirmations: 0, // Zero confirmations - may have been dropped
+                last_checked: utc::now(),
+                confirmed_at: None,
+            }),
+            mm_deposit_status: None,
+            settlement_status: None,
+            latest_refund: None,
+            failure_reason: None,
+            failure_at: None,
+            mm_notified_at: None,
+            mm_private_key_sent_at: None,
+            created_at: utc::now(),
+            updated_at: utc::now(),
+        };
+
+        // Should allow refund since transaction has 0 confirmations
+        let refund_reason = swap.can_be_refunded();
+        assert!(
+            refund_reason.is_some(),
+            "Swap in WaitingUserDepositConfirmed with 0 confirmations should be refundable"
+        );
+
+        assert!(
+            matches!(
+                refund_reason.unwrap(),
+                RefundSwapReason::UserInitiatedEarlyRefund
+            ),
+            "Should return UserInitiatedEarlyRefund reason"
+        );
+    }
+
+    #[test]
+    fn waiting_user_deposit_confirmed_with_confirmations_can_refund() {
+        use crate::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
+        use alloy::primitives::{Address, U256};
+
+        // Create a swap in WaitingUserDepositConfirmed state with 2 confirmations
+        let swap = Swap {
+            id: uuid::Uuid::new_v4(),
+            market_maker_id: uuid::Uuid::new_v4(),
+            quote: Quote {
+                id: uuid::Uuid::new_v4(),
+                from: Lot {
+                    currency: Currency {
+                        chain: ChainType::Bitcoin,
+                        token: TokenIdentifier::Native,
+                        decimals: 8,
+                    },
+                    amount: U256::from(1_000_000u64),
+                },
+                to: Lot {
+                    currency: Currency {
+                        chain: ChainType::Ethereum,
+                        token: TokenIdentifier::Native,
+                        decimals: 18,
+                    },
+                    amount: U256::from(500000000000000000u64),
+                },
+                fee_schedule: FeeSchedule {
+                    network_fee_sats: 1000,
+                    liquidity_fee_sats: 2000,
+                    protocol_fee_sats: 500,
+                },
+                market_maker_id: uuid::Uuid::new_v4(),
+                expires_at: utc::now() + Duration::hours(1),
+                created_at: utc::now(),
+            },
+            metadata: Metadata::default(),
+            user_deposit_salt: [0u8; 32],
+            user_deposit_address: "bc1qtest".to_string(),
+            mm_nonce: [0u8; 16],
+            user_destination_address: "0x1234".to_string(),
+            user_evm_account_address: Address::ZERO,
+            status: SwapStatus::WaitingUserDepositConfirmed,
+            user_deposit_status: Some(UserDepositStatus {
+                tx_hash: "txhash123".to_string(),
+                amount: U256::from(1_000_000u64),
+                deposit_detected_at: utc::now(),
+                confirmations: 2, // Has confirmations - transaction is progressing
+                last_checked: utc::now(),
+                confirmed_at: None,
+            }),
+            mm_deposit_status: None,
+            settlement_status: None,
+            latest_refund: None,
+            failure_reason: None,
+            failure_at: None,
+            mm_notified_at: None,
+            mm_private_key_sent_at: None,
+            created_at: utc::now(),
+            updated_at: utc::now(),
+        };
+
+        // Should NOT allow refund since transaction has confirmations and is progressing
+        let refund_reason = swap.can_be_refunded();
+        assert!(
+            refund_reason.is_some(),
+            "Swap in WaitingUserDepositConfirmed with confirmations should be refundable"
+        );
+    }
 }
 
 impl Swap {
@@ -324,6 +472,12 @@ impl Swap {
         // Early-stage refund: Allow immediate refund if user deposited but swap hasn't progressed
         if self.status == SwapStatus::WaitingUserDepositInitiated {
             // Only allow refund if there are actually funds deposited
+            return Some(RefundSwapReason::UserInitiatedEarlyRefund);
+        }
+
+        // Allow refund in WaitingUserDepositConfirmed if transaction has 0 confirmations
+        // (e.g., dropped from mempool or never made it into a block)
+        if self.status == SwapStatus::WaitingUserDepositConfirmed {
             return Some(RefundSwapReason::UserInitiatedEarlyRefund);
         }
 
