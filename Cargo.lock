@@ -3403,7 +3403,7 @@ dependencies = [
 [[package]]
 name = "ezsockets"
 version = "0.7.0"
-source = "git+https://github.com/alpinevm/ezsockets?rev=008b403aaee75cd6838cb473fae067aa154bd9dc#008b403aaee75cd6838cb473fae067aa154bd9dc"
+source = "git+https://github.com/alpinevm/ezsockets?rev=038e3a2377da307d7252978c6b79f372e9f1d9bd#038e3a2377da307d7252978c6b79f372e9f1d9bd"
 dependencies = [
  "async-channel",
  "async-trait",
