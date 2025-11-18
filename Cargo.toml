@@ -92,7 +92,7 @@ dotenvy = "0.15"
 ratatui = "0.28"
 eyre = "0.6.12"
 socket2 = "0.6.1"
-ezsockets = { version = "0.7.0", features = ["client", "native_client"] }
+ezsockets = { version = "0.7.1", features = ["client", "native_client"] }
 
 [profile.dev.package.sqlx-macros]
 opt-level = 3
@@ -101,4 +101,3 @@ opt-level = 3
 corepc-node = { git = "https://github.com/alpinevm/corepc", rev = "2b21b2bfeb4b4c8bc71fccba87d86054a648f242" }
 sqlx-sqlite = { path = "sqlx-sqlite-shim" }
 esplora-client = {git = "https://github.com/riftresearch/rust-esplora-client" , rev = "b749fb95e204c7d5f5c1fa83d499a8600d72a103"}
-ezsockets = { git = "https://github.com/alpinevm/ezsockets", rev = "038e3a2377da307d7252978c6b79f372e9f1d9bd"}

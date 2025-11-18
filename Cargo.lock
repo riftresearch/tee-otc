@@ -3402,8 +3402,9 @@ dependencies = [
 
 [[package]]
 name = "ezsockets"
-version = "0.7.0"
-source = "git+https://github.com/alpinevm/ezsockets?rev=038e3a2377da307d7252978c6b79f372e9f1d9bd#038e3a2377da307d7252978c6b79f372e9f1d9bd"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f99230cd4b340f0590dab3dd65a9f3edc0da4c759922f303467eefde08a7eb7"
 dependencies = [
  "async-channel",
  "async-trait",
