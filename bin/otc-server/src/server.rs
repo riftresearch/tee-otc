@@ -31,7 +31,7 @@ use axum::{
 use mm_websocket_server::{MessageHandler, MessageSender};
 use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use dstack_sdk::dstack_client::{DstackClient, GetQuoteResponse, InfoResponse};
-use metrics::{describe_gauge, describe_histogram, gauge, histogram};
+use metrics::{describe_gauge, describe_histogram, describe_counter, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
 use otc_chains::{bitcoin::BitcoinChain, ethereum::EthereumChain, ChainRegistry};
@@ -352,6 +352,16 @@ fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
     describe_gauge!(
         SWAP_FEES_TOTAL_METRIC,
         "Settled protocol fees per market (sats), synced from database aggregate tables."
+    );
+
+    describe_counter!(
+        "ethereum_rpc_requests_total",
+        "Total number of Ethereum RPC requests."
+    );
+
+    describe_histogram!(
+        "ethereum_rpc_duration_seconds",
+        "Duration in seconds of Ethereum RPC requests."
     );
 
     if PROMETHEUS_HANDLE.set(shared_handle.clone()).is_err() {

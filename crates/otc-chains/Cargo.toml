@@ -36,3 +36,7 @@ getrandom = { workspace = true }
 utc = {workspace=true}
 reqwest = {workspace=true}
 uuid = {workspace=true}
+
+# Metrics
+metrics = { workspace = true }
+tower = { version = "0.5", features = ["util"] }

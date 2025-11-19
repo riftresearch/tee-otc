@@ -825,13 +825,13 @@ configs:
                 "hide": false,
                 "includeNullMetadata": true,
                 "instant": false,
-                "legendFormat": "p95",
+                "legendFormat": "{{reason}}",
                 "range": true,
                 "refId": "A",
                 "useBackend": false
               }
             ],
-            "title": "Quote Generation Latency",
+            "title": "Quote Generation Latency P95",
             "type": "timeseries"
           },
           {

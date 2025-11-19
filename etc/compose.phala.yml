@@ -955,6 +955,204 @@ configs:
           },
           {
             "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "s"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 0,
+              "y": 16
+            },
+            "id": 14,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "disableTextWrap": false,
+                "editorMode": "code",
+                "expr": "ethereum_rpc_duration_seconds{job=\"otc-server\", quantile=\"0.95\", chain=\"ethereum\"}",
+                "fullMetaSearch": false,
+                "includeNullMetadata": true,
+                "instant": false,
+                "legendFormat": "{{method}}",
+                "range": true,
+                "refId": "A",
+                "useBackend": false
+              }
+            ],
+            "title": "Ethereum RPC P95",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                }
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 12,
+              "y": 16
+            },
+            "id": 13,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "disableTextWrap": false,
+                "editorMode": "builder",
+                "expr": "rate(ethereum_rpc_requests_total{job=\"otc-server\", chain=\"ethereum\"}[1m])",
+                "fullMetaSearch": false,
+                "includeNullMetadata": false,
+                "legendFormat": "{{method}} {{status}}",
+                "range": true,
+                "refId": "A",
+                "useBackend": false
+              }
+            ],
+            "title": "Ethereum RPC Req/s",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
               "type": "loki",
               "uid": "LOKI01"
             },
@@ -962,7 +1160,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 0,
-              "y": 16
+              "y": 24
             },
             "id": 12,
             "options": {
@@ -1054,7 +1252,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 16
+              "y": 24
             },
             "id": 4,
             "options": {
@@ -1160,7 +1358,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 0,
-              "y": 24
+              "y": 32
             },
             "id": 1,
             "options": {
@@ -1255,7 +1453,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 24
+              "y": 32
             },
             "id": 2,
             "options": {
@@ -1333,8 +1531,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1350,7 +1547,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 0,
-              "y": 32
+              "y": 40
             },
             "id": 5,
             "options": {
@@ -1428,8 +1625,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1445,7 +1641,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 32
+              "y": 40
             },
             "id": 6,
             "options": {
@@ -1523,8 +1719,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1540,7 +1735,7 @@ configs:
               "h": 8,
               "w": 24,
               "x": 0,
-              "y": 40
+              "y": 48
             },
             "id": 7,
             "options": {
@@ -1581,14 +1776,14 @@ configs:
           "list": []
         },
         "time": {
-          "from": "now-12h",
+          "from": "now-5m",
           "to": "now"
         },
         "timepicker": {},
         "timezone": "",
         "title": "TEE Monitoring dev",
         "uid": "tee-monitoring-dev",
-        "version": 2,
+        "version": 1,
         "weekStart": ""
       }
 

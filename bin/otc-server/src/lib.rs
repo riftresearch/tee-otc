@@ -127,7 +127,7 @@ pub struct OtcServerArgs {
     pub bitcoin_network: bitcoin::Network,
 
     /// Chain monitor interval in seconds
-    #[arg(long, env = "CHAIN_MONITOR_INTERVAL", default_value = "10")]
+    #[arg(long, env = "CHAIN_MONITOR_INTERVAL", default_value = "15")]
     pub chain_monitor_interval_seconds: u64,
 
     /// Maximum number of swaps to monitor concurrently

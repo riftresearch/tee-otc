@@ -443,7 +443,7 @@ impl SwapMonitoringService {
                 }
             }
             TxStatus::NotFound => {
-                warn!(
+                debug!(
                     "User deposit tx {} for swap {} not found on chain {:?}",
                     user_deposit.tx_hash, swap.id, quote.from.currency.chain
                 );
@@ -736,7 +736,7 @@ impl SwapMonitoringService {
                 }
             }
             None => {
-                warn!(
+                debug!(
                     "MM deposit batch tx {} not found on chain {:?} for {} swaps",
                     mm_tx_hash,
                     deposit_chain,

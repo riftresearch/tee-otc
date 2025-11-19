@@ -6,6 +6,7 @@ pub mod traits;
 // Chain implementations
 pub mod bitcoin;
 pub mod ethereum;
+pub mod rpc_metrics_layer;
 
 pub use error::{Error, Result};
 pub use registry::ChainRegistry;

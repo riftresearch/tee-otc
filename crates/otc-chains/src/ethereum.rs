@@ -31,10 +31,16 @@ pub struct EthereumChain {
 
 impl EthereumChain {
     pub async fn new(rpc_url: &str, evm_indexer_url: &str) -> Result<Self> {
+        let url = rpc_url.parse().map_err(|_| crate::Error::Serialization {
+            message: "Invalid RPC URL".to_string(),
+        })?;
+
+        let client = alloy::rpc::client::ClientBuilder::default()
+            .layer(crate::rpc_metrics_layer::RpcMetricsLayer::new("ethereum".to_string()))
+            .http(url);
+
         let provider = ProviderBuilder::new()
-            .connect_http(rpc_url.parse().map_err(|_| crate::Error::Serialization {
-                message: "Invalid RPC URL".to_string(),
-            })?)
+            .connect_client(client)
             .erased();
 
         let evm_indexer_client = TokenIndexerClient::new(evm_indexer_url).map_err(|e| {
