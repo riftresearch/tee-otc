@@ -293,7 +293,7 @@ configs:
         retention_delete_delay: 2h
         retention_delete_worker_count: 150
 
-  grafana-datasourcev3:
+  grafana-datasource-v4:
     content: |
       apiVersion: 1
       deleteDatasources:
@@ -313,7 +313,7 @@ configs:
           url: http://otc-loki:3100
           isDefault: false
 
-  grafana-dashboard-providerv3:
+  grafana-dashboard-provider-v4:
     content: |
       apiVersion: 1
       providers:
@@ -325,7 +325,7 @@ configs:
           options:
             path: /etc/grafana/provisioning/dashboards
 
-  grafana-node-dashboardv3:
+  grafana-node-dashboard-v4:
     content: |
       {
         "annotations": {
@@ -2181,11 +2181,11 @@ services:
       GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER}
       GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
     configs:
-      - source: grafana-datasourcev3
+      - source: grafana-datasource-v4
         target: /etc/grafana/provisioning/datasources/prometheus.yml
-      - source: grafana-dashboard-providerv3
+      - source: grafana-dashboard-provider-v4
         target: /etc/grafana/provisioning/dashboards/provider.yml
-      - source: grafana-node-dashboardv3
+      - source: grafana-node-dashboard-v4
         target: /etc/grafana/provisioning/dashboards/tee-monitoring.json
     networks:
       - rift-network
