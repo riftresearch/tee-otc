@@ -1979,7 +1979,8 @@ services:
       GRANT_SUDO: yes
       # DATABASE_URL is constructed dynamically in the entrypoint from pg-sidecar
       RUST_LOG: info
-      EVM_RPC_URL: http://reth:8545
+      # http://reth:8545
+      EVM_RPC_URL: http://eth-helios:8190
       UNTRUSTED_EVM_TOKEN_INDEXER_URL: ${UNTRUSTED_EVM_TOKEN_INDEXER_URL}
       BITCOIN_RPC_URL: http://bitcoin-core:8332
       BITCOIN_RPC_AUTH: user:pass
@@ -2218,9 +2219,6 @@ services:
 
     networks:
       - rift-network
-
-    ports:
-      - "8190:8190"
 
   base-helios:
     image: riftresearch/helios:0.10.2-3

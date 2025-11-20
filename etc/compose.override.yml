@@ -187,6 +187,10 @@ services:
 
   reth: !reset null 
 
+  eth-helios: !reset null
+
+  base-helios: !reset null
+
   lighthouse: !reset null 
 
   bitcoin-core: !reset null 
