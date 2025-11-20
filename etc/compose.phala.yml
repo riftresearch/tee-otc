@@ -2226,6 +2226,7 @@ services:
     image: riftresearch/helios:0.10.2-3
     container_name: tee-base-helios
     restart: unless-stopped
+    user: root
 
     environment:
       # Required — you must set this in your .env or shell
