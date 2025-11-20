@@ -2194,7 +2194,7 @@ services:
       - /var/log/grafana
 
   eth-helios:
-    image: riftresearch/helios:0.10.2-2
+    image: riftresearch/helios:0.10.2-3
     container_name: tee-eth-helios
     restart: unless-stopped
     user: root
@@ -2223,7 +2223,7 @@ services:
       - "8190:8190"
 
   base-helios:
-    image: riftresearch/helios:0.10.2-2
+    image: riftresearch/helios:0.10.2-3
     container_name: tee-base-helios
     restart: unless-stopped
 
