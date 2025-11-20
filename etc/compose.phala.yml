@@ -2197,18 +2197,19 @@ services:
     image: riftresearch/helios:0.10.2-2
     container_name: tee-eth-helios
     restart: unless-stopped
+    user: root
 
     environment:
       # Required — you must set this in your .env or shell
       HELIOS_ETHEREUM_EXECUTION_RPC: ${HELIOS_ETHEREUM_EXECUTION_RPC:?set HELIOS_ETHEREUM_EXECUTION_RPC}
 
+    # the freezer-archive-from block was mined on 11/5/2025, one day before deployment of the otc-server container
     command: >
       ethereum
       --network mainnet
       --execution-rpc ${HELIOS_ETHEREUM_EXECUTION_RPC}
-      --rpc-port 8095
+      --rpc-port 8190
       --rpc-bind-ip 0.0.0.0
-      # this block was mined on 11/5/2025, one day before deployment of the otc-server container
       --freezer-archive-from 23730000
       --data-dir /data
 
@@ -2219,7 +2220,7 @@ services:
       - rift-network
 
     ports:
-      - "8095:8095"
+      - "8190:8190"
 
   base-helios:
     image: riftresearch/helios:0.10.2-2
@@ -2234,7 +2235,7 @@ services:
       opstack 
       --network base
       --execution-rpc ${HELIOS_BASE_EXECUTION_RPC}
-      --rpc-port 8096
+      --rpc-port 8191
       --rpc-bind-ip 0.0.0.0
       --freezer-archive-from 38394000
       --data-dir /data
@@ -2246,7 +2247,7 @@ services:
       - rift-network
 
     ports:
-      - "8096:8096" 
+      - "8191:8191" 
 
 networks:
   rift-network:
