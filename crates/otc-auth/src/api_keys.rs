@@ -28,6 +28,17 @@ pub static API_KEYS: LazyLock<Vec<PublicApiKeyRecord>> = LazyLock::new(|| {
             id: "38ddb152-1a81-4ecd-9e78-24953ef7b111".parse().unwrap(),
             tag: "rift-mm-2".to_string(),
             hash: "$argon2id$v=19$m=19456,t=2,p=1$5VILdLbU6pupoelhFC9gOw$e1Eq3aD3MEU5Cf69zvnXfpKXhYO9xLDdA0nzYF0hstA".to_string(),
+        },
+        PublicApiKeyRecord {
+            id: "2c5868fa-2dad-4eca-b033-c6e78039890b".parse().unwrap(),
+            tag: "rift-mm-3".to_string(),
+            hash: "$argon2id$v=19$m=19456,t=2,p=1$g5zLtYCxYXgIZZS+9s5+PA$Qzt/X2AOYofvhJ99W5gh3yz0Y+21yi0wDK5dFqV9KhQ".to_string(),
+        },
+        PublicApiKeyRecord {
+            id: "af6843cf-7fbf-44bb-87e5-d0cc4708bb2b".parse().unwrap(),
+            tag: "rift-mm-4".to_string(),
+            hash: "$argon2id$v=19$m=19456,t=2,p=1$1o2QgPjqHS3mdeZb0vRGjA$GamDi+DyZoZs8nkfb109McWqi5sAKnfMgXSwWi38Rn4".to_string(),
         }
+
     ]
 });
