@@ -76,7 +76,7 @@ docker-release:
 # Deploy to Phala
 phala-deploy:
     # stop the app first, otherwise the deploy command will just shutoff the machine and stop the app
-    phala cvms stop app_97c189391e051abc6e372aecad1d54bb34c39fde
+    -phala cvms stop app_97c189391e051abc6e372aecad1d54bb34c39fde
     sleep 3
     phala deploy --uuid 1c11019a-3dc1-440d-8a52-2147dcf608da -c etc/compose.phala.yml -e .env.otc
 
