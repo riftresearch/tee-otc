@@ -8,6 +8,7 @@ use otc_models::{MMDepositStatus, Swap, SwapStatus, TxStatus, UserDepositStatus}
 use snafu::{location, prelude::*, Location};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use tokio::time;
@@ -85,6 +86,7 @@ pub struct SwapMonitoringService {
     mm_registry: Arc<mm_registry::MMRegistry>,
     chain_monitor_interval_seconds: u64,
     max_concurrent_swaps: usize,
+    last_monitor_pass: AtomicU64,
 }
 
 impl SwapMonitoringService {
@@ -97,6 +99,7 @@ impl SwapMonitoringService {
         chain_monitor_interval_seconds: u64,
         max_concurrent_swaps: usize,
     ) -> Self {
+        let last_monitor_pass = AtomicU64::new(0);
         Self {
             db,
             settings,
@@ -104,7 +107,12 @@ impl SwapMonitoringService {
             mm_registry,
             chain_monitor_interval_seconds,
             max_concurrent_swaps,
+            last_monitor_pass,
         }
+    }
+
+    pub fn last_monitor_pass(&self) -> u64 {
+        self.last_monitor_pass.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Start the monitoring service
@@ -124,20 +132,33 @@ impl SwapMonitoringService {
                 service.monitor_all_swaps().await
             });
 
-            match handle.await {
-                Ok(Ok(())) => {
+            // Add timeout to prevent indefinite hanging on monitor
+            let timeout_duration = Duration::from_secs(300); // 5 minutes
+            match time::timeout(timeout_duration, handle).await {
+                Ok(Ok(Ok(()))) => {
                     // Success
                 }
-                Ok(Err(e)) => {
+                Ok(Ok(Err(e))) => {
                     error!("Error monitoring swaps: {}", e);
                 }
-                Err(e) if e.is_panic() => {
+                Ok(Err(e)) if e.is_panic() => {
                     error!("CRITICAL: Swap monitoring PANICKED: {:?}", e);
                 }
-                Err(e) => {
+                Ok(Err(e)) => {
                     error!("Swap monitoring task cancelled: {:?}", e);
                 }
+                Err(_) => {
+                    error!(
+                        "CRITICAL: Swap monitoring timed out after {:?}",
+                        timeout_duration
+                    );
+                }
             }
+            // Update the last monitor pass time
+            self.last_monitor_pass.store(
+                utc::now().timestamp() as u64,
+                std::sync::atomic::Ordering::Relaxed
+            );
 
             interval.tick().await;
         }

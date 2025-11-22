@@ -64,6 +64,7 @@ pub struct AppState {
 struct Status {
     status: String,
     version: String,
+    last_monitor_pass: u64,
 }
 
 const QUOTE_LATENCY_METRIC: &str = "otc_quote_response_seconds";
@@ -441,10 +442,11 @@ async fn metrics_handler(State(handle): State<Arc<PrometheusHandle>>) -> impl In
     )
 }
 
-async fn status_handler() -> impl IntoResponse {
+async fn status_handler(State(state): State<AppState>) -> impl IntoResponse {
     Json(Status {
         status: "online".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
+        last_monitor_pass: state.swap_monitoring_service.last_monitor_pass(),
     })
 }
 
