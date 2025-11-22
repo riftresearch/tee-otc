@@ -34,7 +34,7 @@ use dstack_sdk::dstack_client::{DstackClient, GetQuoteResponse, InfoResponse};
 use metrics::{describe_gauge, describe_histogram, describe_counter, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
-use otc_chains::{bitcoin::BitcoinChain, ethereum::EthereumChain, ChainRegistry};
+use otc_chains::{bitcoin::BitcoinChain, evm::EvmChain, ChainRegistry};
 use otc_protocols::mm::{MMRequest, MMResponse, ProtocolMessage};
 use serde::{Deserialize, Serialize};
 use snafu::prelude::*;
@@ -108,9 +108,14 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
     chain_registry.register(otc_models::ChainType::Bitcoin, Arc::new(bitcoin_chain));
 
     // Initialize Ethereum chain
-    let ethereum_chain = EthereumChain::new(
+    let ethereum_chain = EvmChain::new(
         &args.ethereum_mainnet_rpc_url,
         &args.untrusted_ethereum_mainnet_token_indexer_url,
+        &args.ethereum_allowed_token,
+        otc_models::ChainType::Ethereum,
+        b"ethereum-wallet",
+        4,
+        Duration::from_secs(12),
     )
     .await
     .map_err(|e| crate::Error::DatabaseInit {
@@ -119,6 +124,24 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         },
     })?;
     chain_registry.register(otc_models::ChainType::Ethereum, Arc::new(ethereum_chain));
+
+    // Initialize Base chain
+    let base_chain = EvmChain::new(
+        &args.base_rpc_url,
+        &args.untrusted_base_token_indexer_url,
+        &args.base_allowed_token,
+        otc_models::ChainType::Base,
+        b"base-wallet",
+        2,
+        Duration::from_secs(2),
+    )
+    .await
+    .map_err(|e| crate::Error::DatabaseInit {
+        source: crate::error::OtcServerError::InvalidData {
+            message: format!("Failed to initialize Base chain: {e}"),
+        },
+    })?;
+    chain_registry.register(otc_models::ChainType::Base, Arc::new(base_chain));
 
     let chain_registry = Arc::new(chain_registry);
 
@@ -251,6 +274,10 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         .route(
             "/api/v1/chains/ethereum/best-hash",
             get(get_best_ethereum_hash),
+        )
+        .route(
+            "/api/v1/chains/base/best-hash",
+            get(get_best_base_hash),
         )
         .route("/api/v1/tdx/quote", get(get_tdx_quote))
         .route("/api/v1/tdx/info", get(get_tdx_info))
@@ -538,6 +565,24 @@ async fn get_best_ethereum_hash(
     let chain = state
         .chain_registry
         .get(&otc_models::ChainType::Ethereum)
+        .unwrap();
+    chain.get_best_hash().await.map_err(Into::into).map(|hash| {
+        if hash.starts_with("0x") {
+            Json(BlockHashResponse { block_hash: hash })
+        } else {
+            Json(BlockHashResponse {
+                block_hash: format!("0x{}", hash),
+            })
+        }
+    })
+}
+
+async fn get_best_base_hash(
+    State(state): State<AppState>,
+) -> Result<Json<BlockHashResponse>, crate::error::OtcServerError> {
+    let chain = state
+        .chain_registry
+        .get(&otc_models::ChainType::Base)
         .unwrap();
     chain.get_best_hash().await.map_err(Into::into).map(|hash| {
         if hash.starts_with("0x") {

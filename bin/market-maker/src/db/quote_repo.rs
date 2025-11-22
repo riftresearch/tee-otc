@@ -239,10 +239,7 @@ impl QuoteRepository {
         &self,
         currency: &Currency,
     ) -> QuoteRepositoryResult<(String, serde_json::Value, i16)> {
-        let chain = match currency.chain {
-            ChainType::Bitcoin => "bitcoin".to_string(),
-            ChainType::Ethereum => "ethereum".to_string(),
-        };
+        let chain = currency.chain.to_db_string();
 
         let token = match &currency.token {
             TokenIdentifier::Native => serde_json::json!({"type": "Native"}),
@@ -251,7 +248,7 @@ impl QuoteRepository {
             }
         };
 
-        Ok((chain, token, currency.decimals as i16))
+        Ok((chain.to_string(), token, currency.decimals as i16))
     }
 
     fn deserialize_quote(&self, row: &PgRow) -> QuoteRepositoryResult<Quote> {
@@ -318,6 +315,7 @@ impl QuoteRepository {
         let chain_type = match chain {
             "bitcoin" => ChainType::Bitcoin,
             "ethereum" => ChainType::Ethereum,
+            "base" => ChainType::Base,
             _ => {
                 return InvalidChainTypeSnafu {
                     chain: chain.to_string(),

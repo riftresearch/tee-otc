@@ -35,6 +35,7 @@ pub struct EVMWallet {
     pub provider: Arc<WebsocketWalletProvider>,
     deposit_repository: Option<Arc<DepositRepository>>,
     max_deposits_per_lot: usize,
+    chain_type: ChainType,
 }
 
 impl EVMWallet {
@@ -42,6 +43,7 @@ impl EVMWallet {
         provider: Arc<WebsocketWalletProvider>,
         debug_rpc_url: String,
         confirmations: u64,
+        chain_type: ChainType,
         deposit_repository: Option<Arc<DepositRepository>>,
         max_deposits_per_lot: usize,
         join_set: &mut JoinSet<crate::Result<()>>,
@@ -53,11 +55,16 @@ impl EVMWallet {
             join_set,
         );
 
+        if chain_type != ChainType::Ethereum && chain_type != ChainType::Base {
+            panic!("Unsupported chain type for EVM wallet: {:?}", chain_type);
+        }
+
         Self {
             tx_broadcaster,
             provider,
             deposit_repository,
             max_deposits_per_lot,
+            chain_type,
         }
     }
     pub async fn ensure_eip7702_delegation(
@@ -173,13 +180,13 @@ impl Wallet for EVMWallet {
         mm_payment_validation: Option<MarketMakerPaymentVerification>,
     ) -> WalletResult<String> {
         let first_payment = &payments[0];
-        if first_payment.lot.currency.chain != ChainType::Ethereum {
+        if first_payment.lot.currency.chain != self.chain_type {
             return Err(WalletError::UnsupportedToken {
                 token: first_payment.lot.currency.token.clone(),
                 loc: location!(),
             });
         }
-        ensure_valid_token(&first_payment.lot.currency.token)?;
+        ensure_valid_token(self.chain_type, &first_payment.lot.currency.token)?;
         // now make sure all payments lots currencies are the same
         for payment in &payments {
             if payment.lot.currency != first_payment.lot.currency {
@@ -220,6 +227,7 @@ impl Wallet for EVMWallet {
         };
 
         let transaction_request = create_evm_transfer_transaction(
+            self.chain_type,
             &self.tx_broadcaster.sender,
             &self.provider,
             payments,
@@ -299,7 +307,7 @@ impl Wallet for EVMWallet {
             }
             TokenIdentifier::Address(address) => {
                 // TODO: This check should also include a check that we can pay for gas
-                ensure_valid_token(token)?;
+                ensure_valid_token(self.chain_type, token)?;
 
                 let token_address = match address.parse::<Address>() {
                     Ok(addr) => addr,
@@ -320,7 +328,7 @@ impl Wallet for EVMWallet {
                 if let Some(deposit_repository) = &self.deposit_repository {
                     let deposit_key_bal = deposit_repository
                         .balance(&Currency {
-                            chain: ChainType::Ethereum,
+                            chain: self.chain_type,
                             token: token.clone(),
                             decimals: 8, //TODO(med): this should not be hardcoded
                         })
@@ -412,6 +420,7 @@ impl Wallet for EVMWallet {
 
             // Create and broadcast the consolidation transaction
             let transaction_request = create_evm_transfer_transaction(
+                self.chain_type,
                 &self.tx_broadcaster.sender,
                 &self.provider,
                 vec![payment],
@@ -473,7 +482,7 @@ impl Wallet for EVMWallet {
     }
 
     fn chain_type(&self) -> ChainType {
-        ChainType::Ethereum
+        self.chain_type
     }
 
     fn receive_address(&self, _token: &TokenIdentifier) -> String {
@@ -645,6 +654,7 @@ pub fn build_transaction_with_validation(
 }
 
 pub async fn create_evm_transfer_transaction(
+    chain_type: ChainType,
     sender: &Address,
     provider: &Arc<WebsocketWalletProvider>,
     payments: Vec<Payment>,
@@ -687,7 +697,7 @@ pub async fn create_evm_transfer_transaction(
                 .collect::<Result<Vec<_>, _>>()?;
 
             let fee_address =
-                Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Ethereum])
+                Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&chain_type])
                     .unwrap();
 
             let mut amounts: Vec<U256> =
@@ -721,9 +731,9 @@ pub async fn create_evm_transfer_transaction(
     }
 }
 
-fn ensure_valid_token(token: &TokenIdentifier) -> Result<(), WalletError> {
+fn ensure_valid_token(chain_type: ChainType, token: &TokenIdentifier) -> Result<(), WalletError> {
     if !otc_models::SUPPORTED_TOKENS_BY_CHAIN
-        .get(&ChainType::Ethereum)
+        .get(&chain_type)
         .unwrap()
         .contains(token)
     {

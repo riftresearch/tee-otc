@@ -27,6 +27,7 @@ impl TokenIndexerInstance {
         pipe_output: bool,
         chain_id: u64,
         database_url: String,
+        interactive_port: Option<u16>,
     ) -> std::io::Result<Self> {
         let workspace_root = std::env::var("CARGO_MANIFEST_DIR")
             .map(PathBuf::from)
@@ -36,7 +37,7 @@ impl TokenIndexerInstance {
         let token_indexer_dir = workspace_root.join("evm-token-indexer");
 
         let ponder_port = if interactive {
-            50104_u16
+            interactive_port.unwrap_or(50104_u16)
         } else {
             let listener = TcpListener::bind((HOST, 0))
                 .await

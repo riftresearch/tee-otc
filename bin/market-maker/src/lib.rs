@@ -136,6 +136,13 @@ pub enum Error {
 
     #[snafu(display("Admin API server error: {}", source))]
     AdminApiServer { source: std::io::Error },
+
+    #[snafu(display("Chain ID mismatch: expected {} for {:?}, but RPC returned {}", expected, chain, actual))]
+    ChainIdMismatch {
+        expected: u64,
+        actual: u64,
+        chain: ChainType,
+    },
 }
 
 impl From<blockchain_utils::ProviderError> for Error {
@@ -206,19 +213,23 @@ pub struct MarketMakerArgs {
     #[arg(long, env = "BITCOIN_WALLET_ESPLORA_URL")]
     pub bitcoin_wallet_esplora_url: String,
 
-    /// Ethereum wallet private key
-    #[arg(long, env = "ETHEREUM_WALLET_PRIVATE_KEY", value_parser = parse_hex_string)]
-    pub ethereum_wallet_private_key: [u8; 32],
+    /// EVM chain to operate on (ethereum or base)
+    #[arg(long, env = "EVM_CHAIN", value_parser = parse_evm_chain, default_value = "ethereum")]
+    pub evm_chain: ChainType,
+
+    /// EVM wallet private key
+    #[arg(long, env = "EVM_WALLET_PRIVATE_KEY", value_parser = parse_hex_string)]
+    pub evm_wallet_private_key: [u8; 32],
 
     /// Number of confirmations required before broadcasting the next transaction. Defaults to 2 as empirically this
     /// seems to be enough to ensure EIP-7702 delegated accounts never exceed their in-flight transaction limit (of 1 in most cases),
     /// which would cause mempool rejections. Annoyingly, setting to this 1 will lead to transient EIP-7702 broadcast errors.
-    #[arg(long, env = "ETHEREUM_CONFIRMATIONS", default_value = "2")]
-    pub ethereum_confirmations: u64,
+    #[arg(long, env = "EVM_CONFIRMATIONS", default_value = "2")]
+    pub evm_confirmations: u64,
 
-    /// Ethereum RPC URL
-    #[arg(long, env = "ETHEREUM_RPC_WS_URL")]
-    pub ethereum_rpc_ws_url: String,
+    /// EVM RPC WebSocket URL
+    #[arg(long, env = "EVM_RPC_WS_URL")]
+    pub evm_rpc_ws_url: String,
 
     /// Trade spread in basis points
     #[arg(long, env = "TRADE_SPREAD_BPS", default_value = "0")]
@@ -344,8 +355,48 @@ fn parse_hex_string(s: &str) -> std::result::Result<[u8; 32], String> {
     Ok(bytes.try_into().unwrap())
 }
 
+fn parse_evm_chain(s: &str) -> std::result::Result<ChainType, String> {
+    match s.to_lowercase().as_str() {
+        "ethereum" => Ok(ChainType::Ethereum),
+        "base" => Ok(ChainType::Base),
+        _ => Err(format!("Invalid EVM chain: '{}'. Must be 'ethereum' or 'base'", s)),
+    }
+}
+
 fn parse_url(s: &str) -> std::result::Result<Url, String> {
     Url::parse(s).map_err(|e| e.to_string())
+}
+
+async fn validate_chain_id<P>(provider: &P, expected_chain: ChainType) -> Result<()>
+where
+    P: alloy::providers::Provider,
+{
+    use otc_models::constants::EXPECTED_CHAIN_IDS;
+
+    let expected_chain_id = EXPECTED_CHAIN_IDS
+        .get(&expected_chain)
+        .ok_or_else(|| Error::Config {
+            context: format!("No expected chain ID configured for {:?}", expected_chain),
+        })?;
+
+    let actual_chain_id = provider.get_chain_id().await.map_err(|e| Error::Config {
+        context: format!("Failed to query chain ID from RPC: {}", e),
+    })?;
+
+    if actual_chain_id != *expected_chain_id {
+        return Err(Error::ChainIdMismatch {
+            expected: *expected_chain_id,
+            actual: actual_chain_id,
+            chain: expected_chain,
+        });
+    }
+
+    info!(
+        "Chain ID validation successful: {:?} chain ID is {}",
+        expected_chain, actual_chain_id
+    );
+
+    Ok(())
 }
 
 pub async fn run_market_maker(
@@ -400,17 +451,24 @@ pub async fn run_market_maker(
         .context(BitcoinWalletSnafu)?,
     );
 
+    info!("Configuring market maker for EVM chain: {:?}", args.evm_chain);
+
     let provider = Arc::new(
         create_websocket_wallet_provider(
-            &args.ethereum_rpc_ws_url,
-            args.ethereum_wallet_private_key,
+            &args.evm_rpc_ws_url,
+            args.evm_wallet_private_key,
         )
         .await?,
     );
+
+    // Validate that the RPC URL is for the correct chain
+    validate_chain_id(&provider, args.evm_chain).await?;
+
     let evm_wallet = Arc::new(EVMWallet::new(
         provider.clone(),
-        args.ethereum_rpc_ws_url,
-        args.ethereum_confirmations,
+        args.evm_rpc_ws_url.clone(),
+        args.evm_confirmations,
+        args.evm_chain,
         Some(deposit_repository.clone()),
         args.ethereum_max_deposits_per_lot,
         &mut join_set,
@@ -418,7 +476,7 @@ pub async fn run_market_maker(
 
     evm_wallet
         .ensure_eip7702_delegation(
-            PrivateKeySigner::from_slice(&args.ethereum_wallet_private_key).unwrap(),
+            PrivateKeySigner::from_slice(&args.evm_wallet_private_key).unwrap(),
         )
         .await
         .expect("Should have been able to ensure EIP-7702 delegation");
@@ -438,7 +496,7 @@ pub async fn run_market_maker(
     let mut wallet_manager = WalletManager::new();
 
     wallet_manager.register(ChainType::Bitcoin, bitcoin_wallet.clone());
-    wallet_manager.register(ChainType::Ethereum, evm_wallet.clone());
+    wallet_manager.register(args.evm_chain, evm_wallet.clone());
 
     let wallet_manager = Arc::new(wallet_manager);
     let balance_strategy = Arc::new(
@@ -466,6 +524,7 @@ pub async fn run_market_maker(
         provider.clone().erased(),
         args.trade_spread_bps,
         args.fee_safety_multiplier,
+        args.evm_chain,
         &mut join_set,
     ));
 
@@ -489,7 +548,7 @@ pub async fn run_market_maker(
         },
     );
     batch_configs.insert(
-        ChainType::Ethereum,
+        args.evm_chain,
         payment_manager::BatchConfig {
             interval_secs: args.ethereum_batch_interval_secs,
             batch_size: args.ethereum_batch_size,

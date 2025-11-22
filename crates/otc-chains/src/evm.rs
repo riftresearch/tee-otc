@@ -21,22 +21,34 @@ sol! {
     event Transfer(address indexed from, address indexed to, uint256 value);
 }
 
-const ALLOWED_TOKEN: &str = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf";
-
-pub struct EthereumChain {
+pub struct EvmChain {
     provider: DynProvider,
     evm_indexer_client: TokenIndexerClient,
     allowed_token: Address,
+    chain_type: ChainType,
+    wallet_seed_tag: Vec<u8>,
+    min_confirmations: u32,
+    est_block_time: Duration,
 }
 
-impl EthereumChain {
-    pub async fn new(rpc_url: &str, evm_indexer_url: &str) -> Result<Self> {
+impl EvmChain {
+    pub async fn new(
+        rpc_url: &str,
+        evm_indexer_url: &str,
+        allowed_token: &str,
+        chain_type: ChainType,
+        wallet_seed_tag: &[u8],
+        min_confirmations: u32,
+        est_block_time: Duration,
+    ) -> Result<Self> {
         let url = rpc_url.parse().map_err(|_| crate::Error::Serialization {
             message: "Invalid RPC URL".to_string(),
         })?;
 
         let client = alloy::rpc::client::ClientBuilder::default()
-            .layer(crate::rpc_metrics_layer::RpcMetricsLayer::new("ethereum".to_string()))
+            .layer(crate::rpc_metrics_layer::RpcMetricsLayer::new(
+                chain_type.to_db_string().to_string(),
+            ))
             .http(url);
 
         let provider = ProviderBuilder::new()
@@ -50,7 +62,7 @@ impl EthereumChain {
             }
         })?;
         let allowed_token =
-            Address::from_str(ALLOWED_TOKEN).map_err(|_| crate::Error::Serialization {
+            Address::from_str(allowed_token).map_err(|_| crate::Error::Serialization {
                 message: "Invalid allowed token address".to_string(),
             })?;
 
@@ -58,12 +70,16 @@ impl EthereumChain {
             provider,
             evm_indexer_client,
             allowed_token,
+            chain_type,
+            wallet_seed_tag: wallet_seed_tag.to_vec(),
+            min_confirmations,
+            est_block_time,
         })
     }
 }
 
 #[async_trait]
-impl ChainOperations for EthereumChain {
+impl ChainOperations for EvmChain {
     fn create_wallet(&self) -> Result<(Wallet, [u8; 32])> {
         // Generate a random salt
         let mut salt = [0u8; 32];
@@ -76,7 +92,7 @@ impl ChainOperations for EthereumChain {
         let address = signer.address();
         let private_key = alloy::primitives::hex::encode(signer.to_bytes());
 
-        info!("Created new Ethereum wallet: {}", address);
+        info!("Created new {} wallet: {}", self.chain_type.to_db_string(), address);
 
         let wallet = Wallet::new(format!("{address:?}"), format!("0x{private_key}"));
         Ok((wallet, salt))
@@ -85,7 +101,7 @@ impl ChainOperations for EthereumChain {
     fn derive_wallet(&self, master_key: &[u8], salt: &[u8; 32]) -> Result<Wallet> {
         // Derive private key using HKDF
         let private_key_bytes =
-            key_derivation::derive_private_key(master_key, salt, b"ethereum-wallet")?;
+            key_derivation::derive_private_key(master_key, salt, &self.wallet_seed_tag)?;
 
         // Create signer from derived key
         let signer = PrivateKeySigner::from_bytes(&private_key_bytes.into()).map_err(|_| {
@@ -97,7 +113,7 @@ impl ChainOperations for EthereumChain {
         let address = format!("{:?}", signer.address());
         let private_key = format!("0x{}", alloy::hex::encode(private_key_bytes));
 
-        debug!("Derived Ethereum wallet: {}", address);
+        debug!("Derived {} wallet: {}", self.chain_type.to_db_string(), address);
 
         Ok(Wallet::new(address, private_key))
     }
@@ -115,7 +131,7 @@ impl ChainOperations for EthereumChain {
                 loc: location!(),
             })?;
 
-        if tx.is_some() {
+        if let Some(tx) = tx {
             let current_block_height =
                 self.provider
                     .get_block_number()
@@ -125,7 +141,7 @@ impl ChainOperations for EthereumChain {
                         loc: location!(),
                     })?;
             Ok(TxStatus::Confirmed(
-                current_block_height - tx.unwrap().block_number.unwrap(),
+                current_block_height - tx.block_number.unwrap(),
             ))
         } else {
             Ok(TxStatus::NotFound)
@@ -202,7 +218,7 @@ impl ChainOperations for EthereumChain {
         let nonce_hex = alloy::hex::encode(embedded_nonce);
         if !tx_hex.contains(&nonce_hex) {
             return Err(crate::Error::BadMarketMakerBatch {
-                chain: ChainType::Ethereum,
+                chain: self.chain_type,
                 tx_hash: tx_hash.to_string(),
                 message: "Transaction does not contain the expected nonce".to_string(),
                 loc: location!(),
@@ -210,7 +226,7 @@ impl ChainOperations for EthereumChain {
         }
 
         let fee_address = Address::from_str(
-            &otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Ethereum],
+            &otc_models::FEE_ADDRESSES_BY_CHAIN[&self.chain_type],
         )
         .map_err(|_| crate::Error::Serialization {
             message: "Invalid fee address".to_string(),
@@ -248,7 +264,7 @@ impl ChainOperations for EthereumChain {
             Some(start_index) => start_index,
             None => {
                 return Err(crate::Error::BadMarketMakerBatch {
-                    chain: ChainType::Ethereum,
+                    chain: self.chain_type,
                     tx_hash: tx_hash.to_string(),
                     message: "First transfer log not found".to_string(),
                     loc: location!(),
@@ -258,7 +274,7 @@ impl ChainOperations for EthereumChain {
         // Check that we have enough transfer logs to cover all payments
         if intra_tx_transfers.len() - start_index < market_maker_batch.ordered_payments.len() {
             return Err(crate::Error::BadMarketMakerBatch {
-                chain: ChainType::Ethereum,
+                chain: self.chain_type,
                 tx_hash: tx_hash.to_string(),
                 message: "Not enough transfer logs to cover all payments in batch".to_string(),
                 loc: location!(),
@@ -277,7 +293,7 @@ impl ChainOperations for EthereumChain {
         for (transfer, payment) in transfers_and_payments {
             let expected_recipient = Address::from_str(&payment.to_address).map_err(|_| {
                 crate::Error::BadMarketMakerBatch {
-                    chain: ChainType::Ethereum,
+                    chain: self.chain_type,
                     tx_hash: tx_hash.to_string(),
                     message: "Invalid recipient address in payment".to_string(),
                     loc: location!(),
@@ -286,7 +302,7 @@ impl ChainOperations for EthereumChain {
 
             if transfer.address() != self.allowed_token {
                 return Err(crate::Error::BadMarketMakerBatch {
-                    chain: ChainType::Ethereum,
+                    chain: self.chain_type,
                     tx_hash: tx_hash.to_string(),
                     message: "Transfer at index is not from allowed token contract".to_string(),
                     loc: location!(),
@@ -295,7 +311,7 @@ impl ChainOperations for EthereumChain {
 
             if transfer.inner.data.to != expected_recipient {
                 return Err(crate::Error::BadMarketMakerBatch {
-                    chain: ChainType::Ethereum,
+                    chain: self.chain_type,
                     tx_hash: tx_hash.to_string(),
                     message: "Transfer recipient at index does not match payment".to_string(),
                     loc: location!(),
@@ -304,7 +320,7 @@ impl ChainOperations for EthereumChain {
 
             if transfer.inner.data.value < payment.lot.amount {
                 return Err(crate::Error::BadMarketMakerBatch {
-                    chain: ChainType::Ethereum,
+                    chain: self.chain_type,
                     tx_hash: tx_hash.to_string(),
                     message: "Transfer amount at index is less than payment amount".to_string(),
                     loc: location!(),
@@ -317,7 +333,7 @@ impl ChainOperations for EthereumChain {
         // Enforce invariant: the next transfer log must be the fee transfer
         let Some(next_log) = intra_tx_transfers.get(index) else {
             return Err(crate::Error::BadMarketMakerBatch {
-                chain: ChainType::Ethereum,
+                chain: self.chain_type,
                 tx_hash: tx_hash.to_string(),
                 message: "Missing next transfer log for fee validation".to_string(),
                 loc: location!(),
@@ -326,7 +342,7 @@ impl ChainOperations for EthereumChain {
         // Same token and correct recipient
         if next_log.address() != self.allowed_token {
             return Err(crate::Error::BadMarketMakerBatch {
-                chain: ChainType::Ethereum,
+                chain: self.chain_type,
                 tx_hash: tx_hash.to_string(),
                 message: "Next transfer not from allowed token contract".to_string(),
                 loc: location!(),
@@ -334,7 +350,7 @@ impl ChainOperations for EthereumChain {
         }
         if next_log.inner.data.to != fee_address {
             return Err(crate::Error::BadMarketMakerBatch {
-                chain: ChainType::Ethereum,
+                chain: self.chain_type,
                 tx_hash: tx_hash.to_string(),
                 message: "Fee address is not the expected address in next log".to_string(),
                 loc: location!(),
@@ -342,7 +358,7 @@ impl ChainOperations for EthereumChain {
         }
         if next_log.inner.data.value < market_maker_batch.payment_verification.aggregated_fee {
             return Err(crate::Error::BadMarketMakerBatch {
-                chain: ChainType::Ethereum,
+                chain: self.chain_type,
                 tx_hash: tx_hash.to_string(),
                 message: "Fee amount in next log is less than expected".to_string(),
                 loc: location!(),
@@ -404,7 +420,7 @@ impl ChainOperations for EthereumChain {
 
         let lot = Lot {
             currency: Currency {
-                chain: ChainType::Ethereum,
+                chain: self.chain_type,
                 token: TokenIdentifier::Address(token_address.to_string()),
                 decimals: 8,
             },
@@ -430,11 +446,11 @@ impl ChainOperations for EthereumChain {
     }
 
     fn minimum_block_confirmations(&self) -> u32 {
-        4
+        self.min_confirmations
     }
 
     fn estimated_block_time(&self) -> Duration {
-        Duration::from_secs(12) // ~12 seconds
+        self.est_block_time
     }
 
     async fn get_best_hash(&self) -> Result<String> {
@@ -452,7 +468,7 @@ impl ChainOperations for EthereumChain {
     }
 }
 
-impl EthereumChain {
+impl EvmChain {
     // Note this function's response is safe to trust, b/c it will validate the responses from the untrusted evm_indexer_client
     async fn get_transfer(
         &self,

@@ -6,24 +6,6 @@ use otc_models::{
 };
 use serde_json;
 
-#[must_use]
-pub fn chain_type_to_db(chain: &ChainType) -> &'static str {
-    match chain {
-        ChainType::Bitcoin => "bitcoin",
-        ChainType::Ethereum => "ethereum",
-    }
-}
-
-pub fn chain_type_from_db(s: &str) -> OtcServerResult<ChainType> {
-    match s {
-        "bitcoin" => Ok(ChainType::Bitcoin),
-        "ethereum" => Ok(ChainType::Ethereum),
-        _ => Err(OtcServerError::InvalidData {
-            message: format!("Invalid chain type: {s}"),
-        }),
-    }
-}
-
 pub fn token_identifier_to_json(token: &TokenIdentifier) -> OtcServerResult<serde_json::Value> {
     serde_json::to_value(token).map_err(|e| OtcServerError::InvalidData {
         message: format!("Failed to serialize token identifier: {e}"),
@@ -48,11 +30,11 @@ pub fn u256_from_db(s: &str) -> OtcServerResult<U256> {
 }
 
 pub fn lot_to_db(lot: &Lot) -> OtcServerResult<(String, serde_json::Value, String, u8)> {
-    let chain = chain_type_to_db(&lot.currency.chain).to_string();
+    let chain = lot.currency.chain.to_db_string();
     let token = token_identifier_to_json(&lot.currency.token)?;
     let amount = u256_to_db(&lot.amount);
     let decimals = lot.currency.decimals;
-    Ok((chain, token, amount, decimals))
+    Ok((chain.to_string(), token, amount, decimals))
 }
 
 pub fn lot_from_db(
@@ -63,7 +45,9 @@ pub fn lot_from_db(
 ) -> OtcServerResult<Lot> {
     Ok(Lot {
         currency: Currency {
-            chain: chain_type_from_db(&chain)?,
+            chain: ChainType::from_db_string(&chain).ok_or(OtcServerError::InvalidData {
+                message: format!("Invalid chain type: {chain}"),
+            })?,
             token: token_identifier_from_json(token)?,
             decimals,
         },
@@ -153,12 +137,14 @@ mod tests {
 
     #[test]
     fn test_chain_type_conversion() {
-        assert_eq!(chain_type_to_db(&ChainType::Bitcoin), "bitcoin");
-        assert_eq!(chain_type_to_db(&ChainType::Ethereum), "ethereum");
+        assert_eq!(ChainType::Bitcoin.to_db_string(), "bitcoin");
+        assert_eq!(ChainType::Ethereum.to_db_string(), "ethereum");
+        assert_eq!(ChainType::Base.to_db_string(), "base");
 
-        assert_eq!(chain_type_from_db("bitcoin").unwrap(), ChainType::Bitcoin);
-        assert_eq!(chain_type_from_db("ethereum").unwrap(), ChainType::Ethereum);
-        assert!(chain_type_from_db("invalid").is_err());
+        assert_eq!(ChainType::from_db_string("bitcoin").unwrap(), ChainType::Bitcoin);
+        assert_eq!(ChainType::from_db_string("ethereum").unwrap(), ChainType::Ethereum);
+        assert_eq!(ChainType::from_db_string("base").unwrap(), ChainType::Base);
+        assert!(ChainType::from_db_string("invalid").is_none());
     }
 
     #[test]

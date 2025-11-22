@@ -1,5 +1,6 @@
 mod test_proxy;
 
+use otc_models::ChainType;
 pub use test_proxy::TestProxy;
 
 use std::{
@@ -79,9 +80,9 @@ pub async fn get_free_port() -> u16 {
         .port()
 }
 
-pub const TEST_MARKET_MAKER_TAG: &str = "test-mm";
-pub const TEST_MARKET_MAKER_API_ID: &str = "a4c6da0d-a071-40ea-b69c-e23d49327d42";
-pub const TEST_MARKET_MAKER_API_SECRET: &str = "l3f2zYpsLHwI8Qx3mOiYOeef51r0PCk5";
+pub const TEST_MARKET_MAKER_TAG: &str = "test-mm-eth";
+pub const TEST_MARKET_MAKER_API_ID: &str = "96c0bedb-bfda-4680-a8df-1317d1e09c8d";
+pub const TEST_MARKET_MAKER_API_SECRET: &str = "Bt7nDfOLlstMLLMvj3dlY3kFozxHk6An";
 pub const TEST_MM_WHITELIST_FILE: &str =
     "integration-tests/src/utils/test_whitelisted_market_makers.json";
 pub const INTEGRATION_TEST_TIMEOUT_SECS: u64 = 60;
@@ -282,9 +283,10 @@ pub async fn build_mm_test_args(
         ),
         bitcoin_wallet_network: bitcoin::Network::Regtest,
         bitcoin_wallet_esplora_url: devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
-        ethereum_wallet_private_key: multichain_account.secret_bytes,
-        ethereum_confirmations: 1,
-        ethereum_rpc_ws_url: devnet.ethereum.anvil.ws_endpoint(),
+        evm_chain: otc_models::ChainType::Ethereum, // Default to Ethereum for tests
+        evm_wallet_private_key: multichain_account.secret_bytes,
+        evm_confirmations: 1,
+        evm_rpc_ws_url: devnet.ethereum.anvil.ws_endpoint(),
         trade_spread_bps: 0,
         fee_safety_multiplier: 1.5,
         database_url: db_url,
@@ -357,6 +359,15 @@ pub async fn build_otc_server_test_args(
             .unwrap()
             .api_server_url
             .clone(),
+        ethereum_allowed_token: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
+        base_rpc_url: devnet.base.anvil.endpoint(),
+        untrusted_base_token_indexer_url: devnet
+            .base
+            .token_indexer
+            .as_ref()
+            .map(|indexer| indexer.api_server_url.clone())
+            .unwrap_or_else(|| "http://localhost:42069".to_string()), 
+        base_allowed_token: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
         bitcoin_rpc_url: devnet.bitcoin.rpc_url_with_cookie.clone(),
         bitcoin_rpc_auth: Auth::CookieFile(devnet.bitcoin.cookie.clone()),
         untrusted_esplora_http_server_url: devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
@@ -393,6 +404,7 @@ pub async fn build_test_user_ethereum_wallet(
         Arc::new(provider),
         devnet.ethereum.anvil.ws_endpoint(),
         1,
+        ChainType::Ethereum,
         None,
         350,
         &mut join_set,

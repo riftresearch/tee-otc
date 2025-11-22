@@ -46,9 +46,12 @@ impl EthDevnet {
         devnet_cache: Option<Arc<RiftDevnetCache>>,
         token_indexer_database_url: Option<String>,
         interactive: bool,
+        chain_id: u64,
+        port: Option<u16>,
+        token_indexer_port: Option<u16>,
     ) -> Result<Self> {
         let (anvil, anvil_datadir, anvil_dump_path) =
-            spawn_anvil(interactive, deploy_mode.clone(), devnet_cache.clone()).await?;
+            spawn_anvil(interactive, deploy_mode.clone(), devnet_cache.clone(), chain_id, port).await?;
         info!(
             "Anvil spawned at {}, chain_id={}",
             anvil.endpoint(),
@@ -78,6 +81,7 @@ impl EthDevnet {
                     false,
                     anvil.chain_id(),
                     database_url,
+                    token_indexer_port,
                 )
                 .await?,
             )
@@ -238,17 +242,29 @@ async fn spawn_anvil(
     interactive: bool,
     mode: Mode,
     devnet_cache: Option<Arc<RiftDevnetCache>>,
+    chain_id: u64,
+    port: Option<u16>,
 ) -> Result<(AnvilInstance, Option<tempfile::TempDir>, tempfile::TempDir)> {
     let spawn_start = Instant::now();
     // Create or load anvil datafile
     let anvil_datadir = if devnet_cache.is_some() {
         let cache_start = Instant::now();
         let datadir = Some(
-            devnet_cache
-                .as_ref()
-                .unwrap()
-                .create_anvil_datadir()
-                .await?,
+            if chain_id == 8453 {
+                // Base chain
+                devnet_cache
+                    .as_ref()
+                    .unwrap()
+                    .create_anvil_base_datadir()
+                    .await?
+            } else {
+                // Ethereum or other chains
+                devnet_cache
+                    .as_ref()
+                    .unwrap()
+                    .create_anvil_datadir()
+                    .await?
+            }
         );
         info!(
             "[Anvil] Created anvil datadir from cache in {:?}",
@@ -270,7 +286,7 @@ async fn spawn_anvil(
             .prague()
             .arg("--host")
             .arg("0.0.0.0")
-            .chain_id(1337)
+            .chain_id(chain_id)
             .block_time(1)
             // .arg("--steps-tracing")
             .arg("--dump-state")
@@ -289,7 +305,8 @@ async fn spawn_anvil(
 
         match mode {
             Mode::Fork(fork_config) => {
-                anvil = anvil.port(50101_u16);
+                // Use provided port or default to 50101 for fork mode
+                anvil = anvil.port(port.unwrap_or(50101_u16));
                 anvil = anvil.fork(fork_config.url);
                 if let Some(block_number) = fork_config.block_number {
                     anvil = anvil.fork_block_number(block_number);
@@ -297,7 +314,11 @@ async fn spawn_anvil(
             }
             Mode::Local => {
                 if interactive {
-                    anvil = anvil.port(50101_u16);
+                    // Use provided port or default to 50101 for interactive mode
+                    anvil = anvil.port(port.unwrap_or(50101_u16));
+                } else if let Some(p) = port {
+                    // Use provided port for non-interactive mode if specified
+                    anvil = anvil.port(p);
                 }
             }
         }

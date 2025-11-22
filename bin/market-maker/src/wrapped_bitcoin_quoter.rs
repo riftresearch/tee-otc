@@ -9,7 +9,7 @@ use alloy::eips::BlockNumberOrTag;
 use alloy::providers::DynProvider;
 use alloy::{primitives::U256, providers::Provider};
 use blockchain_utils::{MempoolEsploraFeeExt, compute_protocol_fee_sats, inverse_compute_protocol_fee};
-use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest};
+use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::{FeeSchedule, RFQResult};
 use snafu::{Location, Snafu};
 use tokio::sync::RwLock;
@@ -40,6 +40,7 @@ pub struct WrappedBitcoinQuoter {
     wallet_registry: Arc<WalletManager>,
     fee_map: Arc<RwLock<HashMap<ChainType, u64>>>,
     liquidity_cache: Arc<LiquidityCache>,
+    configured_evm_chain: ChainType,
 }
 
 impl WrappedBitcoinQuoter {
@@ -51,12 +52,14 @@ impl WrappedBitcoinQuoter {
         eth_provider: DynProvider,
         trade_spread_bps: u64,
         fee_safety_multiplier: f64,
+        configured_evm_chain: ChainType,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Self {
         let fee_map = Arc::new(RwLock::new(HashMap::new()));
         let fee_map_clone = fee_map.clone();
         join_set.spawn(async move {
             Self::fee_update_loop(
+                configured_evm_chain,
                 esplora_client,
                 eth_provider,
                 fee_safety_multiplier,
@@ -74,6 +77,7 @@ impl WrappedBitcoinQuoter {
             trade_spread_bps,
             fee_map,
             liquidity_cache,
+            configured_evm_chain,
         }
     }
 
@@ -92,6 +96,7 @@ impl WrappedBitcoinQuoter {
     }
 
     async fn fee_update_loop(
+        configured_evm_chain: ChainType,
         esplora_client: esplora_client::AsyncClient,
         eth_provider: DynProvider,
         fee_safety_multiplier: f64,
@@ -177,7 +182,7 @@ impl WrappedBitcoinQuoter {
 
             let mut global_fee_map = fee_map.write().await;
             global_fee_map.insert(ChainType::Bitcoin, send_fee_sats_on_btc);
-            global_fee_map.insert(ChainType::Ethereum, send_fee_sats_on_eth);
+            global_fee_map.insert(configured_evm_chain, send_fee_sats_on_eth);
             drop(global_fee_map);
 
             metrics::gauge!("mm_quote_eth_priority_fee_gwei").set(max_priority_fee_gwei);
@@ -196,7 +201,7 @@ impl WrappedBitcoinQuoter {
         market_maker_id: Uuid,
         quote_request: &QuoteRequest,
     ) -> Result<RFQResult<Quote>> {
-        if let Some(error_message) = is_fillable_request(quote_request) {
+        if let Some(error_message) = self.is_fillable_request(quote_request) {
             info!("Unfillable quote request: {:?}", quote_request);
             return Ok(RFQResult::InvalidRequest(error_message));
         }
@@ -314,36 +319,44 @@ impl WrappedBitcoinQuoter {
 
         Ok(())
     }
-}
 
-fn is_fillable_request(quote_request: &QuoteRequest) -> Option<String> {
-    if quote_request.from.chain == quote_request.to.chain {
-        info!("Invalid chain selection: {:?}", quote_request);
-        return Some("From and to chains cannot be the same".to_string());
-    }
-    match constants::SUPPORTED_TOKENS_BY_CHAIN.get(&quote_request.from.chain) {
-        Some(supported_tokens) => {
-            if !supported_tokens.contains(&quote_request.from.token) {
-                return Some("Invalid send token".to_string());
-            }
+    /// Validates if a quote request is fillable by this market maker.
+    /// Only supports swaps between native Bitcoin and cbBTC on the configured EVM chain.
+    fn is_fillable_request(&self, quote_request: &QuoteRequest) -> Option<String> {
+        // Swaps must be between different chains
+        if quote_request.from.chain == quote_request.to.chain {
+            info!("Invalid chain selection: {:?}", quote_request);
+            return Some("From and to chains cannot be the same".to_string());
         }
-        None => {
-            return Some("Invalid send chain".to_string());
-        }
-    }
 
-    match constants::SUPPORTED_TOKENS_BY_CHAIN.get(&quote_request.to.chain) {
-        Some(supported_tokens) => {
-            if !supported_tokens.contains(&quote_request.to.token) {
-                return Some("Invalid receive token".to_string());
-            }
-        }
-        None => {
-            return Some("Invalid receive chain".to_string());
-        }
-    }
+        // Get the cbBTC token address for the configured chain
+        let cbbtc_token = constants::CBBTC_TOKEN.clone();
 
-    None
+        // Valid swap patterns:
+        // 1. Bitcoin (native) -> cbBTC on configured EVM chain
+        // 2. cbBTC on configured EVM chain -> Bitcoin (native)
+        
+        let is_btc_to_cbbtc = 
+            quote_request.from.chain == ChainType::Bitcoin &&
+            quote_request.from.token == TokenIdentifier::Native &&
+            quote_request.to.chain == self.configured_evm_chain &&
+            quote_request.to.token == cbbtc_token;
+
+        let is_cbbtc_to_btc = 
+            quote_request.from.chain == self.configured_evm_chain &&
+            quote_request.from.token == cbbtc_token &&
+            quote_request.to.chain == ChainType::Bitcoin &&
+            quote_request.to.token == TokenIdentifier::Native;
+
+        if !is_btc_to_cbbtc && !is_cbbtc_to_btc {
+            return Some(format!(
+                "Unsupported swap path for EVM chain: {:?}",
+                self.configured_evm_chain,
+            ));
+        }
+
+        None
+    }
 }
 
 /// P2PKH is the MOST expensive address to send BTC to, dust limit wise, so we use this as our minimum

@@ -64,3 +64,6 @@ mod insufficient_deposit_refund_test;
 
 #[cfg(test)]
 mod tx_replacement_test;
+
+#[cfg(test)]
+mod base_swap_rejection_test;

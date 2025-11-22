@@ -10,7 +10,7 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use super::conversions::{
-    chain_type_from_db, latest_refund_to_json, lot_from_db, metadata_to_json,
+    latest_refund_to_json, lot_from_db, metadata_to_json,
     mm_deposit_status_to_json, settlement_status_to_json, user_deposit_status_from_json,
     user_deposit_status_to_json,
 };
@@ -501,7 +501,9 @@ impl SwapRepository {
             user_deposit_salt.copy_from_slice(&salt_vec);
 
             let from_chain: String = row.try_get("from_chain")?;
-            let deposit_chain = chain_type_from_db(&from_chain)?;
+            let deposit_chain = ChainType::from_db_string(&from_chain).ok_or(OtcServerError::InvalidData {
+                message: format!("Invalid chain type: {from_chain}"),
+            })?;
 
             let deposit_status_json: serde_json::Value = row.try_get("user_deposit_status")?;
             let deposit_status = user_deposit_status_from_json(deposit_status_json)?;

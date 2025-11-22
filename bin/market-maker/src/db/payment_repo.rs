@@ -118,7 +118,7 @@ impl PaymentRepository {
             "#,
         )
         .bind(&txid)
-        .bind(chain_to_db(&chain))
+        .bind(chain.to_db_string())
         .bind(&swap_ids)
         .bind(batch_nonce_digest.as_slice())
         .bind(batch_status_to_db(&BatchStatus::Created))
@@ -227,7 +227,7 @@ impl PaymentRepository {
 
             batches.push(StoredBatch {
                 txid,
-                chain: chain_from_db(&chain)?,
+                chain: ChainType::from_db_string(&chain).ok_or(PaymentRepositoryError::UnknownChain { value: chain })?,
                 swap_ids,
                 batch_nonce_digest,
                 created_at,
@@ -239,22 +239,7 @@ impl PaymentRepository {
     }
 }
 
-fn chain_to_db(chain: &ChainType) -> &'static str {
-    match chain {
-        ChainType::Bitcoin => "bitcoin",
-        ChainType::Ethereum => "ethereum",
-    }
-}
 
-fn chain_from_db(value: &str) -> PaymentRepositoryResult<ChainType> {
-    match value {
-        "bitcoin" => Ok(ChainType::Bitcoin),
-        "ethereum" => Ok(ChainType::Ethereum),
-        other => Err(PaymentRepositoryError::UnknownChain {
-            value: other.to_string(),
-        }),
-    }
-}
 
 fn batch_status_to_db(status: &BatchStatus) -> &'static str {
     match status {

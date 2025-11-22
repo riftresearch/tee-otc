@@ -52,23 +52,22 @@ impl DepositRepository {
     }
 
     fn serialize_currency(currency: &Currency) -> (String, serde_json::Value, i16) {
-        let chain = match currency.chain {
-            otc_models::ChainType::Bitcoin => "bitcoin".to_string(),
-            otc_models::ChainType::Ethereum => "ethereum".to_string(),
-        };
+        let chain = currency.chain.to_db_string();
+         
         let token = match &currency.token {
             otc_models::TokenIdentifier::Native => serde_json::json!({"type": "Native"}),
             otc_models::TokenIdentifier::Address(addr) => {
                 serde_json::json!({"type": "Address", "data": addr})
             }
         };
-        (chain, token, currency.decimals as i16)
+        (chain.to_string(), token, currency.decimals as i16)
     }
 
     fn deserialize_currency(chain: &str, token: &serde_json::Value, decimals: i16) -> Currency {
         let chain_type = match chain {
             "bitcoin" => otc_models::ChainType::Bitcoin,
             "ethereum" => otc_models::ChainType::Ethereum,
+            "base" => otc_models::ChainType::Base,
             _ => otc_models::ChainType::Bitcoin, // Default fallback
         };
 

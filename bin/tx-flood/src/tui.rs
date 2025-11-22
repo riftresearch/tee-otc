@@ -790,6 +790,7 @@ impl SwapRow {
             .map(|chain| match chain {
                 ChainType::Bitcoin => "BTC".to_string(),
                 ChainType::Ethereum => "ETH".to_string(),
+                ChainType::Base => "BASE".to_string(),
             })
             .unwrap_or_else(|| "-".to_string());
         let amount_cell = self

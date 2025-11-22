@@ -122,7 +122,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
 
     // Determine currencies and destination based on mode
     let (from_currency, to_currency, user_destination_address) = match &config.mode {
-        SwapMode::EthStart => {
+        SwapMode::EthToBtc => {
             let cbbtc = Currency {
                 chain: ChainType::Ethereum,
                 token: TokenIdentifier::Address(
@@ -137,7 +137,22 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
             };
             (cbbtc, btc, config.recipient_bitcoin_address.clone())
         }
-        SwapMode::BtcStart => {
+        SwapMode::BaseToBtc => {
+            let cbbtc = Currency {
+                chain: ChainType::Base,
+                token: TokenIdentifier::Address(
+                    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
+                ),
+                decimals: 8,
+            };
+            let btc = Currency {
+                chain: ChainType::Bitcoin,
+                token: TokenIdentifier::Native,
+                decimals: 8,
+            };
+            (cbbtc, btc, config.recipient_bitcoin_address.clone())
+        }
+        SwapMode::BtcToEth => {
             let btc = Currency {
                 chain: ChainType::Bitcoin,
                 token: TokenIdentifier::Native,
@@ -152,7 +167,22 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
             };
             (btc, cbbtc, config.recipient_evm_address.clone())
         }
-        SwapMode::RandStart { directions } => {
+        SwapMode::BtcToBase => {
+            let btc = Currency {
+                chain: ChainType::Bitcoin,
+                token: TokenIdentifier::Native,
+                decimals: 8,
+            };
+            let cbbtc = Currency {
+                chain: ChainType::Base,
+                token: TokenIdentifier::Address(
+                    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
+                ),
+                decimals: 8,
+            };
+            (btc, cbbtc, config.recipient_evm_address.clone())
+        }
+        SwapMode::Rand { directions } => {
             let direction = directions
                 .get(index)
                 .ok_or_else(|| anyhow!("missing swap direction for index {}", index))?;
@@ -460,9 +490,9 @@ fn lot_from_response(response: &CreateSwapResponse) -> Result<Lot> {
     let chain = parse_chain_type(&response.deposit_chain)?;
     let token = parse_token_identifier(&response.token);
 
-    if chain == ChainType::Ethereum && matches!(token, TokenIdentifier::Native) {
+    if (chain == ChainType::Ethereum || chain == ChainType::Base) && matches!(token, TokenIdentifier::Native) {
         return Err(anyhow!(
-            "native Ethereum deposits are not currently supported by the load tester"
+            "native EVM deposits are not currently supported by the load tester"
         ));
     }
 
@@ -480,6 +510,7 @@ fn parse_chain_type(value: &str) -> Result<ChainType> {
     match value.to_ascii_lowercase().as_str() {
         "bitcoin" => Ok(ChainType::Bitcoin),
         "ethereum" => Ok(ChainType::Ethereum),
+        "base" => Ok(ChainType::Base),
         _ => Err(anyhow!("unsupported chain type in response: {}", value)),
     }
 }

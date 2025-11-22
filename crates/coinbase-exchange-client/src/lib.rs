@@ -49,13 +49,21 @@ pub struct CoinbaseClient {
     coinbase_base_url: Url,
 }
 
-const USER_AGENT: &str = "rift-tee-otc-market-maker/1.0";
+const USER_AGENT: &str = "rift-market-maker/1.0";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum WithdrawalStatus {
     Pending,
     Completed(String),
     Cancelled,
+}
+
+fn chain_type_to_coinbase_network(chain: ChainType) -> &'static str {
+    match chain {
+        ChainType::Bitcoin => "bitcoin",
+        ChainType::Ethereum => "ethereum",
+        ChainType::Base => "base",
+    }
 }
 
 impl CoinbaseClient {
@@ -171,10 +179,7 @@ impl CoinbaseClient {
         btc_account_id: &str,
         network: ChainType,
     ) -> Result<String> {
-        let network = match network {
-            ChainType::Bitcoin => "bitcoin",
-            ChainType::Ethereum => "ethereum",
-        };
+        let network = chain_type_to_coinbase_network(network);
 
         let endpoint_path = format!("/coinbase-accounts/{btc_account_id}/addresses");
         let endpoint_url = self.coinbase_base_url.join(&endpoint_path).map_err(|_| {
@@ -247,10 +252,7 @@ impl CoinbaseClient {
             .build()
         })?;
 
-        let network_str = match network {
-            ChainType::Bitcoin => "bitcoin",
-            ChainType::Ethereum => "ethereum",
-        };
+        let network_str = chain_type_to_coinbase_network(network);
 
         // Convert satoshis to BTC (8 decimal places)
         let btc_amount = format!("{:.8}", *amount_sats as f64 / 100_000_000.0);

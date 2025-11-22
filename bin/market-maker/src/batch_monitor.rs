@@ -143,6 +143,12 @@ async fn check_confirmation_status(
             info!("Ethereum batch {} marked as confirmed (mocked)", txid);
             Ok(true)
         }
+        ChainType::Base => {
+            // Mock implementation for Base - always return true (confirmed)
+            // since Base batches aren't relevant for this feature
+            info!("Base batch {} marked as confirmed (mocked)", txid);
+            Ok(true)
+        }
     }
 }
 

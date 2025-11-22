@@ -60,6 +60,7 @@ pub struct PaymentManager {
     /// Channels for queuing payments per chain
     bitcoin_tx: UnboundedSender<MarketMakerQueuedPayment>,
     ethereum_tx: UnboundedSender<MarketMakerQueuedPayment>,
+    base_tx: UnboundedSender<MarketMakerQueuedPayment>,
     /// Tracks swap_ids that are currently queued but not yet broadcast
     /// Prevents duplicate queueing during websocket reconnect replays
     in_flight_payments: Arc<DashMap<Uuid, ()>>,
@@ -77,7 +78,7 @@ impl PaymentManager {
         // Create channels for each chain type
         let (bitcoin_tx, bitcoin_rx) = mpsc::unbounded_channel();
         let (ethereum_tx, ethereum_rx) = mpsc::unbounded_channel();
-
+        let (base_tx, base_rx) = mpsc::unbounded_channel();
         // Create shared in-flight tracking map
         let in_flight_payments = Arc::new(DashMap::new());
 
@@ -115,11 +116,29 @@ impl PaymentManager {
             }
         }
 
+        // Spawn batch processor for Base if configured
+        if let Some(config) = batch_configs.get(&ChainType::Base) {
+            if let Some(wallet) = wallet_manager.get(ChainType::Base) {
+                spawn_batch_processor(
+                    ChainType::Base,
+                    wallet,
+                    payment_repository.clone(),
+                    base_rx,
+                    config.clone(),
+                    otc_response_tx.clone(),
+                    in_flight_payments.clone(),
+                    cancellation_token.clone(),
+                    join_set,
+                );
+            }
+
+        }
         Self {
             wallet_manager,
             payment_repository,
             bitcoin_tx,
             ethereum_tx,
+            base_tx,
             in_flight_payments,
         }
     }
@@ -212,6 +231,7 @@ impl PaymentManager {
         let send_result = match expected_lot.currency.chain {
             ChainType::Bitcoin => self.bitcoin_tx.send(queued_payment),
             ChainType::Ethereum => self.ethereum_tx.send(queued_payment),
+            ChainType::Base => self.base_tx.send(queued_payment),
         };
 
         match send_result {
@@ -220,7 +240,8 @@ impl PaymentManager {
                 swap_id: *swap_id,
                 timestamp: utc::now(),
             },
-            Err(_) => {
+            Err(e) => {
+                error!("Failed to queue payment for swap {swap_id}: {e}");
                 // Failed to queue, remove from in-flight tracking
                 self.in_flight_payments.remove(swap_id);
                 MMResponse::Error {

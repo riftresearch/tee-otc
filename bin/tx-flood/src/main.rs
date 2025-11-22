@@ -69,12 +69,14 @@ async fn main() -> Result<()> {
     let batch_coordinator = if config.enable_batching {
         info!(
             ethereum_interval = ?config.batch_interval_ethereum,
+            base_interval = ?config.batch_interval_base,
             bitcoin_interval = ?config.batch_interval_bitcoin,
             "payment batching enabled"
         );
         Some(batch_coordinator::BatchCoordinator::new(
             payment_wallets.clone(),
             config.batch_interval_ethereum,
+            config.batch_interval_base,
             config.batch_interval_bitcoin,
         ))
     } else {

@@ -60,7 +60,7 @@ impl BroadcastedTransactionRepository {
             .context(DatabaseSnafu)?;
 
         if let Some((txid, chain_str, txdata, utxos_json, absolute_fee)) = row {
-            let chain = chain_from_db(&chain_str)?;
+            let chain = ChainType::from_db_string(&chain_str).ok_or(BroadcastedTransactionRepositoryError::UnknownChain { value: chain_str })?;
             let bitcoin_tx_foreign_utxos: Option<Vec<ForeignUtxo>> = utxos_json
                 .map(serde_json::from_value)
                 .transpose()
@@ -105,7 +105,7 @@ impl BroadcastedTransactionRepository {
             "#,
         )
         .bind(txid)
-        .bind(chain_to_db(&chain))
+        .bind(chain.to_db_string())
         .bind(txdata)
         .bind(foreign_utxos_json)
         .bind(absolute_fee as i64)
@@ -114,22 +114,5 @@ impl BroadcastedTransactionRepository {
         .context(DatabaseSnafu)?;
 
         Ok(())
-    }
-}
-
-fn chain_to_db(chain: &ChainType) -> &'static str {
-    match chain {
-        ChainType::Bitcoin => "bitcoin",
-        ChainType::Ethereum => "ethereum",
-    }
-}
-
-fn chain_from_db(value: &str) -> BroadcastedTransactionRepositoryResult<ChainType> {
-    match value {
-        "bitcoin" => Ok(ChainType::Bitcoin),
-        "ethereum" => Ok(ChainType::Ethereum),
-        other => Err(BroadcastedTransactionRepositoryError::UnknownChain {
-            value: other.to_string(),
-        }),
     }
 }

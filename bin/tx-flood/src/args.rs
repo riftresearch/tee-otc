@@ -15,19 +15,25 @@ const DEFAULT_EVM_PRIVATE_KEY: &str =
     "2230f1b621d6865e08b75856c575da89317a944785f33a16d9f2192adedb9ca8";
 const DEFAULT_BITCOIN_DESCRIPTOR: &str =
     "wpkh(cUGWCiMZN5iRpQgYGU5DRFCed9nzLk1qj6MuJotnSXw9gkyw5huj)";
-const DEFAULT_EVM_WS_URL: &str = "ws://0.0.0.0:50101";
-const DEFAULT_EVM_HTTP_URL: &str = "http://0.0.0.0:50101";
-const DEFAULT_ESPLORA_URL: &str = "http://0.0.0.0:50103";
+const DEFAULT_EVM_WS_URL: &str = "ws://127.0.0.1:50101";
+const DEFAULT_EVM_HTTP_URL: &str = "http://127.0.0.1:50101";
+const DEFAULT_BASE_WS_URL: &str = "ws://127.0.0.1:50102";
+const DEFAULT_BASE_HTTP_URL: &str = "http://127.0.0.1:50102";
+const DEFAULT_ESPLORA_URL: &str = "http://127.0.0.1:50103";
 const CBBTC_ADDRESS: &str = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf";
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
 pub enum ModeArg {
-    /// User sends cbBTC on Ethereum
-    EthStart,
-    /// User sends BTC on Bitcoin
-    BtcStart,
-    /// Randomly choose between eth-start and btc-start for each swap
-    RandStart,
+    /// User sends cbBTC on Ethereum, receives BTC on Bitcoin
+    EthToBtc,
+    /// User sends cbBTC on Base, receives BTC on Bitcoin
+    BaseToBtc,
+    /// User sends BTC on Bitcoin, receives cbBTC on Ethereum
+    BtcToEth,
+    /// User sends BTC on Bitcoin, receives cbBTC on Base
+    BtcToBase,
+    /// Randomly choose between all supported swap directions
+    Rand,
 }
 
 #[derive(Debug, Clone)]
@@ -50,14 +56,14 @@ pub struct Args {
     pub log_level: String,
 
     /// Base URL for the OTC server (e.g. https://otc.example.com)
-    #[arg(long, env = "OTC_URL", default_value = "http://0.0.0.0:4422")]
+    #[arg(long, env = "OTC_URL", default_value = "http://127.0.0.1:4422")]
     pub otc_url: Url,
 
     /// Override URL for the quote endpoint (defaults to <otc_url>/api/v1/quotes/request)
     #[arg(
         long,
         env = "QUOTE_URL",
-        default_value = "http://0.0.0.0:3001/api/v1/quotes/request"
+        default_value = "http://127.0.0.1:3001/api/v1/quotes/request"
     )]
     pub quote_url: Url,
 
@@ -81,8 +87,8 @@ pub struct Args {
     #[arg(long, env = "SWAP_TIMEOUT", default_value = "10m", value_parser = parse_duration)]
     pub swap_timeout: Duration,
 
-    /// Swap mode: eth-start (send cbBTC), btc-start (send BTC), or rand-start (random)
-    #[arg(long, env = "MODE", value_enum, default_value_t = ModeArg::EthStart)]
+    /// Swap mode: eth-to-btc, base-to-btc, btc-to-eth, btc-to-base, or rand (random)
+    #[arg(long, env = "MODE", value_enum, default_value_t = ModeArg::EthToBtc)]
     pub mode: ModeArg,
 
     /// Minimum amount for quote requests (decimal or hex string, e.g. "5000" or "0x1388")
@@ -130,6 +136,22 @@ pub struct Args {
     #[arg(long, env = "ETHEREUM_CONFIRMATIONS", default_value_t = 1)]
     pub evm_confirmations: u64,
 
+    /// Private key for the Base wallet (32-byte hex string)
+    #[arg(long, env = "BASE_WALLET_PRIVATE_KEY", value_parser = parse_private_key, default_value = DEFAULT_EVM_PRIVATE_KEY)]
+    pub base_private_key: [u8; 32],
+
+    /// Base RPC websocket URL used for signing and broadcasting
+    #[arg(long, env = "BASE_RPC_WS_URL", default_value = DEFAULT_BASE_WS_URL)]
+    pub base_rpc_ws_url: String,
+
+    /// Optional Base HTTP RPC URL for debugging (defaults to the websocket URL)
+    #[arg(long, env = "BASE_RPC_HTTP_URL", default_value = DEFAULT_BASE_HTTP_URL)]
+    pub base_debug_rpc_url: String,
+
+    /// Number of confirmations required before the wallet considers a tx final on Base
+    #[arg(long, env = "BASE_CONFIRMATIONS", default_value_t = 1)]
+    pub base_confirmations: u64,
+
     /// Enable dedicated per-swap wallets funded up-front from the master wallet
     #[arg(long, env = "DEDICATED_WALLETS", default_value_t = false)]
     pub dedicated_wallets: bool,
@@ -162,6 +184,10 @@ pub struct Args {
     #[arg(long, env = "BATCH_INTERVAL_ETHEREUM", default_value = "5s", value_parser = parse_duration)]
     pub batch_interval_ethereum: Duration,
 
+    /// Batch interval for Base payments
+    #[arg(long, env = "BATCH_INTERVAL_BASE", default_value = "5s", value_parser = parse_duration)]
+    pub batch_interval_base: Duration,
+
     /// Batch interval for Bitcoin payments
     #[arg(long, env = "BATCH_INTERVAL_BITCOIN", default_value = "5s", value_parser = parse_duration)]
     pub batch_interval_bitcoin: Duration,
@@ -169,9 +195,11 @@ pub struct Args {
 
 #[derive(Debug, Clone)]
 pub enum SwapMode {
-    EthStart,
-    BtcStart,
-    RandStart { directions: Vec<SwapDirection> },
+    EthToBtc,
+    BaseToBtc,
+    BtcToEth,
+    BtcToBase,
+    Rand { directions: Vec<SwapDirection> },
 }
 
 #[derive(Debug, Clone)]
@@ -190,11 +218,13 @@ pub struct Config {
     pub randomize_amounts: bool,
     pub bitcoin: Option<BitcoinWalletConfig>,
     pub evm: Option<EvmWalletConfig>,
+    pub base: Option<EvmWalletConfig>,
     pub dedicated_wallets: DedicatedWalletsConfig,
     pub recipient_bitcoin_address: String,
     pub recipient_evm_address: String,
     pub enable_batching: bool,
     pub batch_interval_ethereum: Duration,
+    pub batch_interval_base: Duration,
     pub batch_interval_bitcoin: Duration,
     pub _bitcoin_wallet_db_dir: Arc<TempDir>,
 }
@@ -245,6 +275,10 @@ impl Args {
             evm_rpc_ws_url,
             evm_debug_rpc_url,
             evm_confirmations,
+            base_private_key,
+            base_rpc_ws_url,
+            base_debug_rpc_url,
+            base_confirmations,
             dedicated_wallets,
             dedicated_wallet_bitcoin_fee_reserve_sats,
             dedicated_wallet_evm_fee_reserve_wei,
@@ -252,6 +286,7 @@ impl Args {
             recipient_evm_address,
             enable_batching,
             batch_interval_ethereum,
+            batch_interval_base,
             batch_interval_bitcoin,
         } = self;
 
@@ -274,9 +309,14 @@ impl Args {
             ));
         }
 
-        // Define the two currency pairs
-        let cbbtc_currency = Currency {
+        // Define the currency pairs
+        let eth_cbbtc = Currency {
             chain: ChainType::Ethereum,
+            token: TokenIdentifier::Address(CBBTC_ADDRESS.to_string()),
+            decimals: 8,
+        };
+        let base_cbbtc = Currency {
+            chain: ChainType::Base,
             token: TokenIdentifier::Address(CBBTC_ADDRESS.to_string()),
             decimals: 8,
         };
@@ -287,39 +327,70 @@ impl Args {
         };
 
         // Build swap mode and determine required wallets
-        let (swap_mode, needs_bitcoin, needs_ethereum) = match mode {
-            ModeArg::EthStart => (SwapMode::EthStart, false, true),
-            ModeArg::BtcStart => (SwapMode::BtcStart, true, false),
-            ModeArg::RandStart => {
+        let (swap_mode, needs_bitcoin, needs_ethereum, needs_base) = match mode {
+            ModeArg::EthToBtc => (SwapMode::EthToBtc, false, true, false),
+            ModeArg::BaseToBtc => (SwapMode::BaseToBtc, false, false, true),
+            ModeArg::BtcToEth => (SwapMode::BtcToEth, true, true, false),
+            ModeArg::BtcToBase => (SwapMode::BtcToBase, true, false, true),
+            ModeArg::Rand => {
                 let mut rng = rand::thread_rng();
                 let mut directions = Vec::with_capacity(total_swaps);
                 let mut btc_count = 0;
                 let mut eth_count = 0;
+                let mut base_count = 0;
 
                 for _ in 0..total_swaps {
-                    if rng.gen_bool(0.5) {
-                        // eth-start: send cbBTC, receive BTC
-                        directions.push(SwapDirection {
-                            from_currency: cbbtc_currency.clone(),
-                            to_currency: btc_currency.clone(),
-                            user_destination_address: recipient_bitcoin_address.clone(),
-                        });
-                        eth_count += 1;
-                    } else {
-                        // btc-start: send BTC, receive cbBTC
-                        directions.push(SwapDirection {
-                            from_currency: btc_currency.clone(),
-                            to_currency: cbbtc_currency.clone(),
-                            user_destination_address: recipient_evm_address.clone(),
-                        });
-                        btc_count += 1;
+                    // Randomly choose between:
+                    // 0: Eth -> Btc
+                    // 1: Btc -> Eth
+                    // 2: Base -> Btc
+                    // 3: Btc -> Base
+                    match rng.gen_range(0..4) {
+                        0 => {
+                            // eth-start: send cbBTC on Eth, receive BTC
+                            directions.push(SwapDirection {
+                                from_currency: eth_cbbtc.clone(),
+                                to_currency: btc_currency.clone(),
+                                user_destination_address: recipient_bitcoin_address.clone(),
+                            });
+                            eth_count += 1;
+                        }
+                        1 => {
+                            // btc-start: send BTC, receive cbBTC on Eth
+                            directions.push(SwapDirection {
+                                from_currency: btc_currency.clone(),
+                                to_currency: eth_cbbtc.clone(),
+                                user_destination_address: recipient_evm_address.clone(),
+                            });
+                            btc_count += 1;
+                        }
+                        2 => {
+                            // base-start: send cbBTC on Base, receive BTC
+                            directions.push(SwapDirection {
+                                from_currency: base_cbbtc.clone(),
+                                to_currency: btc_currency.clone(),
+                                user_destination_address: recipient_bitcoin_address.clone(),
+                            });
+                            base_count += 1;
+                        }
+                        3 => {
+                            // btc-start: send BTC, receive cbBTC on Base
+                            directions.push(SwapDirection {
+                                from_currency: btc_currency.clone(),
+                                to_currency: base_cbbtc.clone(),
+                                user_destination_address: recipient_evm_address.clone(),
+                            });
+                            btc_count += 1;
+                        }
+                        _ => unreachable!(),
                     }
                 }
 
                 (
-                    SwapMode::RandStart { directions },
+                    SwapMode::Rand { directions },
                     btc_count > 0,
                     eth_count > 0,
+                    base_count > 0,
                 )
             }
         };
@@ -355,6 +426,23 @@ impl Args {
             None
         };
 
+        let base = if needs_base {
+            let debug_rpc_url = if base_debug_rpc_url.is_empty() {
+                base_rpc_ws_url.clone()
+            } else {
+                base_debug_rpc_url.clone()
+            };
+
+            Some(EvmWalletConfig {
+                private_key: base_private_key,
+                rpc_ws_url: base_rpc_ws_url,
+                debug_rpc_url,
+                confirmations: base_confirmations,
+            })
+        } else {
+            None
+        };
+
         let dedicated_wallets = DedicatedWalletsConfig {
             enabled: dedicated_wallets,
             bitcoin_fee_reserve_sats: dedicated_wallet_bitcoin_fee_reserve_sats,
@@ -376,11 +464,13 @@ impl Args {
             randomize_amounts,
             bitcoin,
             evm,
+            base,
             dedicated_wallets,
             recipient_bitcoin_address,
             recipient_evm_address,
             enable_batching,
             batch_interval_ethereum,
+            batch_interval_base,
             batch_interval_bitcoin,
             _bitcoin_wallet_db_dir: Arc::new(bitcoin_wallet_db_dir),
         })

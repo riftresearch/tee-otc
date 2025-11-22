@@ -30,6 +30,7 @@ impl BatchCoordinator {
     pub fn new(
         wallets: PaymentWallets,
         ethereum_interval: Duration,
+        base_interval: Duration,
         bitcoin_interval: Duration,
     ) -> Self {
         let (tx, rx) = unbounded_channel();
@@ -39,6 +40,7 @@ impl BatchCoordinator {
             wallets,
             rx,
             ethereum_interval,
+            base_interval,
             bitcoin_interval,
         ));
 
@@ -76,21 +78,27 @@ async fn run_batch_processor(
     wallets: PaymentWallets,
     mut rx: UnboundedReceiver<PaymentRequest>,
     ethereum_interval: Duration,
+    base_interval: Duration,
     bitcoin_interval: Duration,
 ) {
     // Separate queues for each chain
     let mut ethereum_queue: Vec<PaymentRequest> = Vec::new();
+    let mut base_queue: Vec<PaymentRequest> = Vec::new();
     let mut bitcoin_queue: Vec<PaymentRequest> = Vec::new();
 
     // Timers for each chain
     let mut ethereum_timer = interval(ethereum_interval);
     ethereum_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
     
+    let mut base_timer = interval(base_interval);
+    base_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    
     let mut bitcoin_timer = interval(bitcoin_interval);
     bitcoin_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
     // Skip the first tick (which fires immediately)
     ethereum_timer.tick().await;
+    base_timer.tick().await;
     bitcoin_timer.tick().await;
 
     loop {
@@ -104,6 +112,13 @@ async fn run_batch_processor(
                             "queued Ethereum payment for batching"
                         );
                         ethereum_queue.push(request);
+                    }
+                    ChainType::Base => {
+                        debug!(
+                            swap_index = request.swap_index,
+                            "queued Base payment for batching"
+                        );
+                        base_queue.push(request);
                     }
                     ChainType::Bitcoin => {
                         debug!(
@@ -126,6 +141,17 @@ async fn run_batch_processor(
                 }
             }
 
+            // Base batch interval elapsed
+            _ = base_timer.tick() => {
+                if !base_queue.is_empty() {
+                    let batch = std::mem::take(&mut base_queue);
+                    let wallets = wallets.clone();
+                    tokio::spawn(async move {
+                        process_batch(wallets, batch, ChainType::Base).await;
+                    });
+                }
+            }
+
             // Bitcoin batch interval elapsed
             _ = bitcoin_timer.tick() => {
                 if !bitcoin_queue.is_empty() {
@@ -141,6 +167,9 @@ async fn run_batch_processor(
             else => {
                 if !ethereum_queue.is_empty() {
                     process_batch(wallets.clone(), ethereum_queue, ChainType::Ethereum).await;
+                }
+                if !base_queue.is_empty() {
+                    process_batch(wallets.clone(), base_queue, ChainType::Base).await;
                 }
                 if !bitcoin_queue.is_empty() {
                     process_batch(wallets.clone(), bitcoin_queue, ChainType::Bitcoin).await;

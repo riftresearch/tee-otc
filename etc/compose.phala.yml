@@ -1982,6 +1982,12 @@ services:
       # http://reth:8545
       EVM_RPC_URL: http://eth-helios:8190
       UNTRUSTED_EVM_TOKEN_INDEXER_URL: ${UNTRUSTED_EVM_TOKEN_INDEXER_URL}
+      ETHEREUM_ALLOWED_TOKEN: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+      # Base configuration
+      BASE_RPC_URL: http://base-helios:8191
+      UNTRUSTED_BASE_TOKEN_INDEXER_URL: ${UNTRUSTED_BASE_TOKEN_INDEXER_URL}
+      BASE_ALLOWED_TOKEN: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+      # Bitcoin configuration
       BITCOIN_RPC_URL: http://bitcoin-core:8332
       BITCOIN_RPC_AUTH: user:pass
       ELECTRUM_HTTP_SERVER_URL: ${UNTRUSTED_ELECTRUM_HTTP_SERVER_URL}

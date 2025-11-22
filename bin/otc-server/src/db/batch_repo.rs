@@ -7,8 +7,6 @@ use uuid::Uuid;
 
 use crate::error::{OtcServerError, OtcServerResult};
 
-use super::conversions::chain_type_to_db;
-
 #[derive(Clone)]
 pub struct BatchRepository {
     pool: PgPool,
@@ -29,7 +27,7 @@ impl BatchRepository {
         swap_ids: Vec<Uuid>,
         market_maker_id: Uuid,
     ) -> OtcServerResult<()> {
-        let chain_str = chain_type_to_db(&chain);
+        let chain_str = chain.to_db_string();
         let batch_json = serde_json::to_value(batch).map_err(|e| OtcServerError::InvalidData {
             message: format!("Failed to serialize batch: {e}"),
         })?;
@@ -68,7 +66,7 @@ impl BatchRepository {
         chain: &ChainType,
         tx_hash: &str,
     ) -> OtcServerResult<Option<(MarketMakerBatch, Vec<Uuid>)>> {
-        let chain_str = chain_type_to_db(chain);
+        let chain_str = chain.to_db_string();
 
         let row = sqlx::query(
             r#"

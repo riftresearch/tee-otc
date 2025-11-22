@@ -42,6 +42,7 @@ const CACHE_DIR_NAME: &str = "rift-devnet";
 const BITCOIN_DATADIR_NAME: &str = "bitcoin-datadir";
 const ESPLORA_DATADIR_NAME: &str = "esplora-datadir";
 const ANVIL_DATADIR_NAME: &str = "anvil-datadir";
+const ANVIL_BASE_DATADIR_NAME: &str = "anvil-base-datadir";
 const ERROR_MESSAGE: &str = "Cache must be populated before utilizing it,";
 
 pub fn get_new_temp_dir() -> Result<tempfile::TempDir> {
@@ -130,6 +131,11 @@ impl RiftDevnetCache {
             .await
     }
 
+    pub async fn create_anvil_base_datadir(&self) -> Result<tempfile::TempDir> {
+        self.copy_cached_dir(ANVIL_BASE_DATADIR_NAME, "anvil base datadir")
+            .await
+    }
+
     pub async fn save_devnet(&self, mut devnet: RiftDevnet) -> Result<()> {
         use fs2::FileExt;
         use std::fs;
@@ -186,19 +192,34 @@ impl RiftDevnetCache {
             }
         }
 
-        // 2. Gracefully shut down the anvil instance
+        // 2. Gracefully shut down the Ethereum anvil instance
         let anvil_shutdown_start = Instant::now();
-        info!("[Cache] Shutting down Anvil to flush all data to disk...");
+        info!("[Cache] Shutting down Ethereum Anvil to flush all data to disk...");
         let anvil_pid = devnet.ethereum.anvil.child().id();
         tokio::process::Command::new("kill")
             .arg("-SIGTERM")
             .arg(anvil_pid.to_string())
             .output()
             .await
-            .map_err(|e| eyre::eyre!("Failed to shutdown Anvil: {}", e))?;
+            .map_err(|e| eyre::eyre!("Failed to shutdown Ethereum Anvil: {}", e))?;
         info!(
-            "[Cache] Anvil shutdown took {:?}",
+            "[Cache] Ethereum Anvil shutdown took {:?}",
             anvil_shutdown_start.elapsed()
+        );
+
+        // 3. Gracefully shut down the Base anvil instance
+        let base_anvil_shutdown_start = Instant::now();
+        info!("[Cache] Shutting down Base Anvil to flush all data to disk...");
+        let base_anvil_pid = devnet.base.anvil.child().id();
+        tokio::process::Command::new("kill")
+            .arg("-SIGTERM")
+            .arg(base_anvil_pid.to_string())
+            .output()
+            .await
+            .map_err(|e| eyre::eyre!("Failed to shutdown Base Anvil: {}", e))?;
+        info!(
+            "[Cache] Base Anvil shutdown took {:?}",
+            base_anvil_shutdown_start.elapsed()
         );
 
         // 2. Save Bitcoin datadir (now with all blocks properly flushed)
@@ -234,12 +255,12 @@ impl RiftDevnetCache {
             electrsd_copy_start.elapsed()
         );
 
-        // 7. Save Anvil state file
+        // 7. Save Ethereum Anvil state file
         // Anvil automatically dumps state on exit to the anvil_datafile when --dump-state is used
         // We just need to copy it to our cache directory
         let anvil_dump_path = devnet.ethereum.anvil_dump_path.path();
         info!(
-            "[Cache] Saving anvil state from {}",
+            "[Cache] Saving Ethereum anvil state from {}",
             anvil_dump_path.to_string_lossy()
         );
 
@@ -247,8 +268,23 @@ impl RiftDevnetCache {
         let anvil_copy_start = Instant::now();
         Self::copy_dir_recursive(anvil_dump_path, &anvil_dst).await?;
         info!(
-            "[Cache] Anvil state copied in {:?}",
+            "[Cache] Ethereum Anvil state copied in {:?}",
             anvil_copy_start.elapsed()
+        );
+
+        // 8. Save Base Anvil state file
+        let base_anvil_dump_path = devnet.base.anvil_dump_path.path();
+        info!(
+            "[Cache] Saving Base anvil state from {}",
+            base_anvil_dump_path.to_string_lossy()
+        );
+
+        let base_anvil_dst = self.cache_dir.join(ANVIL_BASE_DATADIR_NAME);
+        let base_anvil_copy_start = Instant::now();
+        Self::copy_dir_recursive(base_anvil_dump_path, &base_anvil_dst).await?;
+        info!(
+            "[Cache] Base Anvil state copied in {:?}",
+            base_anvil_copy_start.elapsed()
         );
 
         // Release lock by dropping it
@@ -308,11 +344,13 @@ pub type Result<T, E = DevnetError> = std::result::Result<T, E>;
 
 /// The "combined" Devnet which holds:
 /// - a `BitcoinDevnet`
-/// - an `EthDevnet`
+/// - an `EthDevnet` for Ethereum (chain ID 31337)
+/// - an `EthDevnet` for Base (chain ID 8453, port 50102)
 /// - an optional `RiftIndexer` and `RiftIndexerServer`
 pub struct RiftDevnet {
     pub bitcoin: Arc<BitcoinDevnet>,
     pub ethereum: Arc<EthDevnet>,
+    pub base: Arc<EthDevnet>,
     pub otc_server_config_dir: TempDir,
     pub join_set: JoinSet<Result<()>>,
     pub coinbase_mock_server_handle: Option<tokio::task::JoinHandle<Result<()>>>,
@@ -520,14 +558,17 @@ impl RiftDevnetBuilder {
             Mode::Local
         };
 
-        // 5) Ethereum side
+        // 5) Ethereum side (chain ID 31337, default port)
         let ethereum_start = Instant::now();
 
         let ethereum_devnet = crate::evm_devnet::EthDevnet::setup(
-            deploy_mode,
+            deploy_mode.clone(),
             devnet_cache.clone(),
             self.token_indexer_database_url.clone(),
             self.interactive,
+            1, // Ethereum chain ID
+            if self.interactive { Some(50101) } else { None },
+            if self.interactive { Some(50104) } else { None }, // Ethereum token indexer port
         )
         .await
         .map_err(|e| eyre::eyre!("[devnet builder] Failed to setup Ethereum devnet: {}", e))?;
@@ -537,12 +578,36 @@ impl RiftDevnetBuilder {
             ethereum_start.elapsed()
         );
 
-        // 9) Fund optional EVM address with Ether + tokens
+        // 6) Base side (chain ID 8453, port 50102 in interactive mode)
+        let base_start = Instant::now();
+
+        let base_devnet = crate::evm_devnet::EthDevnet::setup(
+            deploy_mode,
+            devnet_cache.clone(), // Use cache for Base
+            if self.interactive {
+                self.token_indexer_database_url.clone() // Base gets token indexer in interactive mode
+            } else {
+                None // No token indexer for Base in tests
+            },
+            self.interactive,
+            8453, // Base chain ID
+            if self.interactive { Some(50102) } else { None }, // Base port
+            if self.interactive { Some(50105) } else { None }, // Base token indexer port
+        )
+        .await
+        .map_err(|e| eyre::eyre!("[devnet builder] Failed to setup Base devnet: {}", e))?;
+
+        info!(
+            "[Devnet Builder] Base devnet setup took {:?}",
+            base_start.elapsed()
+        );
+
+        // 9) Fund optional EVM address with Ether + tokens on both chains
         let funding_start = if self.funded_evm_addresses.is_empty() {
             None
         } else {
             info!(
-                "[Devnet Builder] Funding {} EVM addresses...",
+                "[Devnet Builder] Funding {} EVM addresses on Ethereum and Base...",
                 self.funded_evm_addresses.len()
             );
             Some(Instant::now())
@@ -553,7 +618,7 @@ impl RiftDevnetBuilder {
             let address = Address::from_str(&addr_str)
                 .map_err(|e| eyre::eyre!("Failed to parse EVM address: {}", e))?;
 
-            // ~10 ETH
+            // ~10 ETH on Ethereum
             ethereum_devnet
                 .fund_eth_address(
                     address,
@@ -561,22 +626,39 @@ impl RiftDevnetBuilder {
                         .map_err(|e| eyre::eyre!("Failed to parse U256: {}", e))?,
                 )
                 .await
-                .map_err(|e| eyre::eyre!("[devnet builder] Failed to fund ETH address: {}", e))?;
+                .map_err(|e| eyre::eyre!("[devnet builder] Failed to fund ETH address on Ethereum: {}", e))?;
+
+            // ~10 ETH on Base
+            base_devnet
+                .fund_eth_address(
+                    address,
+                    alloy::primitives::U256::from_str("10000000000000000000")
+                        .map_err(|e| eyre::eyre!("Failed to parse U256: {}", e))?,
+                )
+                .await
+                .map_err(|e| eyre::eyre!("[devnet builder] Failed to fund ETH address on Base: {}", e))?;
 
             // Debugging: check funded balances
             let eth_balance = ethereum_devnet
                 .funded_provider
                 .get_balance(address)
                 .await
-                .map_err(|e| eyre::eyre!("[devnet builder] Failed to get ETH balance: {}", e))?;
-            info!("[Devnet Builder] Ether Balance of {addr_str} => {eth_balance:?}");
+                .map_err(|e| eyre::eyre!("[devnet builder] Failed to get ETH balance on Ethereum: {}", e))?;
+            info!("[Devnet Builder] Ethereum Balance of {addr_str} => {eth_balance:?}");
+
+            let base_balance = base_devnet
+                .funded_provider
+                .get_balance(address)
+                .await
+                .map_err(|e| eyre::eyre!("[devnet builder] Failed to get ETH balance on Base: {}", e))?;
+            info!("[Devnet Builder] Base Balance of {addr_str} => {base_balance:?}");
         }
         if let Some(start) = funding_start {
             info!("[Devnet Builder] Funded addresses in {:?}", start.elapsed());
         }
 
         if self.interactive {
-            self.setup_interactive_mode(&bitcoin_devnet, &ethereum_devnet, self.using_esplora)
+            self.setup_interactive_mode(&bitcoin_devnet, &ethereum_devnet, &base_devnet, self.using_esplora)
                 .await?;
         }
 
@@ -586,6 +668,7 @@ impl RiftDevnetBuilder {
         let mut devnet = crate::RiftDevnet {
             bitcoin: Arc::new(bitcoin_devnet),
             ethereum: Arc::new(ethereum_devnet),
+            base: Arc::new(base_devnet),
             otc_server_config_dir: config_dir,
             join_set,
             coinbase_mock_server_handle: None,
@@ -641,57 +724,114 @@ impl RiftDevnetBuilder {
         &self,
         bitcoin_devnet: &BitcoinDevnet,
         ethereum_devnet: &EthDevnet,
+        base_devnet: &EthDevnet,
         using_esplora: bool,
     ) -> Result<()> {
         let setup_start = Instant::now();
-        let market_maker_bitcoin_address =
+        
+        // Ethereum market maker account (matches compose.override.yml)
+        // EVM: 0x42c0ca15451F626B83f6BA80fDB13A4F59167213
+        // BTC: bcrt1qn65u46clcspgdg7ylgdvd5848cg0jzgy0a8lee
+        // Descriptor: wpkh(cQzMQbLioizdTAVPHtYWN5bpNoCuZvgDCPvfK2Aker5Q5abnnybJ)
+        let market_maker_eth_bitcoin_address =
             bitcoin::Address::from_str("bcrt1qn65u46clcspgdg7ylgdvd5848cg0jzgy0a8lee")
                 .unwrap()
                 .assume_checked();
-        let market_maker_ethereum_address =
+        let market_maker_eth_evm_address =
             alloy::primitives::Address::from_str("0x42c0ca15451F626B83f6BA80fDB13A4F59167213")
                 .unwrap();
+
+        // Base market maker account (matches compose.override.yml)
+        // Generate from MultichainAccount to ensure valid address/key pair
+        let market_maker_base_account = MultichainAccount::new(220202);
+        let market_maker_base_bitcoin_address = market_maker_base_account.bitcoin_wallet.address.clone();
+        let market_maker_base_evm_address = market_maker_base_account.ethereum_address;
+        
+        // Log the Base MM credentials for compose.override.yml
+        info!("[Interactive Setup] Base Market Maker Credentials:");
+        info!("  EVM Address: {}", market_maker_base_evm_address);
+        info!("  EVM Private Key: {:02x?}", market_maker_base_account.secret_bytes);
+        info!("  Bitcoin Address: {}", market_maker_base_bitcoin_address);
+        info!("  Bitcoin Descriptor: {}", market_maker_base_account.bitcoin_wallet.descriptor());
 
         let funding_amount = bitcoin::Amount::from_btc(1.0).unwrap().to_sat();
 
         let demo_account = MultichainAccount::new(110101);
 
-        // Fund market maker with ETH
+        // Fund Ethereum market maker with ETH
         let funding_start = Instant::now();
-        info!("[Interactive Setup] Funding market maker with ETH...");
+        info!("[Interactive Setup] Funding Ethereum market maker with ETH...");
 
         ethereum_devnet
             .fund_eth_address(
-                market_maker_ethereum_address,
+                market_maker_eth_evm_address,
                 alloy::primitives::U256::from_str_radix("100000000000000000000", 10)
                     .map_err(|e| eyre::eyre!("Conversion error: {}", e))?,
             )
             .await
             .map_err(|e| {
                 eyre::eyre!(
-                    "[devnet builder-market_maker] Failed to fund ETH address: {}",
+                    "[devnet builder-eth_market_maker] Failed to fund ETH address: {}",
                     e
                 )
             })?;
 
         let _tx_hash = ethereum_devnet
             .mint_cbbtc(
-                market_maker_ethereum_address,
+                market_maker_eth_evm_address,
                 alloy::primitives::U256::from(funding_amount),
             )
             .await?;
 
-        // Fund market maker with Bitcoin
-        info!("[Interactive Setup] Funding market maker with Bitcoin...");
+        // Fund Base market maker with ETH on Base
+        info!("[Interactive Setup] Funding Base market maker with ETH on Base...");
+        base_devnet
+            .fund_eth_address(
+                market_maker_base_evm_address,
+                alloy::primitives::U256::from_str_radix("100000000000000000000", 10)
+                    .map_err(|e| eyre::eyre!("Conversion error: {}", e))?,
+            )
+            .await
+            .map_err(|e| {
+                eyre::eyre!(
+                    "[devnet builder-base_market_maker] Failed to fund ETH address on Base: {}",
+                    e
+                )
+            })?;
+
+        let _tx_hash = base_devnet
+            .mint_cbbtc(
+                market_maker_base_evm_address,
+                alloy::primitives::U256::from(funding_amount),
+            )
+            .await?;
+
+        // Fund Ethereum market maker with Bitcoin
+        info!("[Interactive Setup] Funding Ethereum market maker with Bitcoin...");
         bitcoin_devnet
             .deal_bitcoin(
-                &market_maker_bitcoin_address,
+                &market_maker_eth_bitcoin_address,
                 &bitcoin::Amount::from_sat(funding_amount),
             )
             .await
             .map_err(|e| {
                 eyre::eyre!(
-                    "[devnet builder-market_maker] Failed to deal bitcoin: {}",
+                    "[devnet builder-eth_market_maker] Failed to deal bitcoin: {}",
+                    e
+                )
+            })?;
+
+        // Fund Base market maker with Bitcoin
+        info!("[Interactive Setup] Funding Base market maker with Bitcoin...");
+        bitcoin_devnet
+            .deal_bitcoin(
+                &market_maker_base_bitcoin_address,
+                &bitcoin::Amount::from_sat(funding_amount),
+            )
+            .await
+            .map_err(|e| {
+                eyre::eyre!(
+                    "[devnet builder-base_market_maker] Failed to deal bitcoin: {}",
                     e
                 )
             })?;
@@ -714,8 +854,32 @@ impl RiftDevnetBuilder {
 
         let funding_amount = bitcoin::Amount::from_btc(1000.0).unwrap().to_sat();
 
-        // Fund demo_account with cbBTC
+        // Fund demo_account with cbBTC on Ethereum
         let _tx_hash = ethereum_devnet
+            .mint_cbbtc(
+                demo_account.ethereum_address,
+                alloy::primitives::U256::from(funding_amount),
+            )
+            .await?;
+
+        // Fund demo_account with ETH on Base
+        info!("[Interactive Setup] Funding demo_account with ETH on Base...");
+        base_devnet
+            .fund_eth_address(
+                demo_account.ethereum_address,
+                alloy::primitives::U256::from_str_radix("1000000000000000000000000", 10)
+                    .map_err(|e| eyre::eyre!("Conversion error: {}", e))?,
+            )
+            .await
+            .map_err(|e| {
+                eyre::eyre!(
+                    "[devnet builder-demo_account] Failed to fund ETH address on Base: {}",
+                    e
+                )
+            })?;
+
+        // Fund demo_account with cbBTC on Base
+        let _tx_hash = base_devnet
             .mint_cbbtc(
                 demo_account.ethereum_address,
                 alloy::primitives::U256::from(funding_amount),
@@ -765,16 +929,28 @@ impl RiftDevnetBuilder {
             demo_account.bitcoin_wallet.descriptor()
         );
         println!(
-            "Anvil HTTP Url:             http://0.0.0.0:{}",
+            "Ethereum Anvil HTTP Url:    http://0.0.0.0:{}",
             ethereum_devnet.anvil.port()
         );
         println!(
-            "Anvil WS Url:               ws://0.0.0.0:{}",
+            "Ethereum Anvil WS Url:      ws://0.0.0.0:{}",
             ethereum_devnet.anvil.port()
         );
         println!(
-            "Chain ID:                   {}",
+            "Ethereum Chain ID:          {}",
             ethereum_devnet.anvil.chain_id()
+        );
+        println!(
+            "Base Anvil HTTP Url:        http://0.0.0.0:{}",
+            base_devnet.anvil.port()
+        );
+        println!(
+            "Base Anvil WS Url:          ws://0.0.0.0:{}",
+            base_devnet.anvil.port()
+        );
+        println!(
+            "Base Chain ID:              {}",
+            base_devnet.anvil.chain_id()
         );
         println!(
             "Bitcoin RPC URL:            {}",
@@ -785,6 +961,20 @@ impl RiftDevnetBuilder {
             println!(
                 "Esplora API URL:            {}",
                 bitcoin_devnet.esplora_url.as_ref().unwrap()
+            );
+        }
+
+        if let Some(eth_indexer) = &ethereum_devnet.token_indexer {
+            println!(
+                "Ethereum Token Indexer:     {}",
+                eth_indexer.api_server_url
+            );
+        }
+
+        if let Some(base_indexer) = &base_devnet.token_indexer {
+            println!(
+                "Base Token Indexer:         {}",
+                base_indexer.api_server_url
             );
         }
 

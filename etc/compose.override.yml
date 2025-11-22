@@ -72,6 +72,7 @@ services:
       - "50102:50102"
       - "50103:50103"
       - "50104:50104"
+      - "50105:50105"
       - "8080:8080"
 
   otc-server:
@@ -119,9 +120,16 @@ services:
       GRANT_SUDO: yes
       # DATABASE_URL is constructed dynamically in the entrypoint from sidecar-generated secrets
       RUST_LOG: info 
+      # Ethereum configuration (devnet port 50101)
       EVM_RPC_URL: http://devnet:50101
       UNTRUSTED_EVM_TOKEN_INDEXER_URL: http://devnet:50104
-      BITCOIN_RPC_URL: http://devnet:50102
+      ETHEREUM_ALLOWED_TOKEN: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+      # Base configuration (devnet port 50102, token indexer port 50105)
+      BASE_RPC_URL: http://devnet:50102
+      UNTRUSTED_BASE_TOKEN_INDEXER_URL: http://devnet:50105
+      BASE_ALLOWED_TOKEN: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+      # Bitcoin configuration (devnet port 50100)
+      BITCOIN_RPC_URL: http://devnet:50100
       BITCOIN_RPC_AUTH: bitcoind:bitcoind
       ELECTRUM_HTTP_SERVER_URL: http://devnet:50103
       CORS_DOMAIN: "*"
@@ -214,17 +222,57 @@ services:
     networks:
     volumes: []
 
-  mm-postgres:
-    networks:
-    volumes: []
+  # ===== ETHEREUM MARKET MAKER STACK =====
   
-  market-maker:
+  mm-postgres-eth:
+    image: postgres:16-alpine
+    container_name: mm-postgres-eth
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: mm_db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d mm_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    volumes: []
+    networks:
+      - mm-network-eth
+
+  market-maker-eth:
+    container_name: market-maker-eth
+    build:
+      context: ..
+      dockerfile_inline: |
+        FROM rust:1.90.0-trixie AS chef
+        RUN cargo install cargo-chef 
+        WORKDIR /app
+
+        FROM chef AS planner
+        COPY . .
+        RUN cargo chef prepare  --recipe-path recipe.json
+
+        FROM chef AS builder
+        COPY --from=planner /app/recipe.json recipe.json
+        COPY --from=planner /app/sqlx-sqlite-shim ./sqlx-sqlite-shim
+        RUN cargo chef cook --release --recipe-path recipe.json
+        COPY . .
+        RUN cargo build --release --bin market-maker --exclude integration-tests --workspace
+
+        FROM debian:trixie AS runtime
+        RUN apt-get update && apt-get install -y \
+            ca-certificates \
+            && rm -rf /var/lib/apt/lists/*
+        WORKDIR /app
+        COPY --from=builder /app/target/release/market-maker /app/
+        CMD ["./market-maker"]
     ports:
       - "9000:9000"
       - "6669:6669"
       - "8081:8081"
     depends_on:
-      mm-postgres:
+      mm-postgres-eth:
         condition: service_healthy
       devnet:
         condition: service_healthy
@@ -234,11 +282,11 @@ services:
         condition: service_started
     environment:
       ENABLE_TOKIO_CONSOLE_SUBSCRIBER: false
-      RUST_LOG: info,opentelemetry_otlp=debug,tracing_opentelemetry=debug,opentelemetry=debug
+      RUST_LOG: info
       METRICS_LISTEN_ADDR: 0.0.0.0:9000
-      MM_TAG: test-mm
-      MM_ID: a4c6da0d-a071-40ea-b69c-e23d49327d42
-      MM_API_SECRET: l3f2zYpsLHwI8Qx3mOiYOeef51r0PCk5
+      MM_TAG: test-mm-eth
+      MM_ID: 96c0bedb-bfda-4680-a8df-1317d1e09c8d
+      MM_API_SECRET: Bt7nDfOLlstMLLMvj3dlY3kFozxHk6An
       OTC_WS_URL: ws://otc-server:4422/ws/mm
       RFQ_WS_URL: ws://rfq-server:3001/ws/mm
       BITCOIN_WALLET_DB_PATH: /app/bitcoin-wallet-db/wallet.sqlite
@@ -246,13 +294,16 @@ services:
       BITCOIN_WALLET_DESCRIPTOR: wpkh(cQzMQbLioizdTAVPHtYWN5bpNoCuZvgDCPvfK2Aker5Q5abnnybJ)
       BITCOIN_WALLET_NETWORK: regtest
       BITCOIN_WALLET_ESPLORA_URL: http://devnet:50103
+      # EVM configuration (ethereum)
       # ethereum address: 0x42c0ca15451F626B83f6BA80fDB13A4F59167213
-      ETHEREUM_WALLET_PRIVATE_KEY: 1b3a3180231b9b22aee5e31606a33da3685e83d948d7f569f6623143371fceb5
-      ETHEREUM_RPC_WS_URL: ws://devnet:50101
+      EVM_CHAIN: ethereum
+      EVM_WALLET_PRIVATE_KEY: 1b3a3180231b9b22aee5e31606a33da3685e83d948d7f569f6623143371fceb5
+      EVM_CONFIRMATIONS: 1
+      EVM_RPC_WS_URL: ws://devnet:50101
       TRADE_SPREAD_BPS: 0
       FEE_SAFETY_MULTIPLIER: 1.5
       BALANCE_UTILIZATION_THRESHOLD_BPS: 9500
-      MM_DATABASE_URL: postgres://user:pass@mm-postgres:5432/mm_db
+      MM_DATABASE_URL: postgres://user:pass@mm-postgres-eth:5432/mm_db
       INVENTORY_TARGET_RATIO_BPS: 5000
       REBALANCE_TOLERANCE_BPS: 2500
       COINBASE_EXCHANGE_API_KEY: ""
@@ -264,21 +315,188 @@ services:
       BITCOIN_BATCH_SIZE: 100
       ETHEREUM_BATCH_INTERVAL_SECS: 2
       ETHEREUM_BATCH_SIZE: 392
-      LOKI_URL: http://mm-loki:3100
-
-    volumes: []
+      LOKI_URL: http://mm-loki-eth:3100
+    volumes:
+      - market_maker_eth_bitcoin_wallet_db_data:/app/bitcoin-wallet-db
     networks:
       - rift-network
-      - mm-network
-  
-  mm-node-exporter:
+      - mm-network-eth
+
+  mm-loki-eth:
+    image: grafana/loki:2.9.10
+    container_name: mm-loki-eth
+    ports:
+      - "3100:3100"
     volumes: []
-  
-  mm-prometheus:
+    command:
+      - "-config.file=/etc/loki/local-config.yaml"
+    networks:
+      - mm-network-eth
+
+  mm-prometheus-eth:
+    image: prom/prometheus:v2.54.1
+    container_name: mm-prometheus-eth
     volumes: []
+    configs:
+      - source: mm-prometheus-config-eth
+        target: /etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    networks:
+      - mm-network-eth
+
+  mm-grafana-eth:
+    image: grafana/grafana:12.2.1
+    container_name: mm-grafana-eth
+    ports:
+      - "3010:3000"
+    depends_on:
+      mm-prometheus-eth:
+        condition: service_started
+      mm-loki-eth:
+        condition: service_started
+    networks:
+      - mm-network-eth
   
-  mm-grafana:
+  # ===== BASE MARKET MAKER STACK =====
+  
+  mm-postgres-base:
+    image: postgres:16-alpine
+    container_name: mm-postgres-base
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: mm_db
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d mm_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     volumes: []
+    networks:
+      - mm-network-base
+
+  market-maker-base:
+    container_name: market-maker-base
+    build:
+      context: ..
+      dockerfile_inline: |
+        FROM rust:1.90.0-trixie AS chef
+        RUN cargo install cargo-chef 
+        WORKDIR /app
+
+        FROM chef AS planner
+        COPY . .
+        RUN cargo chef prepare  --recipe-path recipe.json
+
+        FROM chef AS builder
+        COPY --from=planner /app/recipe.json recipe.json
+        COPY --from=planner /app/sqlx-sqlite-shim ./sqlx-sqlite-shim
+        RUN cargo chef cook --release --recipe-path recipe.json
+        COPY . .
+        RUN cargo build --release --bin market-maker --exclude integration-tests --workspace
+
+        FROM debian:trixie AS runtime
+        RUN apt-get update && apt-get install -y \
+            ca-certificates \
+            && rm -rf /var/lib/apt/lists/*
+        WORKDIR /app
+        COPY --from=builder /app/target/release/market-maker /app/
+        CMD ["./market-maker"]
+    ports:
+      - "9001:9000"
+      - "6670:6669"
+      - "8082:8081"
+    depends_on:
+      mm-postgres-base:
+        condition: service_healthy
+      devnet:
+        condition: service_healthy
+      otc-server:
+        condition: service_started
+      rfq-server:
+        condition: service_started
+    environment:
+      ENABLE_TOKIO_CONSOLE_SUBSCRIBER: false
+      RUST_LOG: info
+      METRICS_LISTEN_ADDR: 0.0.0.0:9000
+      MM_TAG: test-mm-base
+      MM_ID: f901369b-84d7-4c03-8799-f504c22125f9
+      MM_API_SECRET: 5iAlXNoDVsGvjwiEjqhbLBVOpAN0wFZ8
+      OTC_WS_URL: ws://otc-server:4422/ws/mm
+      RFQ_WS_URL: ws://rfq-server:3001/ws/mm
+      BITCOIN_WALLET_DB_PATH: /app/bitcoin-wallet-db/wallet.sqlite
+      # bitcoin address: bcrt1qhgel8jdfcayas5phnxncxejg6w3tgq09v64hqp
+      BITCOIN_WALLET_DESCRIPTOR: wpkh(cRGrPaoyLxFxgp41JhLAbHh6x2GJg7nDrSBYUDV8ZAqfe9TS89kp)
+      BITCOIN_WALLET_NETWORK: regtest
+      BITCOIN_WALLET_ESPLORA_URL: http://devnet:50103
+      # EVM configuration (base)
+      # base address: 0x956A134e689cC33A5488D75420044CEa25936F84
+      EVM_CHAIN: base
+      EVM_WALLET_PRIVATE_KEY: 68d2bfbba4cd100067f5878af014c02c21a42f75d88ea90386f72a4a5872836e
+      EVM_CONFIRMATIONS: 1
+      EVM_RPC_WS_URL: ws://devnet:50102
+      TRADE_SPREAD_BPS: 0
+      FEE_SAFETY_MULTIPLIER: 1.5
+      BALANCE_UTILIZATION_THRESHOLD_BPS: 9500
+      MM_DATABASE_URL: postgres://user:pass@mm-postgres-base:5432/mm_db
+      INVENTORY_TARGET_RATIO_BPS: 5000
+      REBALANCE_TOLERANCE_BPS: 2500
+      COINBASE_EXCHANGE_API_KEY: ""
+      COINBASE_EXCHANGE_API_PASSPHRASE: ""
+      COINBASE_EXCHANGE_API_SECRET: ""
+      COINBASE_EXCHANGE_API_BASE_URL: http://devnet:8080
+      AUTO_MANAGE_INVENTORY: true
+      BITCOIN_BATCH_INTERVAL_SECS: 2
+      BITCOIN_BATCH_SIZE: 100
+      ETHEREUM_BATCH_INTERVAL_SECS: 2
+      ETHEREUM_BATCH_SIZE: 392
+      LOKI_URL: http://mm-loki-base:3100
+    volumes:
+      - market_maker_base_bitcoin_wallet_db_data:/app/bitcoin-wallet-db
+    networks:
+      - rift-network
+      - mm-network-base
+
+  mm-loki-base:
+    image: grafana/loki:2.9.10
+    container_name: mm-loki-base
+    ports:
+      - "3101:3100"
+    volumes: []
+    command:
+      - "-config.file=/etc/loki/local-config.yaml"
+    networks:
+      - mm-network-base
+
+  mm-prometheus-base:
+    image: prom/prometheus:v2.54.1
+    container_name: mm-prometheus-base
+    volumes: []
+    configs:
+      - source: mm-prometheus-config-base
+        target: /etc/prometheus/prometheus.yml
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    networks:
+      - mm-network-base
+
+  mm-grafana-base:
+    image: grafana/grafana:12.2.1
+    container_name: mm-grafana-base
+    ports:
+      - "3011:3000"
+    depends_on:
+      mm-prometheus-base:
+        condition: service_started
+      mm-loki-base:
+        condition: service_started
+    networks:
+      - mm-network-base
   
   replica-setup:
     depends_on:
@@ -309,4 +527,40 @@ services:
     volumes: []
     networks:
       - rift-network 
+
+networks:
+  mm-network-eth:
+    driver: bridge
+  mm-network-base:
+    driver: bridge
+
+volumes:
+  market_maker_eth_bitcoin_wallet_db_data:
+  market_maker_base_bitcoin_wallet_db_data:
+
+configs:
+  mm-prometheus-config-eth:
+    content: |
+      global:
+        scrape_interval: 15s
+        evaluation_interval: 15s
+
+      scrape_configs:
+        - job_name: 'market-maker-eth'
+          static_configs:
+            - targets: ['market-maker-eth:9000']
+              labels:
+                instance: 'eth'
   
+  mm-prometheus-config-base:
+    content: |
+      global:
+        scrape_interval: 15s
+        evaluation_interval: 15s
+
+      scrape_configs:
+        - job_name: 'market-maker-base'
+          static_configs:
+            - targets: ['market-maker-base:9000']
+              labels:
+                instance: 'base'

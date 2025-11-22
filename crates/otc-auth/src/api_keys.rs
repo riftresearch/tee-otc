@@ -4,14 +4,20 @@ use std::sync::LazyLock;
 // TODO: implement this as a proper API that can be used to add/remove API keys
 pub static API_KEYS: LazyLock<Vec<PublicApiKeyRecord>> = LazyLock::new(|| {
     vec![
-        // the integration tests use a hardcoded API key for the test market maker
-        // we don't want this to exist in production, so hide it behind the
+        // the integration tests use hardcoded API keys for the test market makers
+        // we don't want these to exist in production, so hide them behind the
         // `integration-test` feature
         #[cfg(feature = "integration-test")]
         PublicApiKeyRecord {
-            id: "a4c6da0d-a071-40ea-b69c-e23d49327d42".parse().unwrap(),
-            tag: "test-mm".to_string(),
-            hash: "$argon2id$v=19$m=19456,t=2,p=1$AxmsqRK3lgwVnzXNwTeQmw$UgBYL3NIShPhC02dVWCsvCbAyWF+N/VpH4Rlkf+Vplo".to_string(),
+            id: "96c0bedb-bfda-4680-a8df-1317d1e09c8d".parse().unwrap(),
+            tag: "test-mm-eth".to_string(),
+            hash: "$argon2id$v=19$m=19456,t=2,p=1$xtwHECDisKE9Vpp71a0XdA$Q+d1QhDH5UGIKaFhLycFPSh7fV7bVbqR1NkKqo+W5jI".to_string(),
+        },
+        #[cfg(feature = "integration-test")]
+        PublicApiKeyRecord {
+            id: "f901369b-84d7-4c03-8799-f504c22125f9".parse().unwrap(),
+            tag: "test-mm-base".to_string(),
+            hash: "$argon2id$v=19$m=19456,t=2,p=1$aYjaEm00ZK5mpL0E/qlzEw$UfBaYvQmYSFtHN89A9zlNCjSHKyZ6fnqF3hV2j8jq5A".to_string(),
         },
         PublicApiKeyRecord {
             id: "439505b9-423f-4975-a6c2-b8a2f72e95a9".parse().unwrap(),

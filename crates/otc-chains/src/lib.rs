@@ -5,7 +5,7 @@ pub mod traits;
 
 // Chain implementations
 pub mod bitcoin;
-pub mod ethereum;
+pub mod evm;
 pub mod rpc_metrics_layer;
 
 pub use error::{Error, Result};

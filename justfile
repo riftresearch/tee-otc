@@ -83,7 +83,7 @@ phala-deploy:
 # Docker compose prefix command for local integration testing 
 # DOCKER_DEFAULT_PLATFORM=linux/amd64  
 dc +args:
-    PHALA_DB_SNI=mock PRIMARY_DB_PASSWORD=replica_password REPLICA_DB_PASSWORD=actual_replica_password POSTGRES_REPLICA_PASSWORD=replica_password {{dc_files}} {{args}}
+   HELIOS_BASE_EXECUTION_RPC="mock" HELIOS_ETHEREUM_EXECUTION_RPC="mock" PHALA_DB_SNI=mock PRIMARY_DB_PASSWORD=replica_password REPLICA_DB_PASSWORD=actual_replica_password POSTGRES_REPLICA_PASSWORD=replica_password {{dc_files}} {{args}}
 
 # Docker compose prefix command for market maker with all config files - passes through any arguments
 mm +args:

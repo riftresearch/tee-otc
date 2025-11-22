@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub enum ChainType {
     Bitcoin,
     Ethereum,
+    Base,
 }
 
 impl ChainType {
@@ -12,6 +13,15 @@ impl ChainType {
         match self {
             ChainType::Bitcoin => "bitcoin",
             ChainType::Ethereum => "ethereum",
+            ChainType::Base => "base",
+        }
+    }
+    pub fn from_db_string(s: &str) -> Option<ChainType> {
+        match s {
+            "bitcoin" => Some(ChainType::Bitcoin),
+            "ethereum" => Some(ChainType::Ethereum),
+            "base" => Some(ChainType::Base),
+            _ => None,
         }
     }
 }
