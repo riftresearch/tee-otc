@@ -69,7 +69,7 @@ impl RFQMessageHandler {
                 };
 
                 let (status, reason) = match &rfq_result {
-                    RFQResult::Success(_) => ("ok", "none"),
+                    RFQResult::Success(_) => ("ok", "success"),
                     RFQResult::MakerUnavailable(_) => ("error", "maker_unavailable"),
                     RFQResult::InvalidRequest(_) => ("error", "invalid_request"),
                 };

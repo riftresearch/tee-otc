@@ -1,0 +1,18 @@
+apiVersion: 1
+deleteDatasources:
+  - name: Prometheus
+  - name: Loki
+datasources:
+  - name: Prometheus
+    uid: PBFA97CFB590B2093
+    type: prometheus
+    access: proxy
+    url: http://mm-prometheus:9090
+    isDefault: true
+  - name: Loki
+    uid: LOKI01
+    type: loki
+    access: proxy
+    url: http://mm-loki:3100
+    isDefault: false
+

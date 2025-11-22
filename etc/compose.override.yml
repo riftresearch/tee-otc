@@ -122,7 +122,7 @@ services:
       RUST_LOG: info 
       # Ethereum configuration (devnet port 50101)
       EVM_RPC_URL: http://devnet:50101
-      UNTRUSTED_EVM_TOKEN_INDEXER_URL: http://devnet:50104
+      UNTRUSTED_ETHEREUM_TOKEN_INDEXER_URL: http://devnet:50104
       ETHEREUM_ALLOWED_TOKEN: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
       # Base configuration (devnet port 50102, token indexer port 50105)
       BASE_RPC_URL: http://devnet:50102
@@ -193,17 +193,12 @@ services:
       - "3001:3001"
     volumes: []
 
-  reth: !reset null 
 
   eth-helios: !reset null
 
   base-helios: !reset null
 
-  lighthouse: !reset null 
-
   bitcoin-core: !reset null 
-
-  eth-jwt-generator: !reset null
 
   stunnel: !reset null
 
@@ -357,6 +352,13 @@ services:
         condition: service_started
       mm-loki-eth:
         condition: service_started
+    configs:
+      - source: grafana-datasource-mm-devnet-eth
+        target: /etc/grafana/provisioning/datasources/prometheus.yml
+      - source: grafana-dashboard-provider-mm
+        target: /etc/grafana/provisioning/dashboards/provider.yml
+      - source: grafana-node-dashboard-mm
+        target: /etc/grafana/provisioning/dashboards/mm-system-metrics.json
     networks:
       - mm-network-eth
   
@@ -495,6 +497,13 @@ services:
         condition: service_started
       mm-loki-base:
         condition: service_started
+    configs:
+      - source: grafana-datasource-mm-devnet-base
+        target: /etc/grafana/provisioning/datasources/prometheus.yml
+      - source: grafana-dashboard-provider-mm
+        target: /etc/grafana/provisioning/dashboards/provider.yml
+      - source: grafana-node-dashboard-mm
+        target: /etc/grafana/provisioning/dashboards/mm-system-metrics.json
     networks:
       - mm-network-base
   
@@ -539,28 +548,48 @@ volumes:
   market_maker_base_bitcoin_wallet_db_data:
 
 configs:
+  # Shared market-maker configs (referenced from external files)
+  prometheus-config-mm:
+    file: configs/mm-prometheus-config.yml
+
+  loki-config-mm:
+    file: configs/mm-loki-config.yml
+
+  grafana-datasource-mm:
+    file: configs/mm-grafana-datasource.yml
+
+  grafana-dashboard-provider-mm:
+    file: configs/mm-grafana-dashboard-provider.yml
+
+  grafana-node-dashboard-mm:
+    file: configs/mm-grafana-dashboard.json
+
+  # Environment-specific datasource configs (point to correct Prometheus/Loki instances)
+  grafana-datasource-mm-devnet-eth:
+    file: configs/mm-grafana-datasource-devnet-eth.yml
+
+  grafana-datasource-mm-devnet-base:
+    file: configs/mm-grafana-datasource-devnet-base.yml
+
+  # Per-environment specific configs
   mm-prometheus-config-eth:
     content: |
       global:
-        scrape_interval: 15s
-        evaluation_interval: 15s
+        scrape_interval: 5s
+        evaluation_interval: 5s
 
       scrape_configs:
-        - job_name: 'market-maker-eth'
+        - job_name: 'market-maker'
           static_configs:
             - targets: ['market-maker-eth:9000']
-              labels:
-                instance: 'eth'
   
   mm-prometheus-config-base:
     content: |
       global:
-        scrape_interval: 15s
-        evaluation_interval: 15s
+        scrape_interval: 5s
+        evaluation_interval: 5s
 
       scrape_configs:
-        - job_name: 'market-maker-base'
+        - job_name: 'market-maker'
           static_configs:
             - targets: ['market-maker-base:9000']
-              labels:
-                instance: 'base'

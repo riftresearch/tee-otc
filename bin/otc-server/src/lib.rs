@@ -107,7 +107,7 @@ pub struct OtcServerArgs {
     pub ethereum_mainnet_rpc_url: String,
 
     /// Ethereum Mainnet Token Indexer URL
-    #[arg(long, env = "UNTRUSTED_EVM_TOKEN_INDEXER_URL")]
+    #[arg(long, env = "UNTRUSTED_ETHEREUM_TOKEN_INDEXER_URL")]
     pub untrusted_ethereum_mainnet_token_indexer_url: String,
 
     /// Ethereum Allowed Token Address

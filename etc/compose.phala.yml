@@ -293,7 +293,7 @@ configs:
         retention_delete_delay: 2h
         retention_delete_worker_count: 150
 
-  grafana-datasource-v4:
+  grafana-datasource-v5:
     content: |
       apiVersion: 1
       deleteDatasources:
@@ -313,7 +313,7 @@ configs:
           url: http://otc-loki:3100
           isDefault: false
 
-  grafana-dashboard-provider-v4:
+  grafana-dashboard-provider-v5:
     content: |
       apiVersion: 1
       providers:
@@ -325,7 +325,7 @@ configs:
           options:
             path: /etc/grafana/provisioning/dashboards
 
-  grafana-node-dashboard-v4:
+  grafana-node-dashboard-v5:
     content: |
       {
         "annotations": {
@@ -497,6 +497,66 @@ configs:
                       }
                     }
                   ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "BTC→BASE.cbBTC"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "light-blue",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "BASE.cbBTC→BTC"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "semi-dark-blue",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "BTC→ETH.cbBTC"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "light-purple",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "ETH.cbBTC→BTC"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "semi-dark-purple",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
                 }
               ]
             },
@@ -550,8 +610,10 @@ configs:
                   "includeByName": {},
                   "indexByName": {},
                   "renameByName": {
-                    "bitcoin:Native-ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf": "BTC→cbBTC",
-                    "ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf-bitcoin:Native": "cbBTC→BTC"
+                    "base:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf-bitcoin:Native": "BASE.cbBTC→BTC",
+                    "bitcoin:Native-base:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf": "BTC→BASE.cbBTC",
+                    "bitcoin:Native-ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf": "BTC→ETH.cbBTC",
+                    "ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf-bitcoin:Native": "ETH.cbBTC→BTC"
                   }
                 }
               }
@@ -675,6 +737,36 @@ configs:
                       }
                     }
                   ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "ETH.cbBTC"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "purple",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
+                },
+                {
+                  "matcher": {
+                    "id": "byName",
+                    "options": "BASE.cbBTC"
+                  },
+                  "properties": [
+                    {
+                      "id": "color",
+                      "value": {
+                        "fixedColor": "blue",
+                        "mode": "fixed"
+                      }
+                    }
+                  ]
                 }
               ]
             },
@@ -722,14 +814,33 @@ configs:
                 "options": {}
               },
               {
+                "id": "calculateField",
+                "options": {
+                  "alias": "BTC",
+                  "mode": "reduceRow",
+                  "reduce": {
+                    "include": [
+                      "base:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf-bitcoin:Native",
+                      "ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf-bitcoin:Native"
+                    ],
+                    "reducer": "sum"
+                  },
+                  "replaceFields": false
+                }
+              },
+              {
                 "id": "organize",
                 "options": {
-                  "excludeByName": {},
+                  "excludeByName": {
+                    "base:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf-bitcoin:Native": true,
+                    "ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf-bitcoin:Native": true
+                  },
                   "includeByName": {},
                   "indexByName": {},
                   "renameByName": {
-                    "bitcoin:Native-ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf": "cbBTC",
-                    "ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf-bitcoin:Native": "BTC"
+                    "bitcoin:Native-base:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf": "BASE.cbBTC",
+                    "bitcoin:Native-ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf": "ETH.cbBTC",
+                    "ethereum:0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf-bitcoin:Native": ""
                   }
                 }
               }
@@ -1153,6 +1264,204 @@ configs:
           },
           {
             "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "s"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 0,
+              "y": 24
+            },
+            "id": 15,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "disableTextWrap": false,
+                "editorMode": "code",
+                "expr": "ethereum_rpc_duration_seconds{job=\"otc-server\", quantile=\"0.95\", chain=\"base\"}",
+                "fullMetaSearch": false,
+                "includeNullMetadata": true,
+                "instant": false,
+                "legendFormat": "{{method}}",
+                "range": true,
+                "refId": "A",
+                "useBackend": false
+              }
+            ],
+            "title": "Base RPC P95",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                }
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 12,
+              "y": 24
+            },
+            "id": 16,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "disableTextWrap": false,
+                "editorMode": "builder",
+                "expr": "rate(ethereum_rpc_requests_total{job=\"otc-server\", chain=\"base\"}[1m])",
+                "fullMetaSearch": false,
+                "includeNullMetadata": false,
+                "legendFormat": "{{method}} {{status}}",
+                "range": true,
+                "refId": "A",
+                "useBackend": false
+              }
+            ],
+            "title": "Base RPC Req/s",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
               "type": "loki",
               "uid": "LOKI01"
             },
@@ -1160,7 +1469,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 0,
-              "y": 24
+              "y": 32
             },
             "id": 12,
             "options": {
@@ -1252,7 +1561,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 24
+              "y": 32
             },
             "id": 4,
             "options": {
@@ -1358,7 +1667,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 0,
-              "y": 32
+              "y": 40
             },
             "id": 1,
             "options": {
@@ -1453,7 +1762,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 32
+              "y": 40
             },
             "id": 2,
             "options": {
@@ -1531,7 +1840,8 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green"
+                      "color": "green",
+                      "value": null
                     },
                     {
                       "color": "red",
@@ -1547,7 +1857,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 0,
-              "y": 40
+              "y": 48
             },
             "id": 5,
             "options": {
@@ -1625,7 +1935,8 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green"
+                      "color": "green",
+                      "value": null
                     },
                     {
                       "color": "red",
@@ -1641,7 +1952,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 40
+              "y": 48
             },
             "id": 6,
             "options": {
@@ -1719,7 +2030,8 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green"
+                      "color": "green",
+                      "value": null
                     },
                     {
                       "color": "red",
@@ -1735,7 +2047,7 @@ configs:
               "h": 8,
               "w": 24,
               "x": 0,
-              "y": 48
+              "y": 56
             },
             "id": 7,
             "options": {
@@ -1776,7 +2088,7 @@ configs:
           "list": []
         },
         "time": {
-          "from": "now-5m",
+          "from": "now-1h",
           "to": "now"
         },
         "timepicker": {},
@@ -1789,28 +2101,28 @@ configs:
 
 
 services:
-  eth-jwt-generator:
-    container_name: tee-eth-jwt-generator
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM alpine:3.22.1
-        RUN apk add --no-cache openssl
-        WORKDIR /app
-        ENTRYPOINT ["sh", "-c"]
+  volume-cleanup:
+    container_name: tee-volume-cleanup
+    image: alpine:3.22.1
     command: >
-      "mkdir -p /jwt &&
-      if [ ! -f /jwt/jwt.hex ]; then
-        echo 'Generating new JWT secret...' &&
-        openssl rand -hex 32 > /jwt/jwt.hex &&
-        echo 'JWT secret generated and saved to /jwt/jwt.hex'
-      else
-        echo 'JWT secret already exists, skipping generation'
-      fi &&
-      echo 'JWT secret is ready for use' &&
-      echo 'JWT Generator service completed successfully'"
+      sh -c "
+        echo 'Starting volume cleanup...';
+        echo 'Removing reth_logs...';
+        rm -rf /cleanup/reth_logs/* /cleanup/reth_logs/.[!.]* 2>/dev/null || true;
+        echo 'Removing eth_jwt_data...';
+        rm -rf /cleanup/eth_jwt_data/* /cleanup/eth_jwt_data/.[!.]* 2>/dev/null || true;
+        echo 'Removing lighthouse_data...';
+        rm -rf /cleanup/lighthouse_data/* /cleanup/lighthouse_data/.[!.]* 2>/dev/null || true;
+        echo 'Removing reth_mainnet_data...';
+        rm -rf /cleanup/reth_mainnet_data/* /cleanup/reth_mainnet_data/.[!.]* 2>/dev/null || true;
+        echo 'Volume cleanup complete!';
+        echo 'You can now remove these volumes with: docker volume rm tee-otc_reth_logs tee-otc_eth_jwt_data tee-otc_lighthouse_data tee-otc_reth_mainnet_data'
+      "
     volumes:
-      - eth_jwt_data:/jwt
+      - reth_logs:/cleanup/reth_logs
+      - eth_jwt_data:/cleanup/eth_jwt_data
+      - lighthouse_data:/cleanup/lighthouse_data
+      - reth_mainnet_data:/cleanup/reth_mainnet_data
     restart: "no"
     networks:
       - rift-network
@@ -1979,9 +2291,12 @@ services:
       GRANT_SUDO: yes
       # DATABASE_URL is constructed dynamically in the entrypoint from pg-sidecar
       RUST_LOG: info
-      # http://reth:8545
+      # Database connection pool configuration
+      DB_MAX_CONNECTIONS: "128"
+      DB_MIN_CONNECTIONS: "16"
+      # Ethereum configuration
       EVM_RPC_URL: http://eth-helios:8190
-      UNTRUSTED_EVM_TOKEN_INDEXER_URL: ${UNTRUSTED_EVM_TOKEN_INDEXER_URL}
+      UNTRUSTED_ETHEREUM_TOKEN_INDEXER_URL: ${UNTRUSTED_ETHEREUM_TOKEN_INDEXER_URL}
       ETHEREUM_ALLOWED_TOKEN: "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
       # Base configuration
       BASE_RPC_URL: http://base-helios:8191
@@ -1991,6 +2306,11 @@ services:
       BITCOIN_RPC_URL: http://bitcoin-core:8332
       BITCOIN_RPC_AUTH: user:pass
       ELECTRUM_HTTP_SERVER_URL: ${UNTRUSTED_ELECTRUM_HTTP_SERVER_URL}
+      BITCOIN_NETWORK: bitcoin
+      # Monitoring configuration
+      CHAIN_MONITOR_INTERVAL: "15"
+      MAX_CONCURRENT_SWAPS: "250"
+      # Server configuration
       CORS_DOMAIN: "*"
       CHAINALYSIS_HOST: ${CHAINALYSIS_HOST}
       CHAINALYSIS_TOKEN: ${CHAINALYSIS_TOKEN}
@@ -2014,91 +2334,6 @@ services:
         mode: 0755
     platform: linux/amd64
     user: root
-
-  reth:
-    restart: unless-stopped
-    container_name: tee-reth
-    build:
-      context: .
-      dockerfile_inline: |
-        FROM ghcr.io/paradigmxyz/reth:v1.8.1
-
-        USER root
-
-        RUN apt-get update && apt-get install -y \
-            wget \
-            lz4 \
-            bash \
-            coreutils \
-            && rm -rf /var/lib/apt/lists/*
-
-        # Create reth user and data directory
-        RUN useradd -m -u 1000 -s /bin/bash reth \
-            && mkdir -p /root/.local/share/reth/mainnet \
-            && chown -R reth:reth /root/.local/share/reth
-
-        ENTRYPOINT ["/usr/local/bin/reth-entrypoint.sh"]
-    depends_on:
-      eth-jwt-generator:
-        condition: service_completed_successfully
-    environment:
-      RETH_DATA_DIR: /root/.local/share/reth/mainnet
-    ports:
-      # - "9001:9001" # metrics
-      - "30303:30303" # eth/66 peering
-      - "8545:8545" # rpc
-      #- "8551:8551" # engine
-    volumes:
-      - reth_mainnet_data:/root/.local/share/reth/mainnet
-      - reth_logs:/root/logs
-      - eth_jwt_data:/root/jwt:ro
-    configs:
-      - source: reth-entrypoint
-        target: /usr/local/bin/reth-entrypoint.sh
-        mode: 0755
-    pid: host
-    command: >
-      node
-      --chain mainnet
-      --metrics 0.0.0.0:9001
-      --log.file.directory /root/logs
-      --authrpc.addr 0.0.0.0
-      --authrpc.port 8551
-      --authrpc.jwtsecret /root/jwt/jwt.hex
-      --http --http.addr 0.0.0.0 --http.port 8545
-      --http.api "eth,net,web3"
-    networks:
-      - rift-network
-
-  lighthouse:
-    restart: unless-stopped
-    image: sigp/lighthouse:v7.0.1
-    container_name: tee-lighthouse
-    depends_on:
-      eth-jwt-generator:
-        condition: service_completed_successfully
-      reth:
-        condition: service_started
-    ports:
-      #- "5052:5052/tcp" # rpc
-      # - "5053:5053/tcp"
-      #- "5054:5054/tcp" # metrics
-      - "9000:9000/tcp" # p2p
-      - "9000:9000/udp" # p2p
-    volumes:
-      - lighthouse_data:/root/.lighthouse
-      - eth_jwt_data:/root/jwt:ro
-    command: >
-      lighthouse bn
-      --network mainnet
-      --http --http-address 0.0.0.0
-      --execution-endpoint http://reth:8551
-      --metrics --metrics-address 0.0.0.0
-      --execution-jwt /root/jwt/jwt.hex
-      --checkpoint-sync-url https://sync-mainnet.beaconcha.in
-      --checkpoint-sync-url-timeout=300
-    networks:
-      - rift-network
 
   node-exporter:
     image: prom/node-exporter:v1.8.2
@@ -2188,11 +2423,11 @@ services:
       GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER}
       GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
     configs:
-      - source: grafana-datasource-v4
+      - source: grafana-datasource-v5
         target: /etc/grafana/provisioning/datasources/prometheus.yml
-      - source: grafana-dashboard-provider-v4
+      - source: grafana-dashboard-provider-v5
         target: /etc/grafana/provisioning/dashboards/provider.yml
-      - source: grafana-node-dashboard-v4
+      - source: grafana-node-dashboard-v5
         target: /etc/grafana/provisioning/dashboards/tee-monitoring.json
     networks:
       - rift-network
@@ -2267,10 +2502,11 @@ volumes:
   otc_server_config_data:
   prometheus_data_v4:
   otc_loki_data:
+  pg_secrets:
+  eth_helios_data:
+  base_helios_data:
+  # Volumes for cleanup - can be removed after cleanup service runs
   reth_logs:
   eth_jwt_data:
   lighthouse_data:
   reth_mainnet_data:
-  pg_secrets:
-  eth_helios_data:
-  base_helios_data:
