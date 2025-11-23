@@ -161,6 +161,9 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         RFQResult::InvalidRequest(reason) => {
             panic!("Quote should not be invalid request, got: {reason}");
         }
+        RFQResult::Unsupported(reason) => {
+            panic!("Quote should not be unsupported, got: {reason}");
+        }
     }
 
     // Output the latency to get the response
@@ -217,6 +220,9 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         RFQResult::InvalidRequest(reason) => {
             panic!("Quote should not be invalid request, got: {reason}");
         }
+        RFQResult::Unsupported(reason) => {
+            panic!("Quote should not be unsupported, got: {reason}");
+        }
     }
 
     // finally try for an amount that is valid
@@ -264,6 +270,9 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         }
         RFQResult::InvalidRequest(reason) => {
             panic!("Quote should not be invalid request, got: {reason}");
+        }
+        RFQResult::Unsupported(reason) => {
+            panic!("Quote should not be unsupported, got: {reason}");
         }
     }
 

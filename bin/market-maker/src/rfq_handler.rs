@@ -66,12 +66,14 @@ impl RFQMessageHandler {
                     RFQResult::Success(quote) => Some(quote.clone()),
                     RFQResult::MakerUnavailable(_) => None,
                     RFQResult::InvalidRequest(_) => None,
+                    RFQResult::Unsupported(_) => None,
                 };
 
                 let (status, reason) = match &rfq_result {
                     RFQResult::Success(_) => ("ok", "success"),
                     RFQResult::MakerUnavailable(_) => ("error", "maker_unavailable"),
                     RFQResult::InvalidRequest(_) => ("error", "invalid_request"),
+                    RFQResult::Unsupported(_) => ("ok", "unsupported"),
                 };
 
                 record_quote_latency(&start, status, reason);

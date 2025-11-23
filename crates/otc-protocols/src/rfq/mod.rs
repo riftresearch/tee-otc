@@ -64,6 +64,8 @@ pub enum RFQResult<T> {
     MakerUnavailable(String),
     /// Something the user could do something about (relevant to show the user)
     InvalidRequest(String),
+    /// Market maker doesn't support this trading pair/chain (silently ignored by RFQ server)
+    Unsupported(String),
 }
 
 /// Messages sent from Market Maker to RFQ server

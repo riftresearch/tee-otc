@@ -351,7 +351,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
                 // This is acceptable if the strategy allows it
                 info!("Got quote even though it exceeds reported max - acceptable if strategy allows");
             }
-            RFQResult::MakerUnavailable(_) | RFQResult::InvalidRequest(_) => {
+            RFQResult::MakerUnavailable(_) | RFQResult::InvalidRequest(_) | RFQResult::Unsupported(_) => {
                 info!("Got expected error for amount exceeding locked liquidity");
             }
         }

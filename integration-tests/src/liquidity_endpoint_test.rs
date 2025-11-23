@@ -207,7 +207,7 @@ async fn test_liquidity_endpoint_returns_data(
             RFQResult::Success(_) => {
                 panic!("Should not get successful quote for amount exceeding liquidity limit");
             }
-            RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) => {
+            RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) | RFQResult::Unsupported(err) => {
                 info!("Got expected error for over-limit amount: {}", err);
             }
         }
@@ -253,7 +253,7 @@ async fn test_liquidity_endpoint_returns_data(
             RFQResult::Success(_) => {
                 panic!("Should not get successful quote for amount exceeding liquidity limit");
             }
-            RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) => {
+            RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) | RFQResult::Unsupported(err) => {
                 info!("Got expected error for over-limit amount: {}", err);
             }
         }
@@ -298,7 +298,7 @@ async fn test_liquidity_endpoint_returns_data(
                 "Quote to amount should match requested output amount"
             );
         }
-        RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) => {
+        RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) | RFQResult::Unsupported(err) => {
             panic!("Should get successful quote for exact max amount, got error: {}", err);
         }
     }
@@ -340,7 +340,7 @@ async fn test_liquidity_endpoint_returns_data(
                 "Quote to amount should match requested output amount"
             );
         }
-        RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) => {
+        RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) | RFQResult::Unsupported(err) => {
             panic!("Should get successful quote for exact max amount, got error: {}", err);
         }
     }

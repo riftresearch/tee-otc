@@ -202,8 +202,8 @@ impl WrappedBitcoinQuoter {
         quote_request: &QuoteRequest,
     ) -> Result<RFQResult<Quote>> {
         if let Some(error_message) = self.is_fillable_request(quote_request) {
-            info!("Unfillable quote request: {:?}", quote_request);
-            return Ok(RFQResult::InvalidRequest(error_message));
+            info!("Unsupported quote request: {:?}", quote_request);
+            return Ok(RFQResult::Unsupported(error_message));
         }
         if quote_request.amount > U256::from(u64::MAX) {
             return Ok(RFQResult::InvalidRequest("Amount too large".to_string()));
@@ -248,6 +248,7 @@ impl WrappedBitcoinQuoter {
                     }),
                     RFQResult::MakerUnavailable(error) => RFQResult::MakerUnavailable(error),
                     RFQResult::InvalidRequest(error) => RFQResult::InvalidRequest(error),
+                    RFQResult::Unsupported(error) => RFQResult::Unsupported(error),
                 }
             }
             QuoteMode::ExactOutput => {
@@ -271,6 +272,7 @@ impl WrappedBitcoinQuoter {
                     }),
                     RFQResult::MakerUnavailable(error) => RFQResult::MakerUnavailable(error),
                     RFQResult::InvalidRequest(error) => RFQResult::InvalidRequest(error),
+                    RFQResult::Unsupported(error) => RFQResult::Unsupported(error),
                 }
             }
         };

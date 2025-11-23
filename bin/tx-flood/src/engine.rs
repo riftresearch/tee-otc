@@ -437,6 +437,9 @@ async fn request_quote(client: &Client, url: &Url, request: &QuoteRequest) -> Re
         Some(RFQResult::InvalidRequest(reason)) => {
             Err(anyhow!("quote request rejected as invalid: {reason}"))
         }
+        Some(RFQResult::Unsupported(reason)) => {
+            Err(anyhow!("quote request not supported by market maker: {reason}"))
+        }
         None => Err(anyhow!("quote response did not include a quote")),
     }
 }

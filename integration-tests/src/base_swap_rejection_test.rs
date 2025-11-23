@@ -175,6 +175,9 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
         Some(RFQResult::InvalidRequest(reason)) => {
             info!("✓ Quote correctly rejected (InvalidRequest): {:?}", reason);
         }
+        Some(RFQResult::Unsupported(reason)) => {
+            info!("✓ Quote correctly rejected (Unsupported): {:?}", reason);
+        }
         Some(RFQResult::Success(_)) => {
             panic!("Quote should NOT succeed for Base -> Bitcoin when MM is configured for Ethereum");
         }
@@ -221,6 +224,9 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
         }
         Some(RFQResult::InvalidRequest(reason)) => {
             info!("✓ Quote correctly rejected (InvalidRequest): {:?}", reason);
+        }
+        Some(RFQResult::Unsupported(reason)) => {
+            info!("✓ Quote correctly rejected (Unsupported): {:?}", reason);
         }
         Some(RFQResult::Success(_)) => {
             panic!("Quote should NOT succeed for Bitcoin -> Base when MM is configured for Ethereum");
@@ -272,6 +278,12 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
         Some(RFQResult::InvalidRequest(reason)) => {
             panic!(
                 "Quote should succeed for Bitcoin -> Ethereum, but got InvalidRequest: {:?}",
+                reason
+            );
+        }
+        Some(RFQResult::Unsupported(reason)) => {
+            panic!(
+                "Quote should succeed for Bitcoin -> Ethereum, but got Unsupported: {:?}",
                 reason
             );
         }

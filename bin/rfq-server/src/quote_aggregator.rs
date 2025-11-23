@@ -114,6 +114,7 @@ impl QuoteAggregator {
         };
 
         // Relevant fail quote - prioritize InvalidRequest over MakerUnavailable
+        // Note: Unsupported responses are silently ignored as they're not actionable by the user
         let best_fail_quote: Option<RFQResult<Quote>> = quotes
             .iter()
             .find_map(|q| match q {
