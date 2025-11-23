@@ -39,6 +39,7 @@ impl LiquidityCache {
         wallet_manager: Arc<WalletManager>,
         balance_strategy: Arc<QuoteBalanceStrategy>,
         lock_manager: Arc<LiquidityLockManager>,
+        evm_chain: ChainType,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Self {
         let cached_data = Arc::new(RwLock::new(Vec::new()));
@@ -103,6 +104,8 @@ impl LiquidityCache {
         let balance_strategy_task = balance_strategy.clone();
         let lock_manager_task = lock_manager.clone();
 
+        let evm_chain_task = evm_chain;
+
         join_set.spawn(async move {
             // Compute liquidity immediately on startup (don't wait for first tick)
             // This ensures data is available as soon as balances are populated
@@ -111,6 +114,7 @@ impl LiquidityCache {
                 &balance_strategy_task,
                 &lock_manager_task,
                 &balance_map_task,
+                evm_chain_task,
                 true, // emit_metrics on startup
             )
             .await
@@ -141,6 +145,7 @@ impl LiquidityCache {
                     &balance_strategy_task,
                     &lock_manager_task,
                     &balance_map_task,
+                    evm_chain_task,
                     emit_metrics,
                 )
                 .await
@@ -227,11 +232,13 @@ impl LiquidityCache {
     /// Uses cached balances from balance_map instead of calling wallet.balance() directly.
     /// 
     /// # Arguments
+    /// * `evm_chain` - The EVM chain (Ethereum or Base) to use for cbBTC
     /// * `emit_metrics` - If true, emits Prometheus metrics. Set to false to reduce metric update frequency.
     async fn compute_liquidity_static(
         balance_strategy: &QuoteBalanceStrategy,
         lock_manager: &LiquidityLockManager,
         balance_map: &Arc<RwLock<HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>>>>,
+        evm_chain: ChainType,
         emit_metrics: bool,
     ) -> WalletResult<Vec<TradingPairLiquidity>> {
         let mut trading_pairs = Vec::new();
@@ -243,7 +250,7 @@ impl LiquidityCache {
             decimals: 8,
         };
         let cbbtc = Currency {
-            chain: ChainType::Ethereum,
+            chain: evm_chain,
             token: TokenIdentifier::Address(CB_BTC_CONTRACT_ADDRESS.to_string()),
             decimals: 8,
         };
@@ -255,9 +262,14 @@ impl LiquidityCache {
             let max_amount = balance_strategy.max_output_amount(available_balance);
 
             if emit_metrics {
+                let evm_chain_str = match evm_chain {
+                    ChainType::Ethereum => "ethereum",
+                    ChainType::Base => "base",
+                    _ => "unknown",
+                };
                 metrics::gauge!(
                     "mm_available_liquidity_sats",
-                    "market" => format!("bitcoin:Native-ethereum:{}", CB_BTC_CONTRACT_ADDRESS)
+                    "market" => format!("bitcoin:Native-{}:{}", evm_chain_str, CB_BTC_CONTRACT_ADDRESS)
                 )
                 .set(available_balance.to::<u64>() as f64);
             }
@@ -276,9 +288,14 @@ impl LiquidityCache {
             let max_amount = balance_strategy.max_output_amount(available_balance);
 
             if emit_metrics {
+                let evm_chain_str = match evm_chain {
+                    ChainType::Ethereum => "ethereum",
+                    ChainType::Base => "base",
+                    _ => "unknown",
+                };
                 metrics::gauge!(
                     "mm_available_liquidity_sats",
-                    "market" => format!("ethereum:{}-bitcoin:Native", CB_BTC_CONTRACT_ADDRESS)
+                    "market" => format!("{}:{}-bitcoin:Native", evm_chain_str, CB_BTC_CONTRACT_ADDRESS)
                 )
                 .set(available_balance.to::<u64>() as f64);
             }

@@ -511,6 +511,7 @@ pub async fn run_market_maker(
         wallet_manager.clone(),
         balance_strategy.clone(),
         liquidity_lock_manager.clone(),
+        args.evm_chain,
         &mut join_set,
     ));
 
