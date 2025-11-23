@@ -192,6 +192,7 @@ pub async fn run_inventory_metrics_reporter(
 }
 
 pub async fn run_rebalancer(
+    evm_chain: ChainType,
     coinbase_client: CoinbaseClient,
     btc_wallet: Arc<dyn Wallet>,
     evm_wallet: Arc<dyn Wallet>,
@@ -263,6 +264,7 @@ pub async fn run_rebalancer(
 
                         let t0 = Instant::now();
                         convert_btc_to_cbbtc(
+                            evm_chain,
                             &coinbase_client,
                             btc_wallet.as_ref(),
                             trade_sats,
@@ -287,6 +289,7 @@ pub async fn run_rebalancer(
 
                         let t0 = Instant::now();
                         convert_cbbtc_to_btc(
+                            evm_chain,
                             &coinbase_client,
                             evm_wallet.as_ref(),
                             trade_sats,
@@ -316,6 +319,7 @@ pub async fn run_rebalancer(
 /// Send BTC from the sender's bitcoin wallet
 #[instrument(name = "convert_btc_to_cbbtc", skip(coinbase_client, sender_wallet, amount_sats, recipient_address, confirmation_poll_interval, btc_coinbase_confirmations))]
 pub async fn convert_btc_to_cbbtc(
+    evm_chain: ChainType,
     coinbase_client: &CoinbaseClient,
     sender_wallet: &dyn Wallet,
     amount_sats: u64,
@@ -398,7 +402,7 @@ pub async fn convert_btc_to_cbbtc(
     let t0 = Instant::now();
     let withdrawal_id = loop {
         let withdrawal_id = coinbase_client
-            .withdraw_bitcoin(recipient_address, &amount_sats, ChainType::Bitcoin)
+            .withdraw_bitcoin(recipient_address, &amount_sats, evm_chain)
             .await.context(CoinbaseExchangeClientSnafu);
         if let Ok(withdrawal_id) = withdrawal_id {
             break withdrawal_id;
@@ -440,6 +444,7 @@ pub async fn convert_btc_to_cbbtc(
 
 #[instrument(name = "convert_cbbtc_to_btc", skip(coinbase_client, sender_wallet, amount_sats, recipient_address, confirmation_poll_interval, cbbtc_coinbase_confirmations))]
 pub async fn convert_cbbtc_to_btc(
+    evm_chain: ChainType,
     coinbase_client: &CoinbaseClient,
     sender_wallet: &dyn Wallet,
     amount_sats: u64,
@@ -448,19 +453,20 @@ pub async fn convert_cbbtc_to_btc(
     cbbtc_coinbase_confirmations: u32,
 ) -> Result<String> {
     info!("Starting cbBTC -> BTC conversion for {} sats", amount_sats);
-    if sender_wallet.chain_type() != ChainType::Ethereum {
+    if sender_wallet.chain_type() != evm_chain {
         return InvalidConversionRequestSnafu {
             reason: "Sender wallet is not an ethereum wallet".to_string(),
         }
         .fail();
     }
+    
 
     let cbbtc = TokenIdentifier::Address(CB_BTC_CONTRACT_ADDRESS.to_string());
 
     // check if the sender wallet can fill the lot
     let lot = Lot {
         currency: Currency {
-            chain: ChainType::Ethereum,
+            chain: evm_chain,
             token: cbbtc.clone(),
             decimals: 8,
         },
@@ -486,7 +492,7 @@ pub async fn convert_cbbtc_to_btc(
     let t0 = Instant::now();
     let consolidation_summary = sender_wallet.consolidate(&Lot {
         currency: Currency {
-            chain: ChainType::Ethereum,
+            chain: evm_chain,
             token: cbbtc.clone(),
             decimals: 8,
         },
@@ -499,7 +505,7 @@ pub async fn convert_cbbtc_to_btc(
 
     // get the cbbtc deposit address
     let cbbtc_deposit_address = coinbase_client
-        .get_btc_deposit_address(&btc_account_id, ChainType::Ethereum)
+        .get_btc_deposit_address(&btc_account_id, evm_chain)
         .await.context(CoinbaseExchangeClientSnafu)?;
     info!("Got cbbtc deposit address: {}, duration: {:?}", cbbtc_deposit_address, t0.elapsed());
     // send the cbbtc to the deposit address

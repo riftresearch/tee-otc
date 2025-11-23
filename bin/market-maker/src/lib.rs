@@ -647,6 +647,7 @@ pub async fn run_market_maker(
     // Run rebalancer, even if auto manage inventory is disabled
     // b/c it's still useful to track the balance of the wallets in metrics
     let conversion_actor = run_rebalancer(
+        args.evm_chain,
         coinbase_client,
         bitcoin_wallet.clone(),
         evm_wallet.clone(),
