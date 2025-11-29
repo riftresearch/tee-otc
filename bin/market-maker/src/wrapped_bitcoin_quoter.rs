@@ -35,6 +35,17 @@ pub enum WrappedBitcoinQuoterError {
 
 type Result<T, E = WrappedBitcoinQuoterError> = std::result::Result<T, E>;
 
+/// Normalize a TokenIdentifier to lowercase for case-insensitive comparison.
+///
+/// Ethereum addresses can be represented in different cases (checksummed, lowercase, uppercase),
+/// but they all represent the same address. This function normalizes to lowercase.
+fn normalize_token(token: &TokenIdentifier) -> TokenIdentifier {
+    match token {
+        TokenIdentifier::Native => TokenIdentifier::Native,
+        TokenIdentifier::Address(addr) => TokenIdentifier::Address(addr.to_lowercase()),
+    }
+}
+
 pub struct WrappedBitcoinQuoter {
     trade_spread_bps: u64,
     wallet_registry: Arc<WalletManager>,
@@ -331,8 +342,12 @@ impl WrappedBitcoinQuoter {
             return Some("From and to chains cannot be the same".to_string());
         }
 
-        // Get the cbBTC token address for the configured chain
-        let cbbtc_token = constants::CBBTC_TOKEN.clone();
+        // Get the cbBTC token address for the configured chain (normalized to lowercase)
+        let cbbtc_token = normalize_token(&constants::CBBTC_TOKEN);
+
+        // Normalize request tokens for case-insensitive comparison
+        let from_token = normalize_token(&quote_request.from.token);
+        let to_token = normalize_token(&quote_request.to.token);
 
         // Valid swap patterns:
         // 1. Bitcoin (native) -> cbBTC on configured EVM chain
@@ -340,15 +355,15 @@ impl WrappedBitcoinQuoter {
         
         let is_btc_to_cbbtc = 
             quote_request.from.chain == ChainType::Bitcoin &&
-            quote_request.from.token == TokenIdentifier::Native &&
+            from_token == TokenIdentifier::Native &&
             quote_request.to.chain == self.configured_evm_chain &&
-            quote_request.to.token == cbbtc_token;
+            to_token == cbbtc_token;
 
         let is_cbbtc_to_btc = 
             quote_request.from.chain == self.configured_evm_chain &&
-            quote_request.from.token == cbbtc_token &&
+            from_token == cbbtc_token &&
             quote_request.to.chain == ChainType::Bitcoin &&
-            quote_request.to.token == TokenIdentifier::Native;
+            to_token == TokenIdentifier::Native;
 
         if !is_btc_to_cbbtc && !is_cbbtc_to_btc {
             return Some(format!(

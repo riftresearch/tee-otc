@@ -17,6 +17,17 @@ use tracing::{error, warn};
 const BALANCE_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
 const LIQUIDITY_COMPUTE_INTERVAL: Duration = Duration::from_secs(1);
 
+/// Normalize a TokenIdentifier to lowercase for case-insensitive lookup.
+///
+/// Ethereum addresses can be represented in different cases (checksummed, lowercase, uppercase),
+/// but they all represent the same address. This function normalizes to lowercase.
+fn normalize_token(token: &TokenIdentifier) -> TokenIdentifier {
+    match token {
+        TokenIdentifier::Native => TokenIdentifier::Native,
+        TokenIdentifier::Address(addr) => TokenIdentifier::Address(addr.to_lowercase()),
+    }
+}
+
 pub struct LiquidityCache {
     cached_data: Arc<RwLock<Vec<TradingPairLiquidity>>>,
     balance_map: Arc<RwLock<HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>>>>,
@@ -73,7 +84,8 @@ impl LiquidityCache {
                     for token in tokens {
                         match wallet.balance(token).await {
                             Ok(balance) => {
-                                token_balances.insert(token.clone(), balance);
+                                // Normalize token to lowercase for case-insensitive lookups
+                                token_balances.insert(normalize_token(token), balance);
                             }
                             Err(error) => {
                                 warn!(
@@ -180,6 +192,7 @@ impl LiquidityCache {
 
     /// Get the cached balance for a specific chain and token.
     ///
+    /// Token addresses are normalized to lowercase for case-insensitive lookup.
     /// Returns `None` if the balance is not cached or not available.
     pub async fn get_cached_balance(
         &self,
@@ -187,7 +200,8 @@ impl LiquidityCache {
         token: &TokenIdentifier,
     ) -> Option<WalletBalance> {
         let guard = self.balance_map.read().await;
-        guard.get(&chain)?.get(token).cloned()
+        let normalized_token = normalize_token(token);
+        guard.get(&chain)?.get(&normalized_token).cloned()
     }
 
     /// Get the available balance for a trading pair (cached balance minus locked amount).
@@ -313,6 +327,7 @@ impl LiquidityCache {
     /// Static helper that mimics get_available_balance_for_pair but for background task use.
     ///
     /// Gets the available balance for a trading pair (total balance - locked amount).
+    /// Token addresses are normalized to lowercase for case-insensitive lookup.
     async fn get_available_balance_static(
         from: &Currency,
         to: &Currency,
@@ -320,10 +335,12 @@ impl LiquidityCache {
         balance_map: &Arc<RwLock<HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>>>>,
     ) -> Option<U256> {
         // Get cached balance for the "to" token (what MM provides)
+        // Normalize token for case-insensitive lookup
+        let normalized_token = normalize_token(&to.token);
         let balance_guard = balance_map.read().await;
         let balance = balance_guard
             .get(&to.chain)
-            .and_then(|balances| balances.get(&to.token))?;
+            .and_then(|balances| balances.get(&normalized_token))?;
 
         // Get locked amount for this trading pair
         let locked_amount = lock_manager.get_locked_amount(from, to).await;
