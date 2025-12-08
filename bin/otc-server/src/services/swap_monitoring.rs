@@ -369,35 +369,6 @@ impl SwapMonitoringService {
                     "Deposit amount {} for swap {} is outside bounds [{}, {}]",
                     deposit.amount, swap.id, quote.min_input, quote.max_input
                 );
-                // Store the deposit info for refund purposes, but don't transition state
-                // User can request refund if they sent wrong amount
-                self.db
-                    .swaps()
-                    .update_user_deposit(swap.id, &user_deposit_status)
-                    .await
-                    .context(DatabaseSnafu)?;
-
-                // Notify MM about the invalid deposit so they're aware
-                let mm_registry = self.mm_registry.clone();
-                let market_maker_id = swap.market_maker_id;
-                let swap_id = swap.id;
-                let quote_id = swap.quote.id;
-                let user_deposit_address = swap.user_deposit_address.clone();
-                let tx_hash = deposit.tx_hash.clone();
-                let deposit_amount = deposit.amount;
-                tokio::spawn(async move {
-                    let _ = mm_registry
-                        .notify_user_deposit(
-                            &market_maker_id,
-                            &swap_id,
-                            &quote_id,
-                            &user_deposit_address,
-                            &tx_hash,
-                            deposit_amount,
-                        )
-                        .await;
-                });
-
                 return Ok(());
             }
 
