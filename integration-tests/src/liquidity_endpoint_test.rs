@@ -1,7 +1,7 @@
 use alloy::primitives::U256;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::run_market_maker;
-use otc_models::{ChainType, Currency, QuoteMode, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::time::Duration;
@@ -174,8 +174,7 @@ async fn test_liquidity_endpoint_returns_data(
     // Note: max_amount is conservative, so we add a significant margin to ensure it exceeds capacity
     let over_limit_amount = btc_to_cbbtc.max_amount + btc_to_cbbtc.max_amount / U256::from(100); // +1%
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactOutput,
-        amount: over_limit_amount,
+        input_hint: Some(over_limit_amount),
         from: btc_to_cbbtc.from.clone(),
         to: btc_to_cbbtc.to.clone(),
     };
@@ -220,8 +219,7 @@ async fn test_liquidity_endpoint_returns_data(
     // Note: max_amount is conservative, so we add a significant margin to ensure it exceeds capacity
     let over_limit_amount = cbbtc_to_btc.max_amount + cbbtc_to_btc.max_amount / U256::from(100); // +1%
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactOutput,
-        amount: over_limit_amount,
+        input_hint: Some(over_limit_amount),
         from: cbbtc_to_btc.from.clone(),
         to: cbbtc_to_btc.to.clone(),
     };
@@ -265,8 +263,7 @@ async fn test_liquidity_endpoint_returns_data(
     // Using ExactOutput to directly specify the OUTPUT amount the MM must provide
     let exact_amount = btc_to_cbbtc.max_amount;
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactOutput,
-        amount: exact_amount,
+        input_hint: Some(exact_amount),
         from: btc_to_cbbtc.from.clone(),
         to: btc_to_cbbtc.to.clone(),
     };
@@ -293,9 +290,10 @@ async fn test_liquidity_endpoint_returns_data(
     match quote_response.quote.expect("Should have a quote") {
         RFQResult::Success(quote) => {
             info!("Got successful quote for exact max amount: {:?}", quote);
-            assert_eq!(
-                quote.to.amount, exact_amount,
-                "Quote to amount should match requested output amount"
+            // In rate-based model, verify the input_hint is within bounds
+            assert!(
+                exact_amount >= quote.min_input && exact_amount <= quote.max_input,
+                "Requested amount should be within quote bounds"
             );
         }
         RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) | RFQResult::Unsupported(err) => {
@@ -307,8 +305,7 @@ async fn test_liquidity_endpoint_returns_data(
     // Using ExactOutput to directly specify the OUTPUT amount the MM must provide
     let exact_amount = cbbtc_to_btc.max_amount;
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactOutput,
-        amount: exact_amount,
+        input_hint: Some(exact_amount),
         from: cbbtc_to_btc.from.clone(),
         to: cbbtc_to_btc.to.clone(),
     };
@@ -335,9 +332,10 @@ async fn test_liquidity_endpoint_returns_data(
     match quote_response.quote.expect("Should have a quote") {
         RFQResult::Success(quote) => {
             info!("Got successful quote for exact max amount: {:?}", quote);
-            assert_eq!(
-                quote.to.amount, exact_amount,
-                "Quote to amount should match requested output amount"
+            // In rate-based model, verify the input_hint is within bounds
+            assert!(
+                exact_amount >= quote.min_input && exact_amount <= quote.max_input,
+                "Requested amount should be within quote bounds"
             );
         }
         RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) | RFQResult::Unsupported(err) => {

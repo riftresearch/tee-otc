@@ -197,10 +197,9 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
     let deposit_chain = from_currency.chain;
 
     let quote_request = QuoteRequest {
-        mode: otc_models::QuoteMode::ExactInput,
         from: from_currency,
         to: to_currency,
-        amount,
+        input_hint: Some(amount),
     };
 
     send_update(
@@ -287,8 +286,16 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
         ),
     );
 
-    let deposit_lot =
-        lot_from_response(&swap_response).context("invalid deposit lot in response")?;
+    let deposit_lot = lot_from_response(&swap_response, amount).with_context(|| {
+        format!(
+            "invalid deposit lot: amount={}, min_input={}, max_input={}, chain={}, token={}",
+            amount,
+            swap_response.min_input,
+            swap_response.max_input,
+            swap_response.deposit_chain,
+            swap_response.token
+        )
+    })?;
 
     let (tx_hash, sender_address) = if let Some(ref coordinator) = batch_coordinator {
         // Use batch coordinator
@@ -489,7 +496,7 @@ async fn create_swap(
         .context("failed to parse swap creation response")
 }
 
-fn lot_from_response(response: &CreateSwapResponse) -> Result<Lot> {
+fn lot_from_response(response: &CreateSwapResponse, deposit_amount: U256) -> Result<Lot> {
     let chain = parse_chain_type(&response.deposit_chain)?;
     let token = parse_token_identifier(&response.token);
 
@@ -499,13 +506,21 @@ fn lot_from_response(response: &CreateSwapResponse) -> Result<Lot> {
         ));
     }
 
+    // Validate the deposit amount is within bounds
+    if deposit_amount < response.min_input || deposit_amount > response.max_input {
+        return Err(anyhow!(
+            "deposit amount {} is outside allowed range [{}, {}]",
+            deposit_amount, response.min_input, response.max_input
+        ));
+    }
+
     Ok(Lot {
         currency: Currency {
             chain,
             token,
             decimals: response.decimals,
         },
-        amount: response.expected_amount,
+        amount: deposit_amount,
     })
 }
 

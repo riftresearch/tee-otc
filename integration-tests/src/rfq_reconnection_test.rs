@@ -101,8 +101,7 @@ async fn test_rfq_market_maker_reconnection_and_detection(
 
     // Verify quote request works while connected
     let quote_request = QuoteRequest {
-        mode: otc_models::QuoteMode::ExactOutput,
-        amount: U256::from(50_000_000), // 0.5 BTC in sats
+        input_hint: Some(U256::from(50_000_000)), // 0.5 BTC in sats
         to: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),

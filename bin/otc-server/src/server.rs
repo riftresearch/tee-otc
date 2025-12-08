@@ -859,6 +859,7 @@ impl MessageHandler for OTCMessageHandler {
                             swap.user_destination_address.as_str(),
                             swap.mm_nonce,
                             &swap.expected_lot,
+                            swap.protocol_fee,
                             swap.user_deposit_confirmed_at,
                         )
                         .await;

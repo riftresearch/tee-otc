@@ -1,8 +1,8 @@
 use crate::error::{OtcServerError, OtcServerResult};
 use alloy::primitives::U256;
 use otc_models::{
-    ChainType, Currency, FeeSchedule, LatestRefund, Lot, MMDepositStatus, Metadata,
-    SettlementStatus, TokenIdentifier, UserDepositStatus,
+    ChainType, Currency, LatestRefund, Lot, MMDepositStatus, Metadata, RealizedSwap,
+    SettlementStatus, SwapRates, TokenIdentifier, UserDepositStatus,
 };
 use serde_json;
 
@@ -26,6 +26,29 @@ pub fn u256_to_db(value: &U256) -> String {
 pub fn u256_from_db(s: &str) -> OtcServerResult<U256> {
     U256::from_str_radix(s, 10).map_err(|_| OtcServerError::InvalidData {
         message: format!("Invalid U256 value: {s}"),
+    })
+}
+
+/// Convert Currency to database fields (chain, token JSON, decimals)
+pub fn currency_to_db(currency: &Currency) -> OtcServerResult<(String, serde_json::Value, u8)> {
+    let chain = currency.chain.to_db_string();
+    let token = token_identifier_to_json(&currency.token)?;
+    let decimals = currency.decimals;
+    Ok((chain.to_string(), token, decimals))
+}
+
+/// Convert database fields back to Currency
+pub fn currency_from_db(
+    chain: String,
+    token: serde_json::Value,
+    decimals: u8,
+) -> OtcServerResult<Currency> {
+    Ok(Currency {
+        chain: ChainType::from_db_string(&chain).ok_or(OtcServerError::InvalidData {
+            message: format!("Invalid chain type: {chain}"),
+        })?,
+        token: token_identifier_from_json(token)?,
+        decimals,
     })
 }
 
@@ -53,6 +76,18 @@ pub fn lot_from_db(
         },
         amount: u256_from_db(&amount)?,
     })
+}
+
+pub fn swap_rates_from_db(
+    liquidity_fee_bps: i64,
+    protocol_fee_bps: i64,
+    network_fee_sats: i64,
+) -> SwapRates {
+    SwapRates::new(
+        liquidity_fee_bps as u64,
+        protocol_fee_bps as u64,
+        network_fee_sats as u64,
+    )
 }
 
 pub fn user_deposit_status_to_json(
@@ -119,15 +154,15 @@ pub fn metadata_from_json(value: serde_json::Value) -> OtcServerResult<Metadata>
     })
 }
 
-pub fn fee_schedule_to_json(schedule: &FeeSchedule) -> OtcServerResult<serde_json::Value> {
-    serde_json::to_value(schedule).map_err(|e| OtcServerError::InvalidData {
-        message: format!("Failed to serialize fee schedule: {e}"),
+pub fn realized_swap_to_json(realized: &RealizedSwap) -> OtcServerResult<serde_json::Value> {
+    serde_json::to_value(realized).map_err(|e| OtcServerError::InvalidData {
+        message: format!("Failed to serialize realized swap: {e}"),
     })
 }
 
-pub fn fee_schedule_from_json(value: serde_json::Value) -> OtcServerResult<FeeSchedule> {
+pub fn realized_swap_from_json(value: serde_json::Value) -> OtcServerResult<RealizedSwap> {
     serde_json::from_value(value).map_err(|e| OtcServerError::InvalidData {
-        message: format!("Failed to deserialize fee schedule: {e}"),
+        message: format!("Failed to deserialize realized swap: {e}"),
     })
 }
 
@@ -141,10 +176,34 @@ mod tests {
         assert_eq!(ChainType::Ethereum.to_db_string(), "ethereum");
         assert_eq!(ChainType::Base.to_db_string(), "base");
 
-        assert_eq!(ChainType::from_db_string("bitcoin").unwrap(), ChainType::Bitcoin);
-        assert_eq!(ChainType::from_db_string("ethereum").unwrap(), ChainType::Ethereum);
+        assert_eq!(
+            ChainType::from_db_string("bitcoin").unwrap(),
+            ChainType::Bitcoin
+        );
+        assert_eq!(
+            ChainType::from_db_string("ethereum").unwrap(),
+            ChainType::Ethereum
+        );
         assert_eq!(ChainType::from_db_string("base").unwrap(), ChainType::Base);
         assert!(ChainType::from_db_string("invalid").is_none());
+    }
+
+    #[test]
+    fn test_currency_conversion() {
+        let currency = Currency {
+            chain: ChainType::Bitcoin,
+            token: TokenIdentifier::Native,
+            decimals: 8,
+        };
+        let (chain, token, decimals) = currency_to_db(&currency).unwrap();
+        assert_eq!(chain, "bitcoin");
+        assert_eq!(token, serde_json::json!({ "type": "Native" }));
+        assert_eq!(decimals, 8);
+
+        let currency2 = currency_from_db(chain, token, decimals).unwrap();
+        assert_eq!(currency2.chain, currency.chain);
+        assert_eq!(currency2.token, currency.token);
+        assert_eq!(currency2.decimals, currency.decimals);
     }
 
     #[test]
@@ -167,5 +226,13 @@ mod tests {
         assert_eq!(lot2.currency.chain, lot.currency.chain);
         assert_eq!(lot2.currency.token, lot.currency.token);
         assert_eq!(lot2.amount, lot.amount);
+    }
+
+    #[test]
+    fn test_swap_rates_conversion() {
+        let rates = swap_rates_from_db(13, 10, 1000);
+        assert_eq!(rates.liquidity_fee_bps, 13);
+        assert_eq!(rates.protocol_fee_bps, 10);
+        assert_eq!(rates.network_fee_sats, 1000);
     }
 }

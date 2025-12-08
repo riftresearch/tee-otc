@@ -150,10 +150,10 @@ impl ChainOperations for EvmChain {
     async fn search_for_transfer(
         &self,
         recipient_address: &str,
-        lot: &Lot,
+        currency: &Currency,
         _from_block_height: Option<u64>,
     ) -> Result<Option<TransferInfo>> {
-        let token_address = match &lot.currency.token {
+        let token_address = match &currency.token {
             TokenIdentifier::Address(address) => address,
             TokenIdentifier::Native => return Ok(None),
         };
@@ -172,7 +172,7 @@ impl ChainOperations for EvmChain {
                 message: "Invalid address".to_string(),
             })?;
 
-        let transfer_hint = self.get_transfer(&recipient_address, &lot.amount).await?;
+        let transfer_hint = self.get_transfer(&recipient_address).await?;
         if transfer_hint.is_none() {
             return Ok(None);
         }
@@ -469,21 +469,16 @@ impl ChainOperations for EvmChain {
 }
 
 impl EvmChain {
-    // Note this function's response is safe to trust, b/c it will validate the responses from the untrusted evm_indexer_client
-    async fn get_transfer(
-        &self,
-        recipient_address: &Address,
-        amount: &U256,
-    ) -> Result<Option<TransferInfo>> {
-        debug!(
-            "Searching for transfer for address: {}, amount: {}",
-            recipient_address, amount
-        );
+    /// Search for any transfer to an address.
+    /// Returns the most confirmed transfer found (regardless of amount).
+    /// The caller is responsible for validating the amount against quote bounds.
+    async fn get_transfer(&self, recipient_address: &Address) -> Result<Option<TransferInfo>> {
+        debug!("Searching for transfer for address: {}", recipient_address);
 
         // use the untrusted evm_indexer_client to get the transfer hint - this will only return 50 latest transfers (TODO: how to handle this?)
         let transfers = self
             .evm_indexer_client
-            .get_transfers_to(*recipient_address, None, Some(*amount))
+            .get_transfers_to(*recipient_address, None, None)
             .await
             .map_err(|e| crate::Error::EVMTokenIndexerClientError {
                 source: e,
@@ -535,11 +530,6 @@ impl EvmChain {
                         "Transfer recipient is not the expected address: {:?}",
                         transfer
                     );
-                    continue;
-                }
-                // validate the amount
-                if transfer_log.inner.data.value < *amount {
-                    debug!("Transfer amount is less than expected: {:?}", transfer);
                     continue;
                 }
 

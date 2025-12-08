@@ -190,21 +190,23 @@ impl OTCMessageHandler {
                 swap_id,
                 quote_id,
                 user_tx_hash,
+                deposit_amount,
                 ..
             } => {
                 info!(
                     message = "ACK User Deposit",
                     swap_id = %swap_id,
-                    user_tx_hash = user_tx_hash
+                    user_tx_hash = user_tx_hash,
+                    deposit_amount = %deposit_amount
                 );
 
-                // Lock up funds for confirmed user deposits
+                // Lock up funds based on actual deposit amount (not max_input)
                 match self.quote_repository.get_quote(*quote_id).await {
                     Ok(quote) => {
                         let locked = LockedLiquidity {
-                            from: quote.from.currency.clone(),
-                            to: quote.to.currency.clone(),
-                            amount: quote.to.amount,
+                            from: quote.from_currency.clone(),
+                            to: quote.to_currency.clone(),
+                            amount: *deposit_amount,
                             created_at: utc::now(),
                         };
                         self.liquidity_lock_manager.lock(*swap_id, locked).await;
@@ -212,7 +214,7 @@ impl OTCMessageHandler {
                             message = "Locked liquidity for swap",
                             swap_id = %swap_id,
                             quote_id = %quote_id,
-                            amount = %quote.to.amount
+                            deposit_amount = %deposit_amount
                         );
                     }
                     Err(e) => {
@@ -235,6 +237,7 @@ impl OTCMessageHandler {
                 user_destination_address,
                 mm_nonce,
                 expected_lot,
+                protocol_fee,
                 user_deposit_confirmed_at,
                 ..
             } => {
@@ -254,6 +257,7 @@ impl OTCMessageHandler {
                         *user_deposit_confirmed_at,
                         mm_nonce,
                         expected_lot,
+                        *protocol_fee,
                     )
                     .await;
 

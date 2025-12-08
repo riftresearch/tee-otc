@@ -8,7 +8,7 @@ use bitcoin::base64::Engine;
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
 use bitcoin::{Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, Transaction};
 use bitcoincore_rpc_async::{jsonrpc, Auth, Client, RpcApi};
-use otc_models::{ChainType, Lot, TokenIdentifier, TransferInfo, TxStatus, Wallet};
+use otc_models::{ChainType, Currency, TokenIdentifier, TransferInfo, TxStatus, Wallet};
 use reqwest::Url;
 use snafu::location;
 use std::str::FromStr;
@@ -358,7 +358,7 @@ impl ChainOperations for BitcoinChain {
     async fn search_for_transfer(
         &self,
         address: &str,
-        lot: &Lot,
+        currency: &Currency,
         _from_block_height: Option<u64>,
     ) -> Result<Option<TransferInfo>> {
         debug!("Searching for transfer");
@@ -366,21 +366,21 @@ impl ChainOperations for BitcoinChain {
             tracing::Level::DEBUG,
             "search_for_transfer",
             address = address,
-            lot = format!("{:?}", lot),
+            currency = format!("{:?}", currency),
         );
         let _enter = span.enter();
 
-        if !matches!(lot.currency.chain, ChainType::Bitcoin)
-            || !matches!(lot.currency.token, otc_models::TokenIdentifier::Native)
+        if !matches!(currency.chain, ChainType::Bitcoin)
+            || !matches!(currency.token, otc_models::TokenIdentifier::Native)
         {
             return Err(crate::Error::InvalidCurrency {
-                lot: lot.clone(),
+                currency: currency.clone(),
                 network: ChainType::Bitcoin,
             });
         }
         let address = bitcoin::Address::from_str(address)?.assume_checked();
         let transfer_opt = self
-            .get_transfer_hint(address.to_string().as_str(), &lot.amount)
+            .get_transfer_hint(address.to_string().as_str())
             .await?;
         debug!("Potential transfer: {:?}", transfer_opt);
         Ok(transfer_opt)
@@ -555,12 +555,10 @@ impl ChainOperations for BitcoinChain {
 }
 
 impl BitcoinChain {
-    // The output of this function can be trusted as we validate the transfer hint against the rpc client
-    async fn get_transfer_hint(
-        &self,
-        address: &str,
-        amount: &U256,
-    ) -> Result<Option<TransferInfo>> {
+    /// Search for any transfer to an address.
+    /// Returns the most confirmed transfer found (regardless of amount).
+    /// The caller is responsible for validating the amount against quote bounds.
+    async fn get_transfer_hint(&self, address: &str) -> Result<Option<TransferInfo>> {
         let address = bitcoin::Address::from_str(address)?.assume_checked();
 
         // Called a hint b/c the esplora client CANNOT be trusted to return non-fradulent data (b/c it not intended to run locally)
@@ -583,9 +581,6 @@ impl BitcoinChain {
                 })? as u32;
         let mut most_confirmed_transfer: Option<TransferInfo> = None;
         for utxo in utxos {
-            if utxo.value < amount.to::<u64>() {
-                continue;
-            }
             // TODO: the height of the utxo should be validated against the rpc client
             let cur_utxo_confirmations =
                 current_block_height - utxo.status.block_height.unwrap_or(current_block_height);

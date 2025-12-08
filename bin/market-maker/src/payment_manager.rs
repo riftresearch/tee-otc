@@ -153,6 +153,7 @@ impl PaymentManager {
         user_deposit_confirmed_at: DateTime<Utc>,
         mm_nonce: &[u8; 16],
         expected_lot: &Lot,
+        protocol_fee: U256,
     ) -> MMResponse {
         // Validate that we have a wallet for this chain
         let wallet = self.wallet_manager.get(expected_lot.currency.chain);
@@ -225,6 +226,7 @@ impl PaymentManager {
             destination_address: user_destination_address.to_string(),
             mm_nonce: *mm_nonce,
             user_deposit_confirmed_at: Some(user_deposit_confirmed_at),
+            protocol_fee,
         };
 
         // Send to appropriate chain's channel
@@ -703,6 +705,7 @@ mod tests {
             destination_address: "dest_a".to_string(),
             mm_nonce: [1u8; 16],
             user_deposit_confirmed_at: Some(now - (threshold - ChronoDuration::seconds(5))),
+            protocol_fee: U256::from(300),
         };
 
         let ineligible_swap = Uuid::new_v4();
@@ -713,6 +716,7 @@ mod tests {
             destination_address: "dest_b".to_string(),
             mm_nonce: [2u8; 16],
             user_deposit_confirmed_at: Some(now - (threshold + ChronoDuration::seconds(5))),
+            protocol_fee: U256::from(300),
         };
 
         in_flight.insert(eligible_swap, ());

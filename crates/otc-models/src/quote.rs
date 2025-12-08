@@ -1,4 +1,4 @@
-use crate::{ChainType, FeeSchedule};
+use crate::{ChainType, SwapRates};
 use alloy::primitives::{keccak256, U256};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, Serializer};
@@ -19,12 +19,17 @@ pub struct Currency {
     pub decimals: u8,
 }
 
+/// A lot represents a specific amount of a currency.
+/// Used for tracking actual deposited/sent amounts in swaps.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Lot {
     pub currency: Currency,
     pub amount: U256,
 }
 
+/// Rate-based quote that defines the terms for a swap.
+/// Instead of fixed input/output amounts, this quote specifies rates
+/// that will be applied to any deposit within the min/max bounds.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quote {
     pub id: Uuid,
@@ -33,30 +38,31 @@ pub struct Quote {
     pub market_maker_id: Uuid,
 
     /// The currency the user will send
-    pub from: Lot,
+    pub from_currency: Currency,
 
     /// The currency the user will receive
-    pub to: Lot,
+    pub to_currency: Currency,
 
-    pub fee_schedule: FeeSchedule,
+    /// Rate parameters for computing fees
+    pub rates: SwapRates,
+
+    /// Minimum input amount allowed (in from_currency smallest unit)
+    pub min_input: U256,
+
+    /// Maximum input amount allowed (in from_currency smallest unit)
+    pub max_input: U256,
 
     /// The expiration time of the quote
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub enum QuoteMode {
-    ExactInput,
-    ExactOutput,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct QuoteRequest {
-    pub mode: QuoteMode,
     pub from: Currency,
     pub to: Currency,
-    pub amount: U256,
+    /// Optional hint for preferred input amount (used for liquidity checks)
+    pub input_hint: Option<U256>,
 }
 
 /// Serialize an f64 as its JSON number, but if it is NaN or ±Inf, serialize as `null`.
@@ -121,6 +127,11 @@ impl Quote {
             ..self.clone()
         };
         keccak256(to_canonical_json(&normalized).unwrap().as_bytes()).into()
+    }
+
+    /// Checks if the given input amount is within the allowed bounds.
+    pub fn is_valid_input(&self, amount: U256) -> bool {
+        amount >= self.min_input && amount <= self.max_input
     }
 }
 

@@ -224,6 +224,19 @@ impl LiquidityCache {
         Some(available_balance)
     }
 
+    /// Get the maximum output amount for a trading pair after applying balance strategy.
+    ///
+    /// This is consistent with what the liquidity endpoint reports.
+    /// Returns `None` if the balance is not cached or not available.
+    pub async fn get_max_output_for_pair(
+        &self,
+        from: &Currency,
+        to: &Currency,
+    ) -> Option<U256> {
+        let available_balance = self.get_available_balance_for_pair(from, to).await?;
+        Some(self.balance_strategy.max_output_amount(available_balance))
+    }
+
     /// Check if a quote can be filled for a trading pair.
     ///
     /// Returns `true` if the quote can be filled, `false` otherwise.

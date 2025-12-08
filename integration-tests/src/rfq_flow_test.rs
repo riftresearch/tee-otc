@@ -89,8 +89,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
 
     // Send a quote request (that will fail)
     let quote_request = QuoteRequest {
-        mode: otc_models::QuoteMode::ExactOutput,
-        amount: test_amount,
+        input_hint: Some(test_amount),
         to: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
@@ -169,11 +168,12 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
     // Output the latency to get the response
     tracing::info!("Quote request latency: {latency:?}");
 
-    // Now try for a quote that is barely too much
-    let test_amount = U256::from(100_000_000); // 1 BTC in sats
+    // Now try for a quote that is barely too much (exceeds max_input by a small margin)
+    // MM has ~100M sats of cbBTC, which translates to max_input of ~100.15M sats
+    // So we request slightly more than that
+    let test_amount = U256::from(100_200_000); // Slightly above max_input
     let quote_request = QuoteRequest {
-        mode: otc_models::QuoteMode::ExactOutput,
-        amount: test_amount,
+        input_hint: Some(test_amount),
         to: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
@@ -201,21 +201,21 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         .await
         .expect("Should be able to parse quote response");
 
-    // Verify the quote is Success
+    // Verify the quote fails because it exceeds max_input
     let quote = &quote_response.quote;
-    println!("Quote response for {test_amount} BTC with 1 BTC balance: {quote:?}");
+    println!("Quote response for {test_amount} sats with 1 BTC balance: {quote:?}");
 
     assert!(quote.is_some(), "Quote response should be present");
     match quote.as_ref().unwrap() {
         RFQResult::Success(quote) => {
-            panic!("Quote response for {test_amount} BTC with 1 BTC balance: {quote:?}");
+            panic!("Quote should not succeed for amount exceeding max_input: {quote:?}");
         }
         RFQResult::MakerUnavailable(reason) => {
             assert!(
                 reason.contains("Insufficient balance"),
                 "Should indicate insufficient balance, got: {reason}"
             );
-            println!("✓ Correctly rejected quote due to insufficient balance");
+            println!("✓ Correctly rejected quote that exceeds max_input");
         }
         RFQResult::InvalidRequest(reason) => {
             panic!("Quote should not be invalid request, got: {reason}");
@@ -228,8 +228,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
     // finally try for an amount that is valid
     let test_amount = U256::from(50_000_000); // 1 BTC in sats
     let quote_request = QuoteRequest {
-        mode: otc_models::QuoteMode::ExactOutput,
-        amount: test_amount,
+        input_hint: Some(test_amount),
         to: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),

@@ -1,4 +1,4 @@
-use crate::{MMDepositStatus, SettlementStatus, Swap, SwapStatus, UserDepositStatus};
+use crate::{MMDepositStatus, RealizedSwap, SettlementStatus, Swap, SwapStatus, UserDepositStatus};
 use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
 use snafu::{ensure, Snafu};
@@ -19,11 +19,13 @@ pub type TransitionResult = Result<(), TransitionError>;
 
 impl Swap {
     /// Transition when user deposit is detected
+    /// If `realized` is Some, it means the deposit was within quote bounds and amounts were computed.
     pub fn user_deposit_detected(
         &mut self,
         tx_hash: String,
         amount: U256,
         confirmations: u64,
+        realized: Option<RealizedSwap>,
     ) -> TransitionResult {
         ensure!(
             matches!(self.status, SwapStatus::WaitingUserDepositInitiated | SwapStatus::WaitingUserDepositConfirmed),
@@ -43,6 +45,7 @@ impl Swap {
             confirmed_at: None,
         });
 
+        self.realized = realized;
         self.status = SwapStatus::WaitingUserDepositConfirmed;
         self.updated_at = now;
 
@@ -259,7 +262,7 @@ impl Swap {
 mod tests {
     use std::str::FromStr;
 
-    use crate::{ChainType, Currency, FeeSchedule, Lot, Metadata, Quote, TokenIdentifier};
+    use crate::{ChainType, Currency, Metadata, Quote, SwapRates, TokenIdentifier};
 
     use super::*;
     use alloy::primitives::Address;
@@ -272,32 +275,25 @@ mod tests {
             quote: Quote {
                 id: Uuid::new_v4(),
                 market_maker_id: Uuid::new_v4(),
-                from: Lot {
-                    currency: Currency {
-                        chain: ChainType::Ethereum,
-                        token: TokenIdentifier::Native,
-                        decimals: 18,
-                    },
-                    amount: U256::from(1000000u64),
+                from_currency: Currency {
+                    chain: ChainType::Ethereum,
+                    token: TokenIdentifier::Native,
+                    decimals: 18,
                 },
-                to: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals: 8,
-                    },
-                    amount: U256::from(1000000u64),
+                to_currency: Currency {
+                    chain: ChainType::Bitcoin,
+                    token: TokenIdentifier::Native,
+                    decimals: 8,
                 },
-                fee_schedule: FeeSchedule {
-                    network_fee_sats: 120,
-                    liquidity_fee_sats: 240,
-                    protocol_fee_sats: 60,
-                },
+                rates: SwapRates::new(13, 10, 1000),
+                min_input: U256::from(10_000u64),
+                max_input: U256::from(100_000_000u64),
                 expires_at: utc::now() + Duration::hours(1),
                 created_at: utc::now(),
             },
             market_maker_id: Uuid::new_v4(),
             metadata: Metadata::default(),
+            realized: None,
             user_deposit_salt: [0u8; 32],
             user_deposit_address: "0x123".to_string(),
             mm_nonce: [0u8; 16],
@@ -324,19 +320,26 @@ mod tests {
     fn test_user_deposit_detected() {
         let mut swap = create_test_swap();
 
+        // Compute realized amounts
+        let realized = RealizedSwap::compute(1_000_000, &swap.quote.rates)
+            .expect("1M sats should produce valid output");
+
         // Valid transition
-        swap.user_deposit_detected("0xabc123".to_string(), U256::from(1000000u64), 1)
+        swap.user_deposit_detected("0xabc123".to_string(), U256::from(1000000u64), 1, Some(realized))
             .unwrap();
 
         assert_eq!(swap.status, SwapStatus::WaitingUserDepositConfirmed);
         assert!(swap.user_deposit_status.is_some());
+        assert!(swap.realized.is_some());
         assert_eq!(
             swap.user_deposit_status.as_ref().unwrap().tx_hash,
             "0xabc123"
         );
 
         // Valid transition - can replace deposit (e.g., RBF transaction)
-        let result = swap.user_deposit_detected("0xdef456".to_string(), U256::from(1000000u64), 1);
+        let new_realized = RealizedSwap::compute(1_000_000, &swap.quote.rates)
+            .expect("1M sats should produce valid output");
+        let result = swap.user_deposit_detected("0xdef456".to_string(), U256::from(1000000u64), 1, Some(new_realized));
         assert!(result.is_ok());
         assert_eq!(
             swap.user_deposit_status.as_ref().unwrap().tx_hash,
@@ -347,9 +350,11 @@ mod tests {
     #[test]
     fn test_full_happy_path() {
         let mut swap = create_test_swap();
+        let realized = RealizedSwap::compute(1_000_000, &swap.quote.rates)
+            .expect("1M sats should produce valid output");
 
         // User deposits
-        swap.user_deposit_detected("0xuser123".to_string(), U256::from(1000000u64), 1)
+        swap.user_deposit_detected("0xuser123".to_string(), U256::from(1000000u64), 1, Some(realized))
             .unwrap();
         assert_eq!(swap.status, SwapStatus::WaitingUserDepositConfirmed);
 
@@ -357,8 +362,9 @@ mod tests {
         swap.user_deposit_confirmed().unwrap();
         assert_eq!(swap.status, SwapStatus::WaitingMMDepositInitiated);
 
-        // MM deposits
-        swap.mm_deposit_detected("0xmm456".to_string(), U256::from(500000u64), 1)
+        // MM deposits (using the computed mm_output)
+        let mm_output = swap.realized.as_ref().unwrap().mm_output;
+        swap.mm_deposit_detected("0xmm456".to_string(), mm_output, 1)
             .unwrap();
         assert_eq!(swap.status, SwapStatus::WaitingMMDepositConfirmed);
 

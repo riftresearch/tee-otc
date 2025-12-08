@@ -1,3 +1,4 @@
+use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use otc_models::Lot;
@@ -125,6 +126,7 @@ impl MMRegistry {
         quote_id: &Uuid,
         user_deposit_address: &str,
         user_tx_hash: &str,
+        deposit_amount: U256,
     ) {
         if let Some(conn) = self.connections.get(market_maker_id) {
             let request = ProtocolMessage {
@@ -136,6 +138,7 @@ impl MMRegistry {
                     quote_id: *quote_id,
                     user_tx_hash: user_tx_hash.to_string(),
                     deposit_address: user_deposit_address.to_string(),
+                    deposit_amount,
                     timestamp: utc::now(),
                 },
             };
@@ -225,6 +228,7 @@ impl MMRegistry {
         user_destination_address: &str,
         mm_nonce: [u8; 16],
         expected_lot: &Lot,
+        protocol_fee: U256,
         user_deposit_confirmed_at: DateTime<Utc>,
     ) {
         if let Some(conn) = self.connections.get(market_maker_id) {
@@ -238,6 +242,7 @@ impl MMRegistry {
                     user_destination_address: user_destination_address.to_string(),
                     mm_nonce,
                     expected_lot: expected_lot.clone(),
+                    protocol_fee,
                     user_deposit_confirmed_at,
                     timestamp: utc::now(),
                 },

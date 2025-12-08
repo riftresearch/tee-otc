@@ -1,4 +1,4 @@
-use crate::{Quote, SwapStatus};
+use crate::{constants::MIN_VIABLE_OUTPUT_SATS, Quote, SwapRates, SwapStatus};
 use alloy::primitives::{Address, U256};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -8,13 +8,105 @@ pub const MM_NEVER_DEPOSITS_TIMEOUT: Duration = Duration::minutes(60 * 24); // 2
 pub const MM_DEPOSIT_NEVER_CONFIRMED_TIMEOUT: Duration = Duration::minutes(60 * 24); // 24 hours
 pub const MM_DEPOSIT_RISK_WINDOW: Duration = Duration::minutes(10); // if one of the refund cases is within this window the market maker should consider this risky
 
+/// Custom serialization for U256 that outputs decimal strings instead of hex.
+/// This is needed for database compatibility where SQL expects numeric strings.
+mod u256_decimal {
+    use alloy::primitives::U256;
+    use serde::{self, Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_str(&value.to_string())
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<U256, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        // Try parsing as decimal first, then as hex
+        s.parse::<U256>()
+            .or_else(|_| U256::from_str_radix(s.trim_start_matches("0x"), 16))
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Computed amounts when user deposit is detected and validated.
+/// These represent the exact amounts for this specific swap based on the
+/// actual deposited amount and the quote's rates.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RealizedSwap {
+    /// Actual amount the user deposited
+    #[serde(with = "u256_decimal")]
+    pub user_input: U256,
+    /// Amount the MM must send to the user
+    #[serde(with = "u256_decimal")]
+    pub mm_output: U256,
+    /// Protocol's cut (collected during settlement)
+    #[serde(with = "u256_decimal")]
+    pub protocol_fee: U256,
+    /// MM's spread/profit
+    #[serde(with = "u256_decimal")]
+    pub liquidity_fee: U256,
+    /// Fixed gas/network costs
+    #[serde(with = "u256_decimal")]
+    pub network_fee: U256,
+}
+
+impl RealizedSwap {
+    /// Compute realized swap amounts from an input and rates.
+    /// Order of fee deduction: liquidity_fee -> network_fee -> protocol_fee
+    ///
+    /// Returns `None` if the resulting output would be below `MIN_VIABLE_OUTPUT_SATS`,
+    /// which prevents dust outputs and uneconomical swaps.
+    ///
+    /// The protocol fee is always at least `rates.min_protocol_fee_sats` to ensure
+    /// the fee output is above Bitcoin's dust limit.
+    pub fn compute(input: u64, rates: &SwapRates) -> Option<Self> {
+        const BPS_DENOM: u64 = 10_000;
+
+        // 1. Deduct liquidity fee (MM spread)
+        let liquidity_fee = input.saturating_mul(rates.liquidity_fee_bps) / BPS_DENOM;
+        let after_liquidity = input.saturating_sub(liquidity_fee);
+
+        // 2. Deduct fixed network fee
+        let network_fee = rates.network_fee_sats;
+        let after_network = after_liquidity.saturating_sub(network_fee);
+
+        // 3. Deduct protocol fee (with minimum to avoid dust outputs)
+        let computed_fee = after_network.saturating_mul(rates.protocol_fee_bps) / BPS_DENOM;
+        let protocol_fee = computed_fee.max(rates.min_protocol_fee_sats);
+        let mm_output = after_network.saturating_sub(protocol_fee);
+
+        // Reject if output would be below minimum viable threshold (dust prevention)
+        if mm_output < MIN_VIABLE_OUTPUT_SATS {
+            return None;
+        }
+
+        Some(Self {
+            user_input: U256::from(input),
+            mm_output: U256::from(mm_output),
+            protocol_fee: U256::from(protocol_fee),
+            liquidity_fee: U256::from(liquidity_fee),
+            network_fee: U256::from(network_fee),
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Swap {
     pub id: Uuid,
     pub market_maker_id: Uuid,
 
+    /// The rate-based quote for this swap
     pub quote: Quote,
     pub metadata: Metadata,
+
+    /// Realized amounts computed when user deposit is detected.
+    /// None until a valid deposit is detected within quote bounds.
+    pub realized: Option<RealizedSwap>,
 
     // Salt for deterministic wallet generation when combined with the TEE master key
     pub user_deposit_salt: [u8; 32],
@@ -110,7 +202,57 @@ pub fn can_be_refunded_soon(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{ChainType, Currency, Quote, SwapRates, TokenIdentifier};
+    use alloy::primitives::{Address, U256};
     use chrono::Duration;
+
+    fn make_test_quote() -> Quote {
+        Quote {
+            id: uuid::Uuid::new_v4(),
+            market_maker_id: uuid::Uuid::new_v4(),
+            from_currency: Currency {
+                chain: ChainType::Bitcoin,
+                token: TokenIdentifier::Native,
+                decimals: 8,
+            },
+            to_currency: Currency {
+                chain: ChainType::Ethereum,
+                token: TokenIdentifier::Native,
+                decimals: 8,
+            },
+            rates: SwapRates::new(13, 10, 1000),
+            min_input: U256::from(10_000u64),
+            max_input: U256::from(100_000_000u64),
+            expires_at: utc::now() + Duration::hours(1),
+            created_at: utc::now(),
+        }
+    }
+
+    fn make_test_swap(status: SwapStatus) -> Swap {
+        Swap {
+            id: uuid::Uuid::new_v4(),
+            market_maker_id: uuid::Uuid::new_v4(),
+            quote: make_test_quote(),
+            metadata: Metadata::default(),
+            realized: None,
+            user_deposit_salt: [0u8; 32],
+            user_deposit_address: "test_address".to_string(),
+            mm_nonce: [0u8; 16],
+            user_destination_address: "0x1234".to_string(),
+            user_evm_account_address: Address::ZERO,
+            status,
+            user_deposit_status: None,
+            mm_deposit_status: None,
+            settlement_status: None,
+            latest_refund: None,
+            failure_reason: None,
+            failure_at: None,
+            mm_notified_at: None,
+            mm_private_key_sent_at: None,
+            created_at: utc::now(),
+            updated_at: utc::now(),
+        }
+    }
 
     #[test]
     fn detects_near_refund_windows_for_user_deposits() {
@@ -166,58 +308,7 @@ mod tests {
 
     #[test]
     fn allows_immediate_refund_for_insufficient_deposit() {
-        use crate::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
-        use alloy::primitives::{Address, U256};
-
-        // Create a minimal swap in WaitingUserDepositInitiated state
-        let swap = Swap {
-            id: uuid::Uuid::new_v4(),
-            market_maker_id: uuid::Uuid::new_v4(),
-            quote: Quote {
-                id: uuid::Uuid::new_v4(),
-                from: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals: 8,
-                    },
-                    amount: U256::from(10_000_000u64), // 0.1 BTC
-                },
-                to: Lot {
-                    currency: Currency {
-                        chain: ChainType::Ethereum,
-                        token: TokenIdentifier::Native,
-                        decimals: 18,
-                    },
-                    amount: U256::from(500000000000000000u64),
-                },
-                fee_schedule: FeeSchedule {
-                    network_fee_sats: 1000,
-                    liquidity_fee_sats: 2000,
-                    protocol_fee_sats: 500,
-                },
-                market_maker_id: uuid::Uuid::new_v4(),
-                expires_at: utc::now() + Duration::hours(1),
-                created_at: utc::now(),
-            },
-            metadata: Metadata::default(),
-            user_deposit_salt: [0u8; 32],
-            user_deposit_address: "test_address".to_string(),
-            mm_nonce: [0u8; 16],
-            user_destination_address: "0x1234".to_string(),
-            user_evm_account_address: Address::ZERO,
-            status: SwapStatus::WaitingUserDepositInitiated,
-            user_deposit_status: None, // No deposit detected yet, or insufficient
-            mm_deposit_status: None,
-            settlement_status: None,
-            latest_refund: None,
-            failure_reason: None,
-            failure_at: None,
-            mm_notified_at: None,
-            mm_private_key_sent_at: None,
-            created_at: utc::now(),
-            updated_at: utc::now(),
-        };
+        let swap = make_test_swap(SwapStatus::WaitingUserDepositInitiated);
 
         // Should allow immediate refund without any time constraints
         let refund_reason = swap.can_be_refunded();
@@ -230,76 +321,21 @@ mod tests {
             RefundSwapReason::UserInitiatedEarlyRefund => {
                 // This is the expected reason
             }
-            other => panic!(
-                "Expected UserInitiatedEarlyRefund, got {:?}",
-                other
-            ),
+            other => panic!("Expected UserInitiatedEarlyRefund, got {:?}", other),
         }
     }
 
     #[test]
     fn early_refund_does_not_require_timeout() {
-        use crate::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
-        use alloy::primitives::{Address, U256};
-
-        // Create a swap that was just created (no time elapsed)
-        let swap = Swap {
-            id: uuid::Uuid::new_v4(),
-            market_maker_id: uuid::Uuid::new_v4(),
-            quote: Quote {
-                id: uuid::Uuid::new_v4(),
-                from: Lot {
-                    currency: Currency {
-                        chain: ChainType::Ethereum,
-                        token: TokenIdentifier::Address(
-                            "0x0000000000000000000000000000000000000001".to_string()
-                        ),
-                        decimals: 8,
-                    },
-                    amount: U256::from(1_000_000u64), // 1 token
-                },
-                to: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals: 8,
-                    },
-                    amount: U256::from(950_000u64),
-                },
-                fee_schedule: FeeSchedule {
-                    network_fee_sats: 1000,
-                    liquidity_fee_sats: 2000,
-                    protocol_fee_sats: 500,
-                },
-                market_maker_id: uuid::Uuid::new_v4(),
-                expires_at: utc::now() + Duration::hours(1),
-                created_at: utc::now(),
-            },
-            metadata: Metadata::default(),
-            user_deposit_salt: [0u8; 32],
-            user_deposit_address: "0xdeposit".to_string(),
-            mm_nonce: [0u8; 16],
-            user_destination_address: "bc1qtest".to_string(),
-            user_evm_account_address: Address::ZERO,
-            status: SwapStatus::WaitingUserDepositInitiated,
-            user_deposit_status: Some(UserDepositStatus {
-                tx_hash: "0xtxhash".to_string(),
-                amount: U256::from(999_999u64), // Insufficient by 1 unit
-                deposit_detected_at: utc::now(), // Just now
-                confirmations: 0,
-                last_checked: utc::now(),
-                confirmed_at: None,
-            }),
-            mm_deposit_status: None,
-            settlement_status: None,
-            latest_refund: None,
-            failure_reason: None,
-            failure_at: None,
-            mm_notified_at: None,
-            mm_private_key_sent_at: None,
-            created_at: utc::now(),
-            updated_at: utc::now(),
-        };
+        let mut swap = make_test_swap(SwapStatus::WaitingUserDepositInitiated);
+        swap.user_deposit_status = Some(UserDepositStatus {
+            tx_hash: "0xtxhash".to_string(),
+            amount: U256::from(999_999u64),
+            deposit_detected_at: utc::now(),
+            confirmations: 0,
+            last_checked: utc::now(),
+            confirmed_at: None,
+        });
 
         // Even though this swap was just created (no timeout), it should still be
         // immediately refundable because it's in WaitingUserDepositInitiated state
@@ -320,65 +356,15 @@ mod tests {
 
     #[test]
     fn waiting_user_deposit_confirmed_with_zero_confirmations_can_refund() {
-        use crate::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
-        use alloy::primitives::{Address, U256};
-
-        // Create a swap in WaitingUserDepositConfirmed state with 0 confirmations
-        let swap = Swap {
-            id: uuid::Uuid::new_v4(),
-            market_maker_id: uuid::Uuid::new_v4(),
-            quote: Quote {
-                id: uuid::Uuid::new_v4(),
-                from: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals: 8,
-                    },
-                    amount: U256::from(1_000_000u64),
-                },
-                to: Lot {
-                    currency: Currency {
-                        chain: ChainType::Ethereum,
-                        token: TokenIdentifier::Native,
-                        decimals: 18,
-                    },
-                    amount: U256::from(500000000000000000u64),
-                },
-                fee_schedule: FeeSchedule {
-                    network_fee_sats: 1000,
-                    liquidity_fee_sats: 2000,
-                    protocol_fee_sats: 500,
-                },
-                market_maker_id: uuid::Uuid::new_v4(),
-                expires_at: utc::now() + Duration::hours(1),
-                created_at: utc::now(),
-            },
-            metadata: Metadata::default(),
-            user_deposit_salt: [0u8; 32],
-            user_deposit_address: "bc1qtest".to_string(),
-            mm_nonce: [0u8; 16],
-            user_destination_address: "0x1234".to_string(),
-            user_evm_account_address: Address::ZERO,
-            status: SwapStatus::WaitingUserDepositConfirmed,
-            user_deposit_status: Some(UserDepositStatus {
-                tx_hash: "txhash123".to_string(),
-                amount: U256::from(1_000_000u64),
-                deposit_detected_at: utc::now(),
-                confirmations: 0, // Zero confirmations - may have been dropped
-                last_checked: utc::now(),
-                confirmed_at: None,
-            }),
-            mm_deposit_status: None,
-            settlement_status: None,
-            latest_refund: None,
-            failure_reason: None,
-            failure_at: None,
-            mm_notified_at: None,
-            mm_private_key_sent_at: None,
-            created_at: utc::now(),
-            updated_at: utc::now(),
-        };
+        let mut swap = make_test_swap(SwapStatus::WaitingUserDepositConfirmed);
+        swap.user_deposit_status = Some(UserDepositStatus {
+            tx_hash: "txhash123".to_string(),
+            amount: U256::from(1_000_000u64),
+            deposit_detected_at: utc::now(),
+            confirmations: 0,
+            last_checked: utc::now(),
+            confirmed_at: None,
+        });
 
         // Should allow refund since transaction has 0 confirmations
         let refund_reason = swap.can_be_refunded();
@@ -398,72 +384,70 @@ mod tests {
 
     #[test]
     fn waiting_user_deposit_confirmed_with_confirmations_can_refund() {
-        use crate::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
-        use alloy::primitives::{Address, U256};
+        let mut swap = make_test_swap(SwapStatus::WaitingUserDepositConfirmed);
+        swap.user_deposit_status = Some(UserDepositStatus {
+            tx_hash: "txhash123".to_string(),
+            amount: U256::from(1_000_000u64),
+            deposit_detected_at: utc::now(),
+            confirmations: 2,
+            last_checked: utc::now(),
+            confirmed_at: None,
+        });
 
-        // Create a swap in WaitingUserDepositConfirmed state with 2 confirmations
-        let swap = Swap {
-            id: uuid::Uuid::new_v4(),
-            market_maker_id: uuid::Uuid::new_v4(),
-            quote: Quote {
-                id: uuid::Uuid::new_v4(),
-                from: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals: 8,
-                    },
-                    amount: U256::from(1_000_000u64),
-                },
-                to: Lot {
-                    currency: Currency {
-                        chain: ChainType::Ethereum,
-                        token: TokenIdentifier::Native,
-                        decimals: 18,
-                    },
-                    amount: U256::from(500000000000000000u64),
-                },
-                fee_schedule: FeeSchedule {
-                    network_fee_sats: 1000,
-                    liquidity_fee_sats: 2000,
-                    protocol_fee_sats: 500,
-                },
-                market_maker_id: uuid::Uuid::new_v4(),
-                expires_at: utc::now() + Duration::hours(1),
-                created_at: utc::now(),
-            },
-            metadata: Metadata::default(),
-            user_deposit_salt: [0u8; 32],
-            user_deposit_address: "bc1qtest".to_string(),
-            mm_nonce: [0u8; 16],
-            user_destination_address: "0x1234".to_string(),
-            user_evm_account_address: Address::ZERO,
-            status: SwapStatus::WaitingUserDepositConfirmed,
-            user_deposit_status: Some(UserDepositStatus {
-                tx_hash: "txhash123".to_string(),
-                amount: U256::from(1_000_000u64),
-                deposit_detected_at: utc::now(),
-                confirmations: 2, // Has confirmations - transaction is progressing
-                last_checked: utc::now(),
-                confirmed_at: None,
-            }),
-            mm_deposit_status: None,
-            settlement_status: None,
-            latest_refund: None,
-            failure_reason: None,
-            failure_at: None,
-            mm_notified_at: None,
-            mm_private_key_sent_at: None,
-            created_at: utc::now(),
-            updated_at: utc::now(),
-        };
-
-        // Should NOT allow refund since transaction has confirmations and is progressing
         let refund_reason = swap.can_be_refunded();
         assert!(
             refund_reason.is_some(),
             "Swap in WaitingUserDepositConfirmed with confirmations should be refundable"
         );
+    }
+
+    #[test]
+    fn realized_swap_computation() {
+        let rates = SwapRates::new(13, 10, 1000); // 0.13% liquidity, 0.10% protocol, 1000 sats network
+        let input = 1_000_000u64; // 1M sats
+
+        let realized = RealizedSwap::compute(input, &rates).expect("should produce valid output");
+
+        // liquidity_fee = 1_000_000 * 13 / 10000 = 1300
+        assert_eq!(realized.liquidity_fee, U256::from(1300u64));
+
+        // after_liquidity = 1_000_000 - 1300 = 998_700
+        // after_network = 998_700 - 1000 = 997_700
+        assert_eq!(realized.network_fee, U256::from(1000u64));
+
+        // protocol_fee = 997_700 * 10 / 10000 = 997
+        assert_eq!(realized.protocol_fee, U256::from(997u64));
+
+        // mm_output = 997_700 - 997 = 996_703
+        assert_eq!(realized.mm_output, U256::from(996_703u64));
+
+        assert_eq!(realized.user_input, U256::from(input));
+    }
+
+    #[test]
+    fn realized_swap_rejects_dust_output() {
+        use crate::constants::MIN_VIABLE_OUTPUT_SATS;
+        
+        let rates = SwapRates::new(13, 10, 1000); // 0.13% liquidity, 0.10% protocol, 1000 sats network
+        
+        // Input that would result in output below MIN_VIABLE_OUTPUT_SATS
+        // With network_fee=1000 and min_protocol_fee=300, we need at least ~1846 sats to get 546 output
+        let tiny_input = 1_500u64;
+        assert!(
+            RealizedSwap::compute(tiny_input, &rates).is_none(),
+            "Should reject inputs that result in dust output"
+        );
+
+        // Verify boundary: find an input that just barely produces viable output
+        let viable_input = 2_000u64;
+        let realized = RealizedSwap::compute(viable_input, &rates);
+        if let Some(r) = realized {
+            assert!(
+                r.mm_output >= U256::from(MIN_VIABLE_OUTPUT_SATS),
+                "Output {} should be at least {}",
+                r.mm_output, MIN_VIABLE_OUTPUT_SATS
+            );
+        }
     }
 }
 
@@ -481,7 +465,7 @@ impl Swap {
             return Some(RefundSwapReason::UserInitiatedEarlyRefund);
         }
 
-        if self.status == SwapStatus::RefundingUser { 
+        if self.status == SwapStatus::RefundingUser {
             return Some(RefundSwapReason::UserInitiatedRefundAgain);
         }
 
@@ -497,12 +481,13 @@ impl Swap {
         match &self.mm_deposit_status {
             None => {
                 // Status is WaitingMMDepositInitiated - MM never initiated deposit
-                let user_deposit = self.user_deposit_status.as_ref().expect(
-                    "User deposit must exist if we reached WaitingMMDepositInitiated"
-                );
-                let user_deposit_confirmed_at = user_deposit.confirmed_at.expect(
-                    "User deposit must be confirmed if we are in WaitingMMDepositInitiated"
-                );
+                let user_deposit = self
+                    .user_deposit_status
+                    .as_ref()
+                    .expect("User deposit must exist if we reached WaitingMMDepositInitiated");
+                let user_deposit_confirmed_at = user_deposit
+                    .confirmed_at
+                    .expect("User deposit must be confirmed if we are in WaitingMMDepositInitiated");
                 let now = utc::now();
                 let diff = now - user_deposit_confirmed_at;
                 if diff > MM_NEVER_DEPOSITS_TIMEOUT {

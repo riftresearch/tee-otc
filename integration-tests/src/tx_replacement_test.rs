@@ -10,7 +10,7 @@ use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::db::{BroadcastedTransactionRepository, Database};
 use market_maker::{bitcoin_wallet::BitcoinWallet, evm_wallet::EVMWallet, run_market_maker, wallet::Wallet};
 use otc_chains::traits::Payment;
-use otc_models::{ChainType, Currency, Lot, QuoteMode, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::{
     api::{CreateSwapRequest, CreateSwapResponse},
@@ -191,8 +191,7 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
 
     // Request a quote
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: U256::from(10_000_000), // 0.1 BTC
+        input_hint: Some(U256::from(10_000_000)), // 0.1 BTC
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -239,7 +238,7 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
     let CreateSwapResponse {
         swap_id,
         deposit_address,
-        expected_amount,
+        min_input,
         decimals,
         ..
     } = swap_response.json().await.unwrap();
@@ -256,7 +255,7 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
                         token: TokenIdentifier::Native,
                         decimals,
                     },
-                    amount: expected_amount,
+                    amount: min_input,
                 },
                 to_address: deposit_address.clone(),
             }],
@@ -300,7 +299,7 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
                         token: TokenIdentifier::Native,
                         decimals,
                     },
-                    amount: expected_amount,
+                    amount: min_input,
                 },
                 to_address: deposit_address.clone(),
             }],

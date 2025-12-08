@@ -1,6 +1,6 @@
 use crate::mm_registry::RfqMMRegistry;
 use futures_util::future;
-use otc_models::{Quote, QuoteMode, QuoteRequest};
+use otc_models::{Quote, QuoteRequest};
 use otc_protocols::rfq::{RFQResponse, RFQResult};
 use snafu::Snafu;
 use std::sync::Arc;
@@ -51,10 +51,9 @@ impl QuoteAggregator {
 
         info!(
             request_id = %request_id,
-            mode = ?request.mode,
             from_chain = ?request.from.chain,
-            from_amount = %request.amount,
             to_chain = ?request.to.chain,
+            input_hint = ?request.input_hint,
             "Starting quote aggregation"
         );
 
@@ -95,23 +94,15 @@ impl QuoteAggregator {
             "Collected quotes from market makers"
         );
 
-        // Select the best quote (highest output amount)
-        let best_success_quote = match request.mode {
-            QuoteMode::ExactInput => quotes
-                .iter()
-                .filter_map(|q| match q {
-                    RFQResult::Success(quote) => Some(quote),
-                    _ => None,
-                })
-                .max_by_key(|q| q.to.amount),
-            QuoteMode::ExactOutput => quotes
-                .iter()
-                .filter_map(|q| match q {
-                    RFQResult::Success(quote) => Some(quote),
-                    _ => None,
-                })
-                .max_by_key(|q| q.from.amount),
-        };
+        // Select the best quote (lowest total fees = liquidity_fee_bps + protocol_fee_bps)
+        // In a rate-based system, the best quote has the lowest fee rates
+        let best_success_quote = quotes
+            .iter()
+            .filter_map(|q| match q {
+                RFQResult::Success(quote) => Some(quote),
+                _ => None,
+            })
+            .min_by_key(|q| q.rates.liquidity_fee_bps + q.rates.protocol_fee_bps);
 
         // Relevant fail quote - prioritize InvalidRequest over MakerUnavailable
         // Note: Unsupported responses are silently ignored as they're not actionable by the user
@@ -205,9 +196,8 @@ impl QuoteAggregator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::U256;
     use otc_models::Currency;
-    use otc_models::{ChainType, QuoteMode, TokenIdentifier};
+    use otc_models::{ChainType, TokenIdentifier};
 
     #[tokio::test]
     async fn test_no_market_makers() {
@@ -215,7 +205,6 @@ mod tests {
         let aggregator = QuoteAggregator::new(registry, 5);
 
         let request = QuoteRequest {
-            mode: QuoteMode::ExactInput,
             from: Currency {
                 chain: ChainType::Bitcoin,
                 token: TokenIdentifier::Native,
@@ -226,7 +215,7 @@ mod tests {
                 token: TokenIdentifier::Native,
                 decimals: 18,
             },
-            amount: U256::from(100_000u64),
+            input_hint: None,
         };
 
         let result = aggregator.request_quotes(request).await;

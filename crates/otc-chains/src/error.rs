@@ -1,5 +1,5 @@
 use alloy::primitives::U256;
-use otc_models::{ChainType, Lot};
+use otc_models::{ChainType, Currency};
 use snafu::{prelude::*, Location};
 
 #[derive(Debug, Snafu)]
@@ -42,8 +42,11 @@ pub enum Error {
         loc: Location,
     },
 
-    #[snafu(display("Invalid lot for network {network:?}: {lot:?}"))]
-    InvalidCurrency { lot: Lot, network: ChainType },
+    #[snafu(display("Invalid currency for network {network:?}: {currency:?}"))]
+    InvalidCurrency {
+        currency: Currency,
+        network: ChainType,
+    },
 
     #[snafu(display("Transaction not found: {tx_hash}"))]
     TransactionNotFound { tx_hash: String },

@@ -5,7 +5,7 @@ use bitcoincore_rpc_async::RpcApi;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, wallet::Wallet};
 use otc_chains::traits::Payment;
-use otc_models::{ChainType, Currency, Lot, QuoteMode, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::{
     swaps::{RefundPayload, RefundSwapRequest, RefundSwapResponse},
@@ -159,8 +159,7 @@ async fn test_insufficient_bitcoin_deposit_refund(
 
     // Request a quote
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: U256::from(10_000_000), // 0.1 BTC
+        input_hint: Some(U256::from(10_000_000)), // 0.1 BTC
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -214,11 +213,11 @@ async fn test_insufficient_bitcoin_deposit_refund(
     };
 
     // Send INSUFFICIENT funds (expected_amount - 1 satoshi)
-    let insufficient_amount = response_json.expected_amount - U256::from(1);
+    let insufficient_amount = response_json.min_input - U256::from(1);
     
     info!(
         "Sending insufficient amount: {} (expected: {})",
-        insufficient_amount, response_json.expected_amount
+        insufficient_amount, response_json.min_input
     );
 
     let tx_hash = user_bitcoin_wallet
@@ -492,8 +491,7 @@ async fn test_insufficient_evm_deposit_refund(
 
     // Request a quote where user deposits cbBTC on Ethereum
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: one_cbbtc,
+        input_hint: Some(one_cbbtc),
         from: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
@@ -547,11 +545,11 @@ async fn test_insufficient_evm_deposit_refund(
     };
 
     // Send INSUFFICIENT funds (expected_amount - 1 wei)
-    let insufficient_amount = response_json.expected_amount - U256::from(1);
+    let insufficient_amount = response_json.min_input - U256::from(1);
 
     info!(
         "Sending insufficient amount: {} (expected: {})",
-        insufficient_amount, response_json.expected_amount
+        insufficient_amount, response_json.min_input
     );
 
     // Setup user provider and token contract

@@ -77,56 +77,26 @@ impl QuoteBalanceStrategy {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use otc_models::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
-    use uuid::Uuid;
-
-    fn create_test_quote(amount: u64) -> Quote {
-        let currency = Currency {
-            chain: ChainType::Bitcoin,
-            token: TokenIdentifier::Native,
-            decimals: 8,
-        };
-
-        Quote {
-            id: Uuid::new_v4(),
-            market_maker_id: Uuid::new_v4(),
-            from: Lot {
-                currency: currency.clone(),
-                amount: U256::from(amount / 2),
-            },
-            to: Lot {
-                currency,
-                amount: U256::from(amount),
-            },
-            fee_schedule: FeeSchedule {
-                network_fee_sats: 50,
-                liquidity_fee_sats: 75,
-                protocol_fee_sats: 25,
-            },
-            expires_at: utc::now(),
-            created_at: utc::now(),
-        }
-    }
 
     #[test]
     fn test_strategy_threshold_enforcement() {
         let strategy = QuoteBalanceStrategy::new(5_000); // 50% threshold
-        let quote = create_test_quote(1000);
+        let output_amount = U256::from(1000);
 
         // Should accept when utilization is under threshold
         let balance = U256::from(3000); // 1000/3000 = 33.3% < 50%
-        assert!(strategy.can_fill_quote(quote.to.amount, balance));
+        assert!(strategy.can_fill_quote(output_amount, balance));
 
         // Should reject when utilization exceeds threshold
         let balance = U256::from(1500); // 1000/1500 = 66.7% > 50%
-        assert!(!strategy.can_fill_quote(quote.to.amount, balance));
+        assert!(!strategy.can_fill_quote(output_amount, balance));
 
         // Boundary: exactly at threshold should pass
         let balance = U256::from(2000); // 1000/2000 = 50.0% == 50%
-        assert!(strategy.can_fill_quote(quote.to.amount, balance));
+        assert!(strategy.can_fill_quote(output_amount, balance));
 
         // Should reject zero balance
-        assert!(!strategy.can_fill_quote(quote.to.amount, U256::ZERO));
+        assert!(!strategy.can_fill_quote(output_amount, U256::ZERO));
     }
 
     #[test]

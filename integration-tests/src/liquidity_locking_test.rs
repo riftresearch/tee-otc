@@ -5,7 +5,7 @@ use market_maker::run_market_maker;
 use market_maker::{bitcoin_wallet::BitcoinWallet, wallet::Wallet, MarketMakerArgs};
 use mock_instant::global::MockClock;
 use otc_chains::traits::Payment;
-use otc_models::{ChainType, Currency, Lot, QuoteMode, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::{
     api::{CreateSwapRequest, CreateSwapResponse},
@@ -159,8 +159,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
     let swap_amount = U256::from(1_000_000); // 0.01 BTC in sats (small amount)
 
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: swap_amount,
+        input_hint: Some(swap_amount),
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -191,8 +190,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
         _ => panic!("Should get successful quote"),
     };
 
-    info!("Got quote: to.amount = {}", quote.to.amount);
-    let expected_cbbtc_output = quote.to.amount;
+    info!("Got quote: min_input = {}, max_input = {}", quote.min_input, quote.max_input);
 
     // Create swap
     let swap_request = CreateSwapRequest {
@@ -239,7 +237,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
                         token: TokenIdentifier::Native,
                         decimals: swap_response.decimals,
                     },
-                    amount: swap_response.expected_amount,
+                    amount: swap_response.min_input,
                 },
                 to_address: swap_response.deposit_address,
             }],
@@ -316,8 +314,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
     // This should fail or return reduced quote
     info!("=== Step 5: Testing quote request respects locked liquidity ===");
     let large_quote_request = QuoteRequest {
-        mode: QuoteMode::ExactOutput,
-        amount: max_amount_after_lock + U256::from(1), // Try to exceed available
+        input_hint: Some(max_amount_after_lock + U256::from(1)), // Try to exceed available
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,

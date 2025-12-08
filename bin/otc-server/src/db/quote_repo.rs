@@ -5,7 +5,7 @@ use uuid::Uuid;
 
 use crate::error::OtcServerResult;
 
-use super::conversions::{fee_schedule_to_json, lot_to_db};
+use super::conversions::{currency_to_db, u256_to_db};
 use super::row_mappers::FromRow;
 
 #[derive(Clone)]
@@ -19,34 +19,38 @@ impl QuoteRepository {
     }
 
     pub async fn create(&self, quote: &Quote) -> OtcServerResult<()> {
-        let (from_chain, from_token, from_amount, from_decimals) = lot_to_db(&quote.from)?;
-        let (to_chain, to_token, to_amount, to_decimals) = lot_to_db(&quote.to)?;
-        let fee_schedule_json = fee_schedule_to_json(&quote.fee_schedule)?;
+        let (from_chain, from_token, from_decimals) = currency_to_db(&quote.from_currency)?;
+        let (to_chain, to_token, to_decimals) = currency_to_db(&quote.to_currency)?;
+        let min_input = u256_to_db(&quote.min_input);
+        let max_input = u256_to_db(&quote.max_input);
 
         sqlx::query(
             r#"
             INSERT INTO quotes (
                 id, 
-                from_chain, from_token, from_amount, from_decimals,
-                to_chain, to_token, to_amount, to_decimals,
-                fee_schedule,
+                from_chain, from_token, from_decimals,
+                to_chain, to_token, to_decimals,
+                liquidity_fee_bps, protocol_fee_bps, network_fee_sats,
+                min_input, max_input,
                 market_maker_id, 
                 expires_at, 
                 created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
             "#,
         )
         .bind(quote.id)
         .bind(from_chain)
         .bind(from_token)
-        .bind(from_amount)
         .bind(from_decimals as i16)
         .bind(to_chain)
         .bind(to_token)
-        .bind(to_amount)
         .bind(to_decimals as i16)
-        .bind(fee_schedule_json)
+        .bind(quote.rates.liquidity_fee_bps as i64)
+        .bind(quote.rates.protocol_fee_bps as i64)
+        .bind(quote.rates.network_fee_sats as i64)
+        .bind(min_input)
+        .bind(max_input)
         .bind(quote.market_maker_id)
         .bind(quote.expires_at)
         .bind(quote.created_at)
@@ -61,9 +65,10 @@ impl QuoteRepository {
             r#"
             SELECT 
                 id,
-                from_chain, from_token, from_amount, from_decimals,
-                to_chain, to_token, to_amount, to_decimals,
-                fee_schedule,
+                from_chain, from_token, from_decimals,
+                to_chain, to_token, to_decimals,
+                liquidity_fee_bps, protocol_fee_bps, network_fee_sats,
+                min_input, max_input,
                 market_maker_id,
                 expires_at,
                 created_at
@@ -88,9 +93,10 @@ impl QuoteRepository {
             r#"
             SELECT 
                 id,
-                from_chain, from_token, from_amount, from_decimals,
-                to_chain, to_token, to_amount, to_decimals,
-                fee_schedule,
+                from_chain, from_token, from_decimals,
+                to_chain, to_token, to_decimals,
+                liquidity_fee_bps, protocol_fee_bps, network_fee_sats,
+                min_input, max_input,
                 market_maker_id,
                 expires_at,
                 created_at
@@ -120,9 +126,10 @@ impl QuoteRepository {
             r#"
             SELECT 
                 id,
-                from_chain, from_token, from_amount, from_decimals,
-                to_chain, to_token, to_amount, to_decimals,
-                fee_schedule,
+                from_chain, from_token, from_decimals,
+                to_chain, to_token, to_decimals,
+                liquidity_fee_bps, protocol_fee_bps, network_fee_sats,
+                min_input, max_input,
                 market_maker_id,
                 expires_at,
                 created_at
@@ -166,7 +173,7 @@ mod tests {
     use crate::db::Database;
     use alloy::primitives::U256;
     use chrono::Duration;
-    use otc_models::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
+    use otc_models::{ChainType, Currency, Quote, SwapRates, TokenIdentifier};
     use uuid::Uuid;
 
     #[sqlx::test]
@@ -175,31 +182,25 @@ mod tests {
         let db = Database::from_pool(pool.clone()).await.unwrap();
         let quote_repo = db.quotes();
 
-        // Create a test quote
+        // Create a test quote with rate-based pricing
         let original_quote = Quote {
             id: Uuid::new_v4(),
-            from: Lot {
-                currency: Currency {
-                    chain: ChainType::Bitcoin,
-                    token: TokenIdentifier::Native,
-                    decimals: 8,
-                },
-                amount: U256::from(1000000u64), // 0.01 BTC in sats
-            },
-            to: Lot {
-                currency: Currency {
-                    chain: ChainType::Ethereum,
-                    token: TokenIdentifier::Native,
-                    decimals: 18,
-                },
-                amount: U256::from(500000000000000000u64), // 0.5 ETH in wei
-            },
-            fee_schedule: FeeSchedule {
-                network_fee_sats: 1000,
-                liquidity_fee_sats: 2000,
-                protocol_fee_sats: 500,
-            },
             market_maker_id: Uuid::new_v4(),
+            from_currency: Currency {
+                chain: ChainType::Bitcoin,
+                token: TokenIdentifier::Native,
+                decimals: 8,
+            },
+            to_currency: Currency {
+                chain: ChainType::Ethereum,
+                token: TokenIdentifier::Address(
+                    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
+                ),
+                decimals: 8,
+            },
+            rates: SwapRates::new(13, 10, 1000),
+            min_input: U256::from(10_000u64),
+            max_input: U256::from(100_000_000u64),
             expires_at: utc::now() + Duration::minutes(10),
             created_at: utc::now(),
         };
@@ -219,26 +220,41 @@ mod tests {
 
         // Validate from currency
         assert_eq!(
-            retrieved_quote.from.currency.chain,
-            original_quote.from.currency.chain
+            retrieved_quote.from_currency.chain,
+            original_quote.from_currency.chain
         );
         assert_eq!(
-            retrieved_quote.from.currency.token,
-            original_quote.from.currency.token
+            retrieved_quote.from_currency.token,
+            original_quote.from_currency.token
         );
-        assert_eq!(retrieved_quote.from.amount, original_quote.from.amount);
 
         // Validate to currency
         assert_eq!(
-            retrieved_quote.to.currency.chain,
-            original_quote.to.currency.chain
+            retrieved_quote.to_currency.chain,
+            original_quote.to_currency.chain
         );
         assert_eq!(
-            retrieved_quote.to.currency.token,
-            original_quote.to.currency.token
+            retrieved_quote.to_currency.token,
+            original_quote.to_currency.token
         );
-        assert_eq!(retrieved_quote.to.amount, original_quote.to.amount);
-        assert_eq!(retrieved_quote.fee_schedule, original_quote.fee_schedule);
+
+        // Validate rates
+        assert_eq!(
+            retrieved_quote.rates.liquidity_fee_bps,
+            original_quote.rates.liquidity_fee_bps
+        );
+        assert_eq!(
+            retrieved_quote.rates.protocol_fee_bps,
+            original_quote.rates.protocol_fee_bps
+        );
+        assert_eq!(
+            retrieved_quote.rates.network_fee_sats,
+            original_quote.rates.network_fee_sats
+        );
+
+        // Validate bounds
+        assert_eq!(retrieved_quote.min_input, original_quote.min_input);
+        assert_eq!(retrieved_quote.max_input, original_quote.max_input);
 
         // Validate timestamps (with some tolerance for DB precision)
         assert!(
@@ -258,127 +274,7 @@ mod tests {
     }
 
     #[sqlx::test]
-    async fn test_quote_with_token_address(pool: sqlx::PgPool) -> sqlx::Result<()> {
-        // Database will auto-initialize with schema
-        let db = Database::from_pool(pool.clone()).await.unwrap();
-        let quote_repo = db.quotes();
-
-        // Create a quote with ERC20 tokens
-        let original_quote = Quote {
-            id: Uuid::new_v4(),
-            from: Lot {
-                currency: Currency {
-                    chain: ChainType::Ethereum,
-                    token: TokenIdentifier::Address(
-                        "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string(),
-                    ), // USDC
-                    decimals: 6,
-                },
-                amount: U256::from(1000000000u64), // 1000 USDC (6 decimals)
-            },
-            to: Lot {
-                currency: Currency {
-                    chain: ChainType::Ethereum,
-                    token: TokenIdentifier::Address(
-                        "0x6B175474E89094C44Da98b954EedeAC495271d0F".to_string(),
-                    ), // DAI
-                    decimals: 18,
-                },
-                amount: U256::from(1000000000000000000000u128), // 1000 DAI (18 decimals)
-            },
-            fee_schedule: FeeSchedule {
-                network_fee_sats: 1500,
-                liquidity_fee_sats: 2500,
-                protocol_fee_sats: 750,
-            },
-            market_maker_id: Uuid::new_v4(),
-            expires_at: utc::now() + Duration::minutes(5),
-            created_at: utc::now(),
-        };
-
-        // Store and retrieve
-        quote_repo.create(&original_quote).await.unwrap();
-        let retrieved_quote = quote_repo.get(original_quote.id).await.unwrap();
-
-        // Validate token addresses are preserved
-        match (
-            &retrieved_quote.from.currency.token,
-            &original_quote.from.currency.token,
-        ) {
-            (TokenIdentifier::Address(retrieved), TokenIdentifier::Address(original)) => {
-                assert_eq!(retrieved, original);
-            }
-            _ => panic!("Token identifier type mismatch"),
-        }
-
-        match (
-            &retrieved_quote.to.currency.token,
-            &original_quote.to.currency.token,
-        ) {
-            (TokenIdentifier::Address(retrieved), TokenIdentifier::Address(original)) => {
-                assert_eq!(retrieved, original);
-            }
-            _ => panic!("Token identifier type mismatch"),
-        }
-
-        Ok(())
-    }
-
-    #[sqlx::test]
-    async fn test_quote_large_u256_values(pool: sqlx::PgPool) -> sqlx::Result<()> {
-        // Database will auto-initialize with schema
-        let db = Database::from_pool(pool.clone()).await.unwrap();
-        let quote_repo = db.quotes();
-
-        // Create a quote with very large U256 values
-        let large_amount = U256::from_str_radix(
-            "115792089237316195423570985008687907853269984665640564039457584007913129639935",
-            10,
-        )
-        .unwrap(); // Max U256 value
-
-        let original_quote = Quote {
-            id: Uuid::new_v4(),
-            from: Lot {
-                currency: Currency {
-                    chain: ChainType::Ethereum,
-                    token: TokenIdentifier::Native,
-                    decimals: 18,
-                },
-                amount: large_amount,
-            },
-            to: Lot {
-                currency: Currency {
-                    chain: ChainType::Bitcoin,
-                    token: TokenIdentifier::Native,
-                    decimals: 8,
-                },
-                amount: U256::from(21000000u64) * U256::from(100000000u64), // 21M BTC in sats
-            },
-            fee_schedule: FeeSchedule {
-                network_fee_sats: 5000,
-                liquidity_fee_sats: 6000,
-                protocol_fee_sats: 2000,
-            },
-            market_maker_id: Uuid::new_v4(),
-            expires_at: utc::now() + Duration::hours(1),
-            created_at: utc::now(),
-        };
-
-        // Store and retrieve
-        quote_repo.create(&original_quote).await.unwrap();
-        let retrieved_quote = quote_repo.get(original_quote.id).await.unwrap();
-
-        // Validate large values are preserved exactly
-        assert_eq!(retrieved_quote.from.amount, original_quote.from.amount);
-        assert_eq!(retrieved_quote.to.amount, original_quote.to.amount);
-
-        Ok(())
-    }
-
-    #[sqlx::test]
     async fn test_get_active_quotes_by_market_maker(pool: sqlx::PgPool) -> sqlx::Result<()> {
-        // Database will auto-initialize with schema
         let db = Database::from_pool(pool.clone()).await.unwrap();
         let quote_repo = db.quotes();
 
@@ -387,84 +283,66 @@ mod tests {
         // Create multiple quotes - some expired, some active
         let expired_quote = Quote {
             id: Uuid::new_v4(),
-            from: Lot {
-                currency: Currency {
-                    chain: ChainType::Bitcoin,
-                    token: TokenIdentifier::Native,
-                    decimals: 8,
-                },
-                amount: U256::from(100000u64),
-            },
-            to: Lot {
-                currency: Currency {
-                    chain: ChainType::Ethereum,
-                    token: TokenIdentifier::Native,
-                    decimals: 18,
-                },
-                amount: U256::from(1000000000000000000u64),
-            },
-            fee_schedule: FeeSchedule {
-                network_fee_sats: 100,
-                liquidity_fee_sats: 200,
-                protocol_fee_sats: 50,
-            },
             market_maker_id: mm_identifier,
+            from_currency: Currency {
+                chain: ChainType::Bitcoin,
+                token: TokenIdentifier::Native,
+                decimals: 8,
+            },
+            to_currency: Currency {
+                chain: ChainType::Ethereum,
+                token: TokenIdentifier::Address(
+                    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
+                ),
+                decimals: 8,
+            },
+            rates: SwapRates::new(13, 10, 1000),
+            min_input: U256::from(10_000u64),
+            max_input: U256::from(100_000_000u64),
             expires_at: utc::now() - Duration::hours(1), // Already expired
             created_at: utc::now() - Duration::hours(2),
         };
 
         let active_quote1 = Quote {
             id: Uuid::new_v4(),
-            from: Lot {
-                currency: Currency {
-                    chain: ChainType::Bitcoin,
-                    token: TokenIdentifier::Native,
-                    decimals: 8,
-                },
-                amount: U256::from(200000u64),
-            },
-            to: Lot {
-                currency: Currency {
-                    chain: ChainType::Ethereum,
-                    token: TokenIdentifier::Native,
-                    decimals: 18,
-                },
-                amount: U256::from(2000000000000000000u64),
-            },
-            fee_schedule: FeeSchedule {
-                network_fee_sats: 150,
-                liquidity_fee_sats: 250,
-                protocol_fee_sats: 75,
-            },
             market_maker_id: mm_identifier,
+            from_currency: Currency {
+                chain: ChainType::Bitcoin,
+                token: TokenIdentifier::Native,
+                decimals: 8,
+            },
+            to_currency: Currency {
+                chain: ChainType::Ethereum,
+                token: TokenIdentifier::Address(
+                    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
+                ),
+                decimals: 8,
+            },
+            rates: SwapRates::new(15, 10, 1200),
+            min_input: U256::from(20_000u64),
+            max_input: U256::from(200_000_000u64),
             expires_at: utc::now() + Duration::minutes(30),
             created_at: utc::now(),
         };
 
         let active_quote2 = Quote {
             id: Uuid::new_v4(),
-            from: Lot {
-                currency: Currency {
-                    chain: ChainType::Ethereum,
-                    token: TokenIdentifier::Native,
-                    decimals: 18,
-                },
-                amount: U256::from(3000000000000000000u64),
-            },
-            to: Lot {
-                currency: Currency {
-                    chain: ChainType::Bitcoin,
-                    token: TokenIdentifier::Native,
-                    decimals: 8,
-                },
-                amount: U256::from(300000u64),
-            },
-            fee_schedule: FeeSchedule {
-                network_fee_sats: 175,
-                liquidity_fee_sats: 275,
-                protocol_fee_sats: 95,
-            },
             market_maker_id: mm_identifier,
+            from_currency: Currency {
+                chain: ChainType::Ethereum,
+                token: TokenIdentifier::Address(
+                    "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
+                ),
+                decimals: 8,
+            },
+            to_currency: Currency {
+                chain: ChainType::Bitcoin,
+                token: TokenIdentifier::Native,
+                decimals: 8,
+            },
+            rates: SwapRates::new(12, 10, 800),
+            min_input: U256::from(10_000u64),
+            max_input: U256::from(50_000_000u64),
             expires_at: utc::now() + Duration::hours(1),
             created_at: utc::now(),
         };

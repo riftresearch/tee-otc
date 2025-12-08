@@ -1,3 +1,4 @@
+use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
 use otc_models::Lot;
 use serde::{Deserialize, Serialize};
@@ -33,6 +34,8 @@ pub enum MMRequest {
         deposit_address: String,
         /// Proof that user is real - their deposit tx hash
         user_tx_hash: String,
+        /// Actual amount the user deposited (for accurate liquidity locking)
+        deposit_amount: U256,
         timestamp: DateTime<Utc>,
     },
 
@@ -47,6 +50,8 @@ pub enum MMRequest {
         mm_nonce: [u8; 16],
         /// Expected payment details
         expected_lot: Lot,
+        /// Protocol fee for this swap (from realized amounts)
+        protocol_fee: U256,
         user_deposit_confirmed_at: DateTime<Utc>,
         timestamp: DateTime<Utc>,
     },

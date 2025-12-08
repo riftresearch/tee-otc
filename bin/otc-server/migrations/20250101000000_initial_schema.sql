@@ -16,23 +16,28 @@ CREATE TYPE swap_status AS ENUM (
     'failed'
 );
 
--- Create quotes table
+-- Create quotes table with rate-based pricing
 CREATE TABLE quotes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
 
     -- From currency details (what user sends)
     from_chain VARCHAR(50) NOT NULL,
     from_token JSONB NOT NULL,
-    from_amount TEXT NOT NULL, -- U256 stored as string
     from_decimals SMALLINT NOT NULL,
 
     -- To currency details (what user receives)
     to_chain VARCHAR(50) NOT NULL,
     to_token JSONB NOT NULL,
-    to_amount TEXT NOT NULL, -- U256 stored as string
     to_decimals SMALLINT NOT NULL,
 
-    fee_schedule JSONB NOT NULL,
+    -- Rate parameters (basis points for spreads, sats for network fee)
+    liquidity_fee_bps BIGINT NOT NULL,
+    protocol_fee_bps BIGINT NOT NULL,
+    network_fee_sats BIGINT NOT NULL,
+
+    -- Input bounds (U256 stored as string)
+    min_input TEXT NOT NULL,
+    max_input TEXT NOT NULL,
 
     market_maker_id UUID NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
@@ -45,6 +50,9 @@ CREATE TABLE swaps (
     quote_id UUID NOT NULL REFERENCES quotes(id),
     market_maker_id UUID NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    
+    -- Realized swap amounts (computed when user deposit is detected)
+    realized_swap JSONB,
     
     -- Salt and nonce columns for deterministic wallet generation
     user_deposit_salt BYTEA NOT NULL,

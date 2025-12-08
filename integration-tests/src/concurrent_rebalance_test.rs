@@ -2,7 +2,7 @@ use alloy::{primitives::U256, providers::ext::AnvilApi};
 use alloy::signers::local::PrivateKeySigner;
 use devnet::{MultichainAccount, RiftDevnet, WithdrawalProcessingMode};
 use market_maker::{MarketMakerArgs, run_market_maker, wallet::Wallet};
-use otc_models::{ChainType, Currency, Lot, QuoteMode, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::{CreateSwapRequest, CreateSwapResponse};
 use reqwest::StatusCode;
@@ -51,8 +51,7 @@ async fn execute_user_swap(
 
     // Request a quote
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: U256::from(SWAP_AMOUNT_SATS),
+        input_hint: Some(U256::from(SWAP_AMOUNT_SATS)),
         from: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(cbbtc_address.clone()),
@@ -161,7 +160,7 @@ async fn execute_user_swap(
     let CreateSwapResponse {
         swap_id,
         deposit_address,
-        expected_amount,
+        min_input,
         decimals,
         ..
     } = match swap_response.json().await {
@@ -207,7 +206,7 @@ async fn execute_user_swap(
                         ),
                         decimals,
                     },
-                    amount: expected_amount,
+                    amount: min_input,
                 },
                 to_address: deposit_address,
             }],

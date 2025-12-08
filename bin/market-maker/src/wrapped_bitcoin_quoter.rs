@@ -8,9 +8,9 @@ use crate::wallet::WalletManager;
 use alloy::eips::BlockNumberOrTag;
 use alloy::providers::DynProvider;
 use alloy::{primitives::U256, providers::Provider};
-use blockchain_utils::{MempoolEsploraFeeExt, compute_protocol_fee_sats, inverse_compute_protocol_fee};
-use otc_models::{constants, ChainType, Lot, Quote, QuoteMode, QuoteRequest, TokenIdentifier};
-use otc_protocols::rfq::{FeeSchedule, RFQResult};
+use blockchain_utils::MempoolEsploraFeeExt;
+use otc_models::{constants, ChainType, Quote, QuoteRequest, SwapRates, TokenIdentifier, MIN_PROTOCOL_FEE_SATS};
+use otc_protocols::rfq::RFQResult;
 use snafu::{Location, Snafu};
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
@@ -19,6 +19,13 @@ use uuid::Uuid;
 
 const QUOTE_EXPIRATION_TIME: Duration = Duration::from_secs(60 * 5);
 const FEE_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
+
+/// P2PKH is the MOST expensive address to send BTC to, dust limit wise, so we use this as our minimum
+const MIN_DUST_SATS: u64 = 546;
+
+
+/// Protocol fee in basis points (0.10%)
+const PROTOCOL_FEE_BPS: u64 = 10;
 
 #[derive(Debug, Snafu)]
 pub enum WrappedBitcoinQuoterError {
@@ -121,7 +128,10 @@ impl WrappedBitcoinQuoter {
             {
                 Ok(history) => history,
                 Err(e) => {
-                    warn!("Failed to get fee history during fee update: {:?}, trying again later...", e);
+                    warn!(
+                        "Failed to get fee history during fee update: {:?}, trying again later...",
+                        e
+                    );
                     tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
                     continue;
                 }
@@ -130,7 +140,9 @@ impl WrappedBitcoinQuoter {
             let base_fee_wei: u128 = match fee_history.next_block_base_fee() {
                 Some(base_fee_wei) => base_fee_wei,
                 None => {
-                    warn!("Failed to get base fee from fee_history next block, trying again later...");
+                    warn!(
+                        "Failed to get base fee from fee_history next block, trying again later..."
+                    );
                     tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
                     continue;
                 }
@@ -142,14 +154,17 @@ impl WrappedBitcoinQuoter {
                 .as_ref()
                 .and_then(|rewards| rewards.last())
                 .and_then(|percentiles| percentiles.get(1)) // 50th percentile
-                .copied() { 
-                    Some(mid_priority_wei) => mid_priority_wei,
-                    None => {
-                        warn!("Failed to get mid priority fee from fee_history, trying again later...");
-                        tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
-                        continue;
-                    }
-                };
+                .copied()
+            {
+                Some(mid_priority_wei) => mid_priority_wei,
+                None => {
+                    warn!(
+                        "Failed to get mid priority fee from fee_history, trying again later..."
+                    );
+                    tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
+                    continue;
+                }
+            };
 
             let mut max_priority_fee_gwei: f64 = (mid_priority_wei as f64) / 1e9f64;
 
@@ -164,32 +179,31 @@ impl WrappedBitcoinQuoter {
                 }
             };
 
-            let fee_estimate = match esplora_client
-                .get_mempool_fee_estimate_next_block()
-                .await
-                {
-                    Ok(estimates) => estimates,
-                    Err(e) => {
-                        warn!("Failed to get fee estimates from esplora: {:?}", e);
-                        tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
-                        continue;
-                    }
-                };
+            let fee_estimate = match esplora_client.get_mempool_fee_estimate_next_block().await {
+                Ok(estimates) => estimates,
+                Err(e) => {
+                    warn!("Failed to get fee estimates from esplora: {:?}", e);
+                    tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
+                    continue;
+                }
+            };
             let sats_per_vbyte = fee_estimate * fee_safety_multiplier;
 
-            let send_fee_sats_on_btc = calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault(
-                sats_per_vbyte,
-                base_fee_gwei,
-                max_priority_fee_gwei,
-                eth_per_btc_price,
-            );
+            let send_fee_sats_on_btc =
+                calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault(
+                    sats_per_vbyte,
+                    base_fee_gwei,
+                    max_priority_fee_gwei,
+                    eth_per_btc_price,
+                );
 
-            let send_fee_sats_on_eth = calculate_fees_in_sats_for_market_maker_to_send_cbbtc_and_receive_btc_vault(
-                base_fee_gwei,
-                max_priority_fee_gwei,
-                eth_per_btc_price,
-                sats_per_vbyte,
-            );
+            let send_fee_sats_on_eth =
+                calculate_fees_in_sats_for_market_maker_to_send_cbbtc_and_receive_btc_vault(
+                    base_fee_gwei,
+                    max_priority_fee_gwei,
+                    eth_per_btc_price,
+                    sats_per_vbyte,
+                );
 
             let mut global_fee_map = fee_map.write().await;
             global_fee_map.insert(ChainType::Bitcoin, send_fee_sats_on_btc);
@@ -203,10 +217,8 @@ impl WrappedBitcoinQuoter {
         }
     }
 
-
-    /// Compute a quote for the given amount and quote mode.
-    /// Note that fill_chain is the chain that the market maker will fill the quote on.
-    /// which is relevant for computing fees
+    /// Compute a rate-based quote for the given currency pair.
+    /// The quote specifies rates and min/max bounds instead of fixed amounts.
     pub async fn compute_quote(
         &self,
         market_maker_id: Uuid,
@@ -216,121 +228,85 @@ impl WrappedBitcoinQuoter {
             info!("Unsupported quote request: {:?}", quote_request);
             return Ok(RFQResult::Unsupported(error_message));
         }
-        if quote_request.amount > U256::from(u64::MAX) {
-            return Ok(RFQResult::InvalidRequest("Amount too large".to_string()));
-        }
-        let amount = quote_request.amount.to::<u64>();
+
         let quote_id = Uuid::new_v4();
-        let send_fees_in_sats = self
-            .fee_map
-            .read()
-            .await
-            .get(&quote_request.to.chain)
-            .cloned();
 
-        if send_fees_in_sats.is_none() {
-            return Ok(RFQResult::InvalidRequest(
-                "Network fee for chain not found".to_string(),
-            ));
-        }
-
-        let send_fees_in_sats = send_fees_in_sats.unwrap();
-
-        let rfq_result = match quote_request.mode {
-            QuoteMode::ExactInput => {
-                let quote_result =
-                    quote_exact_input(amount, send_fees_in_sats, self.trade_spread_bps);
-
-                match quote_result {
-                    RFQResult::Success((rx_btc, fees)) => RFQResult::Success(Quote {
-                        id: quote_id,
-                        market_maker_id,
-                        from: Lot {
-                            currency: quote_request.from.clone(),
-                            amount: quote_request.amount,
-                        },
-                        to: Lot {
-                            currency: quote_request.to.clone(),
-                            amount: U256::from(rx_btc),
-                        },
-                        fee_schedule: fees,
-                        expires_at: utc::now() + QUOTE_EXPIRATION_TIME,
-                        created_at: utc::now(),
-                    }),
-                    RFQResult::MakerUnavailable(error) => RFQResult::MakerUnavailable(error),
-                    RFQResult::InvalidRequest(error) => RFQResult::InvalidRequest(error),
-                    RFQResult::Unsupported(error) => RFQResult::Unsupported(error),
-                }
-            }
-            QuoteMode::ExactOutput => {
-                let quote_result =
-                    quote_exact_output(amount, send_fees_in_sats, self.trade_spread_bps);
-                match quote_result {
-                    RFQResult::Success((tx_btc, fees)) => RFQResult::Success(Quote {
-                        id: quote_id,
-                        market_maker_id,
-                        from: Lot {
-                            currency: quote_request.from.clone(),
-                            amount: U256::from(tx_btc),
-                        },
-                        to: Lot {
-                            currency: quote_request.to.clone(),
-                            amount: quote_request.amount,
-                        },
-                        fee_schedule: fees,
-                        expires_at: utc::now() + QUOTE_EXPIRATION_TIME,
-                        created_at: utc::now(),
-                    }),
-                    RFQResult::MakerUnavailable(error) => RFQResult::MakerUnavailable(error),
-                    RFQResult::InvalidRequest(error) => RFQResult::InvalidRequest(error),
-                    RFQResult::Unsupported(error) => RFQResult::Unsupported(error),
-                }
+        // Get network fee for the destination chain (where MM sends funds)
+        let network_fee_sats = match self.fee_map.read().await.get(&quote_request.to.chain).cloned()
+        {
+            Some(fee) => fee,
+            None => {
+                return Ok(RFQResult::InvalidRequest(
+                    "Network fee for chain not found".to_string(),
+                ))
             }
         };
 
-        Ok(self.validate_quote_balance(rfq_result).await)
-    }
+        // Build the rates
+        let rates = SwapRates::new(self.trade_spread_bps, PROTOCOL_FEE_BPS, network_fee_sats);
 
-    async fn validate_quote_balance(&self, rfq_result: RFQResult<Quote>) -> RFQResult<Quote> {
-        match rfq_result {
-            RFQResult::Success(quote) => match self.ensure_cached_balance_can_fill(&quote).await {
-                Ok(()) => RFQResult::Success(quote),
-                Err(message) => RFQResult::MakerUnavailable(message),
-            },
-            other => other,
-        }
-    }
-
-    async fn ensure_cached_balance_can_fill(&self, quote: &Quote) -> Result<(), String> {
-        let chain = quote.to.currency.chain;
-        let token = &quote.to.currency.token;
-
-        if !self.wallet_registry.is_registered(chain) {
-            warn!(
-                "Cannot fill quote {}: no wallet configured for chain {:?} and token {:?}",
-                quote.id, chain, token
-            );
-            return Err("No wallet configured for chain".to_string());
-        }
-
-        // Use LiquidityCache to check if quote can be filled
-        if !self
+        // Get max liquidity from cache for this pair (with balance strategy applied)
+        // This is consistent with what the liquidity endpoint reports
+        let max_output = self
             .liquidity_cache
-            .can_fill_quote_for_pair(
-                &quote.from.currency,
-                &quote.to.currency,
-                quote.to.amount,
-            )
+            .get_max_output_for_pair(&quote_request.from, &quote_request.to)
             .await
-        {
-            debug!(
-                "Cannot fill quote {}: insufficient balance for chain {:?} token {:?}",
-                quote.id, chain, token
-            );
-            return Err("Insufficient balance to fulfill quote".to_string());
+            .unwrap_or(U256::ZERO);
+
+        if max_output.is_zero() {
+            return Ok(RFQResult::MakerUnavailable(
+                "Insufficient balance to fulfill quote".to_string(),
+            ));
         }
 
-        Ok(())
+        // Calculate max_input from max_output by reversing the fee calculation
+        // max_output = (input * (1 - liquidity_bps/10000) - network_fee) * (1 - protocol_bps/10000)
+        // Solving for input: input = (max_output / (1 - protocol_bps/10000) + network_fee) / (1 - liquidity_bps/10000)
+        let max_input = reverse_compute_max_input(max_output.to::<u64>(), &rates);
+
+        // Compute minimum input that produces viable output after all fees
+        let min_input = compute_min_viable_input(&rates);
+
+        if max_input <= min_input {
+            return Ok(RFQResult::MakerUnavailable(
+                "Insufficient liquidity for viable quote range".to_string(),
+            ));
+        }
+
+        // If the user's input_hint exceeds our max_input, we can't fulfill the request
+        if let Some(input_hint) = quote_request.input_hint {
+            if input_hint > U256::from(max_input) {
+                return Ok(RFQResult::MakerUnavailable(format!(
+                    "Insufficient balance: requested {} but max available is {}",
+                    input_hint, max_input
+                )));
+            }
+        }
+
+        let quote = Quote {
+            id: quote_id,
+            market_maker_id,
+            from_currency: quote_request.from.clone(),
+            to_currency: quote_request.to.clone(),
+            rates,
+            min_input: U256::from(min_input),
+            max_input: U256::from(max_input),
+            expires_at: utc::now() + QUOTE_EXPIRATION_TIME,
+            created_at: utc::now(),
+        };
+
+        // Validate we have a wallet for the destination chain
+        if !self.wallet_registry.is_registered(quote.to_currency.chain) {
+            warn!(
+                "Cannot fill quote {}: no wallet configured for chain {:?}",
+                quote.id, quote.to_currency.chain
+            );
+            return Ok(RFQResult::MakerUnavailable(
+                "No wallet configured for chain".to_string(),
+            ));
+        }
+
+        Ok(RFQResult::Success(quote))
     }
 
     /// Validates if a quote request is fillable by this market maker.
@@ -352,18 +328,16 @@ impl WrappedBitcoinQuoter {
         // Valid swap patterns:
         // 1. Bitcoin (native) -> cbBTC on configured EVM chain
         // 2. cbBTC on configured EVM chain -> Bitcoin (native)
-        
-        let is_btc_to_cbbtc = 
-            quote_request.from.chain == ChainType::Bitcoin &&
-            from_token == TokenIdentifier::Native &&
-            quote_request.to.chain == self.configured_evm_chain &&
-            to_token == cbbtc_token;
 
-        let is_cbbtc_to_btc = 
-            quote_request.from.chain == self.configured_evm_chain &&
-            from_token == cbbtc_token &&
-            quote_request.to.chain == ChainType::Bitcoin &&
-            to_token == TokenIdentifier::Native;
+        let is_btc_to_cbbtc = quote_request.from.chain == ChainType::Bitcoin
+            && from_token == TokenIdentifier::Native
+            && quote_request.to.chain == self.configured_evm_chain
+            && to_token == cbbtc_token;
+
+        let is_cbbtc_to_btc = quote_request.from.chain == self.configured_evm_chain
+            && from_token == cbbtc_token
+            && quote_request.to.chain == ChainType::Bitcoin
+            && to_token == TokenIdentifier::Native;
 
         if !is_btc_to_cbbtc && !is_cbbtc_to_btc {
             return Some(format!(
@@ -376,89 +350,63 @@ impl WrappedBitcoinQuoter {
     }
 }
 
-/// P2PKH is the MOST expensive address to send BTC to, dust limit wise, so we use this as our minimum
-const MIN_DUST_SATS: u64 = 546;
-
-fn quote_exact_input(
-    sent_sats: u64,
-    fee_sats: u64,
-    trade_spread_bps: u64,
-) -> RFQResult<(u64, FeeSchedule)> {
+/// Compute the minimum input that produces at least dust output after all fees.
+///
+/// This accounts for the minimum protocol fee from `rates.min_protocol_fee_sats` which ensures
+/// the fee output is always above Bitcoin's dust limit.
+fn compute_min_viable_input(rates: &SwapRates) -> u64 {
     const BPS_DENOM: u64 = 10_000;
 
-    let tx = sent_sats;
-    let network_fee = fee_sats;
-    let s = trade_spread_bps;
+    // We need both:
+    // 1. mm_output >= MIN_DUST_SATS (user payment must be above dust)
+    // 2. protocol_fee >= rates.min_protocol_fee_sats (fee payment must be above dust)
+    //
+    // Since protocol_fee = max(computed_fee, min_protocol_fee_sats), and
+    // mm_output = after_network - protocol_fee, we need:
+    // after_network >= min_protocol_fee_sats + MIN_DUST_SATS
+    //
+    // This is the simpler case that applies for small inputs where the minimum fee kicks in.
+    // For larger inputs where the percentage-based fee exceeds min_protocol_fee_sats,
+    // the percentage-based formula would give a lower min_input, so this is conservative.
 
-    if s >= BPS_DENOM {
-        return RFQResult::MakerUnavailable("Profit spread is >= 100%".to_string());
-    }
+    let after_liq_bps = BPS_DENOM - rates.liquidity_fee_bps;
 
-    let rx_before_fees = tx.saturating_mul(BPS_DENOM - s) / BPS_DENOM;
+    // Minimum after_network needed to satisfy both dust constraints
+    let min_after_network = rates.min_protocol_fee_sats + MIN_DUST_SATS;
 
-    let liquidity_fee = tx - rx_before_fees;
+    // Amount needed before network fee
+    let before_network = min_after_network + rates.network_fee_sats;
 
-    let rx_after_network_fee = rx_before_fees.saturating_sub(network_fee);
+    // Amount needed before liquidity fee (the input)
+    let input = (before_network * BPS_DENOM).div_ceil(after_liq_bps);
 
-    let protocol_fee = compute_protocol_fee_sats(rx_after_network_fee);
-    let final_rx = rx_after_network_fee.saturating_sub(protocol_fee);
-
-    if final_rx <= MIN_DUST_SATS {
-        return RFQResult::InvalidRequest("Amount out too low net of fees".to_string());
-    }
-
-    RFQResult::Success((
-        final_rx,
-        FeeSchedule {
-            network_fee_sats: network_fee,
-            liquidity_fee_sats: liquidity_fee,
-            protocol_fee_sats: protocol_fee,
-        },
-    ))
+    input
 }
 
-fn quote_exact_output(
-    received_sats: u64,
-    network_fee_sats: u64,
-    trade_spread_bps: u64,
-) -> RFQResult<(u64, FeeSchedule)> {
+/// Reverse compute max input from max output using the rates.
+fn reverse_compute_max_input(max_output: u64, rates: &SwapRates) -> u64 {
     const BPS_DENOM: u64 = 10_000;
 
-    if received_sats < MIN_DUST_SATS {
-        return RFQResult::InvalidRequest("Amount out too low".to_string());
+    if max_output == 0 {
+        return 0;
     }
 
-    let s = trade_spread_bps;
-    if s >= BPS_DENOM {
-        return RFQResult::MakerUnavailable("Profit spread is >= 100%".to_string());
-    }
+    let after_proto_bps = BPS_DENOM - rates.protocol_fee_bps;
+    let after_liq_bps = BPS_DENOM - rates.liquidity_fee_bps;
 
-    let rx_after_protocol_fee = inverse_compute_protocol_fee(received_sats);
-    let protocol_fee = rx_after_protocol_fee - received_sats;
+    // Reverse: output = (input * after_liq_bps / BPS_DENOM - network_fee) * after_proto_bps / BPS_DENOM
+    // => output * BPS_DENOM / after_proto_bps = input * after_liq_bps / BPS_DENOM - network_fee
+    // => output * BPS_DENOM / after_proto_bps + network_fee = input * after_liq_bps / BPS_DENOM
+    // => (output * BPS_DENOM / after_proto_bps + network_fee) * BPS_DENOM / after_liq_bps = input
 
-    let rx_after_fees = rx_after_protocol_fee.saturating_add(network_fee_sats);
+    let before_proto = (max_output * BPS_DENOM).div_ceil(after_proto_bps);
+    let before_network = before_proto + rates.network_fee_sats;
+    let input = (before_network * BPS_DENOM).div_ceil(after_liq_bps);
 
-    let numerator = BPS_DENOM.saturating_mul(rx_after_fees);
-    let denominator = BPS_DENOM - s;
-    let tx = numerator.div_ceil(denominator);
-
-    let liquidity_fee = tx - rx_after_fees;
-
-    if tx < MIN_DUST_SATS {
-        return RFQResult::InvalidRequest("Amount out too low net of fees".to_string());
-    }
-
-    RFQResult::Success((
-        tx,
-        FeeSchedule {
-            network_fee_sats,
-            liquidity_fee_sats: liquidity_fee,
-            protocol_fee_sats: protocol_fee,
-        },
-    ))
+    input
 }
 
-// NOTICE: We want the following methods to include the cost for the market maker to send 
+// NOTICE: We want the following methods to include the cost for the market maker to send
 // on x chain directly to you as well as the cost to spend the deposit vault the
 // user creates on y chain , all denominated in sats
 
@@ -475,7 +423,12 @@ fn calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault(
     let btc_cost_sats = (sats_per_vbyte * vbytes).ceil() as u64;
     // receiveWithAuthorization later, calldata
     let gas_limit = 57670 + 2872;
-    let eth_spend_vault_cost_sats = eth_fees_in_sats(gas_limit as f64, base_fee_gwei, max_priority_fee_gwei, eth_per_btc_price);
+    let eth_spend_vault_cost_sats = eth_fees_in_sats(
+        gas_limit as f64,
+        base_fee_gwei,
+        max_priority_fee_gwei,
+        eth_per_btc_price,
+    );
     btc_cost_sats + eth_spend_vault_cost_sats
 }
 
@@ -487,12 +440,16 @@ fn calculate_fees_in_sats_for_market_maker_to_send_cbbtc_and_receive_btc_vault(
 ) -> u64 {
     // base tx cost, transfer incl cold-access, calldata
     let transfer_gas_limit = (21000 + 11642 + 572) as f64;
-    let eth_cost_sats = eth_fees_in_sats(transfer_gas_limit, base_fee_gwei, max_priority_fee_gwei, eth_per_btc_price);
+    let eth_cost_sats = eth_fees_in_sats(
+        transfer_gas_limit,
+        base_fee_gwei,
+        max_priority_fee_gwei,
+        eth_per_btc_price,
+    );
     // spend a P2WPKH input later
     let btc_spend_vault_cost_sats = (68.0 * sats_per_vbyte).ceil() as u64;
     eth_cost_sats + btc_spend_vault_cost_sats
 }
-
 
 fn eth_fees_in_sats(
     gas_limit: f64,
@@ -503,17 +460,13 @@ fn eth_fees_in_sats(
     let gas_cost_gwei = gas_limit * (max_priority_fee_gwei + base_fee_gwei);
     let gas_cost_wei = U256::from(gas_cost_gwei.ceil() as u64) * U256::from(1e9);
     let wei_per_sat = U256::from((eth_per_btc_price * 1e10).round() as u128);
-    let eth_cost = (gas_cost_wei / wei_per_sat).to::<u64>();
-    eth_cost
+    (gas_cost_wei / wei_per_sat).to::<u64>()
 }
 
 #[cfg(test)]
 mod tests {
-    use otc_protocols::rfq::RFQResult;
-
-    use crate::wrapped_bitcoin_quoter::{
-        calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault, quote_exact_input, quote_exact_output,
-    };
+    use super::*;
+    use otc_models::RealizedSwap;
 
     const SATS_PER_VBYTE: f64 = 1.5;
     const TRADE_SPREAD_BPS: u64 = 13;
@@ -522,39 +475,114 @@ mod tests {
     const ETH_PER_BTC_PRICE: f64 = 30000.0;
 
     #[test]
-    fn fuzz_fee_computation_symmetric() {
-        let user_input_sats = [1500, 2000, 10000, 30001, 1001001];
-        for user_input_sats in user_input_sats {
-            println!("user_input_sats: {user_input_sats}");
-            let fee_sats_to_send_btc = calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault(
+    fn test_min_viable_input() {
+        let network_fee =
+            calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault(
                 SATS_PER_VBYTE,
                 BASE_FEE_GWEI,
                 MAX_PRIORITY_FEE_GWEI,
                 ETH_PER_BTC_PRICE,
             );
-            println!("fee_sats_to_send_btc: {fee_sats_to_send_btc}");
-            let output = quote_exact_input(user_input_sats, fee_sats_to_send_btc, TRADE_SPREAD_BPS);
-            println!("output: {output:?}");
-            let output = match output {
-                RFQResult::Success((rx_btc, fees)) => (rx_btc, fees),
-                _ => {
-                    panic!("Failed to quote exact input");
+
+        let rates = SwapRates::new(TRADE_SPREAD_BPS, PROTOCOL_FEE_BPS, network_fee);
+        let min_input = compute_min_viable_input(&rates);
+
+        // Verify that min_input produces at least MIN_DUST_SATS output
+        let realized = RealizedSwap::compute(min_input, &rates)
+            .expect("min_input should produce valid output");
+        assert!(
+            realized.mm_output >= U256::from(MIN_DUST_SATS),
+            "Min input {} should produce at least {} output, got {}",
+            min_input,
+            MIN_DUST_SATS,
+            realized.mm_output
+        );
+
+        // Verify that inputs below min_input produce None (below MIN_VIABLE_OUTPUT_SATS)
+        // or produce output below MIN_DUST_SATS
+        if min_input > 3 {
+            let realized_below = RealizedSwap::compute(min_input - 3, &rates);
+            match realized_below {
+                None => {
+                    // Good - the input was rejected as it would produce dust
                 }
-            };
-            assert_eq!(output.1.network_fee_sats, fee_sats_to_send_btc);
-            let input = quote_exact_output(output.0, output.1.network_fee_sats, TRADE_SPREAD_BPS);
-            println!("input: {input:?}");
-            let input = match input {
-                RFQResult::Success((tx_btc, fees)) => (tx_btc, fees),
-                _ => {
-                    panic!("Failed to quote exact output");
+                Some(r) => {
+                    assert!(
+                        r.mm_output < U256::from(MIN_DUST_SATS),
+                        "Input {} should produce less than {} output, got {}",
+                        min_input - 3,
+                        MIN_DUST_SATS,
+                        r.mm_output
+                    );
                 }
-            };
-            assert!(
-                input.0.abs_diff(user_input_sats) <= 1,
-                "Expected {} ± 1, got {}",
-                user_input_sats,
-                input.0
+            }
+        }
+    }
+
+    #[test]
+    fn test_reverse_compute_max_input() {
+        let network_fee =
+            calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault(
+                SATS_PER_VBYTE,
+                BASE_FEE_GWEI,
+                MAX_PRIORITY_FEE_GWEI,
+                ETH_PER_BTC_PRICE,
+            );
+
+        let rates = SwapRates::new(TRADE_SPREAD_BPS, PROTOCOL_FEE_BPS, network_fee);
+        let max_output = 1_000_000u64; // 1M sats available
+
+        let max_input = reverse_compute_max_input(max_output, &rates);
+
+        // Verify that max_input produces approximately max_output
+        let realized = RealizedSwap::compute(max_input, &rates)
+            .expect("max_input derived from 1M sats should produce valid output");
+
+        // The output should be close to max_output (within rounding)
+        // Since we use div_ceil in the reverse calculation, the actual output
+        // should be >= max_output
+        assert!(
+            realized.mm_output >= U256::from(max_output),
+            "Max input {} should produce at least {} output, got {}",
+            max_input,
+            max_output,
+            realized.mm_output
+        );
+    }
+
+    #[test]
+    fn test_rate_based_fee_symmetry() {
+        let network_fee =
+            calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault(
+                SATS_PER_VBYTE,
+                BASE_FEE_GWEI,
+                MAX_PRIORITY_FEE_GWEI,
+                ETH_PER_BTC_PRICE,
+            );
+
+        let rates = SwapRates::new(TRADE_SPREAD_BPS, PROTOCOL_FEE_BPS, network_fee);
+
+        // Test various input amounts (all large enough to produce valid outputs)
+        let test_inputs = [10_000u64, 100_000, 1_000_000, 10_000_000, 100_000_000];
+
+        for input in test_inputs {
+            let realized = RealizedSwap::compute(input, &rates)
+                .expect(&format!("Input {} should produce valid output", input));
+
+            // Verify fee breakdown adds up
+            let total_fees = realized.liquidity_fee.to::<u64>()
+                + realized.network_fee.to::<u64>()
+                + realized.protocol_fee.to::<u64>();
+
+            let output_plus_fees = realized.mm_output.to::<u64>() + total_fees;
+
+            assert_eq!(
+                realized.user_input.to::<u64>(),
+                output_plus_fees,
+                "Input {} should equal output {} + fees {}",
+                input,
+                realized.mm_output,
+                total_fees
             );
         }
     }

@@ -13,7 +13,7 @@ use market_maker::wallet::Wallet;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, MarketMakerArgs};
 use mock_instant::global::MockClock;
 use otc_chains::traits::Payment;
-use otc_models::{ChainType, Currency, Lot, Quote, QuoteMode, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, Lot, Quote, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::SwapResponse;
 use otc_server::{
@@ -164,8 +164,7 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
 
     // Request a quote from the RFQ server
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: U256::from(100_000_000i128), // 1 cbbtc
+        input_hint: Some(U256::from(100_000_000i128)), // 1 cbbtc
         from: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
@@ -241,7 +240,7 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
                         ),
                         decimals: response_json.decimals,
                     },
-                    amount: response_json.expected_amount,
+                    amount: response_json.min_input,
                 },
                 to_address: response_json.deposit_address,
             }],

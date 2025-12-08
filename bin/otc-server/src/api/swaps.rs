@@ -121,8 +121,11 @@ pub struct CreateSwapResponse {
     /// Chain type for the deposit (Bitcoin/Ethereum)
     pub deposit_chain: String,
 
-    /// Expected amount to deposit (matches quote.from.amount)
-    pub expected_amount: U256,
+    /// Minimum deposit amount (from quote bounds)
+    pub min_input: U256,
+
+    /// Maximum deposit amount (from quote bounds)
+    pub max_input: U256,
 
     /// Number of decimals for the amount
     pub decimals: u8,
@@ -153,11 +156,22 @@ pub struct SwapResponse {
     pub mm_deposit: DepositInfoResponse,
 }
 
+/// Deposit information for rate-based swaps.
+/// For user deposits: shows min/max bounds.
+/// For MM deposits: shows expected output computed from actual user deposit.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DepositInfoResponse {
     pub address: String,
     pub chain: String,
-    pub expected_amount: U256,
+    /// Minimum input (for user deposits) - None for MM deposits
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub min_input: Option<U256>,
+    /// Maximum input (for user deposits) - None for MM deposits
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_input: Option<U256>,
+    /// Expected output (for MM deposits, computed from realized swap) - None for user deposits
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expected_output: Option<U256>,
     pub decimals: u8,
     pub token: String,
 

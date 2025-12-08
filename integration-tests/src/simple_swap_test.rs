@@ -13,7 +13,7 @@ use market_maker::evm_wallet::EVMWallet;
 use market_maker::wallet::Wallet;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, MarketMakerArgs};
 use otc_chains::traits::Payment;
-use otc_models::{ChainType, Currency, Lot, Quote, QuoteMode, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, Lot, Quote, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::SwapResponse;
 use otc_server::{
@@ -157,8 +157,7 @@ async fn test_swap_from_bitcoin_to_ethereum(
 
     // Request a quote from the RFQ server
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: U256::from(10_000_000), // 0.1 BTC
+        input_hint: Some(U256::from(10_000_000)), // 0.1 BTC
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -232,7 +231,7 @@ async fn test_swap_from_bitcoin_to_ethereum(
                         token: TokenIdentifier::Native,
                         decimals: response_json.decimals,
                     },
-                    amount: response_json.expected_amount,
+                    amount: response_json.min_input,
                 },
                 to_address: response_json.deposit_address,
             }],
@@ -363,8 +362,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
     let client = reqwest::Client::new();
 
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: U256::from(10_000_000),
+        input_hint: Some(U256::from(10_000_000)),
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -411,7 +409,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
     let CreateSwapResponse {
         swap_id,
         deposit_address,
-        expected_amount,
+        min_input,
         decimals,
         ..
     } = swap_response.json().await.unwrap();
@@ -435,7 +433,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
                         token: TokenIdentifier::Native,
                         decimals,
                     },
-                    amount: expected_amount,
+                    amount: min_input,
                 },
                 to_address: deposit_address,
             }],
@@ -593,8 +591,7 @@ async fn test_swap_from_ethereum_to_bitcoin(
 
     // Request a quote from the RFQ server
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: U256::from(100_000_000i128), // 1 cbbtc
+        input_hint: Some(U256::from(100_000_000i128)), // 1 cbbtc
         from: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
@@ -670,7 +667,7 @@ async fn test_swap_from_ethereum_to_bitcoin(
                         ),
                         decimals: response_json.decimals,
                     },
-                    amount: response_json.expected_amount,
+                    amount: response_json.min_input,
                 },
                 to_address: response_json.deposit_address,
             }],

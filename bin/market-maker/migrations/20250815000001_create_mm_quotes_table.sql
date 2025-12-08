@@ -14,16 +14,19 @@ CREATE TABLE IF NOT EXISTS public.mm_quotes (
     -- From currency details (what user sends)
     from_chain VARCHAR(50) NOT NULL,
     from_token JSONB NOT NULL,
-    from_amount TEXT NOT NULL, -- U256 stored as string
     from_decimals SMALLINT NOT NULL,
     
     -- To currency details (what user receives)
     to_chain VARCHAR(50) NOT NULL,
     to_token JSONB NOT NULL,
-    to_amount TEXT NOT NULL, -- U256 stored as string
     to_decimals SMALLINT NOT NULL,
 
-    fee_schedule JSONB NOT NULL,
+    -- Input bounds (U256 stored as string)
+    min_input TEXT NOT NULL,
+    max_input TEXT NOT NULL,
+
+    -- Rate parameters (SwapRates as JSONB)
+    rates JSONB NOT NULL,
 
     -- Timestamps
     expires_at TIMESTAMPTZ NOT NULL,

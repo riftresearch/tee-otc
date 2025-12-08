@@ -4,7 +4,7 @@ use otc_models::{Currency, Quote, QuoteRequest};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub use otc_models::FeeSchedule;
+pub use otc_models::SwapRates;
 
 /// Protocol wrapper for RFQ messages
 #[derive(Debug, Clone, Serialize, Deserialize)]
