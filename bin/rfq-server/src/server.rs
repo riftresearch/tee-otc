@@ -16,10 +16,10 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-use mm_websocket_server::{MessageHandler, MessageSender};
 use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use metrics::{describe_gauge, gauge};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use mm_websocket_server::{MessageHandler, MessageSender};
 use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
 use otc_models::{Quote, QuoteRequest};
 use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse, RFQResult};
@@ -48,7 +48,7 @@ pub struct AppState {
 struct Status {
     pub status: String,
     pub version: String,
-    pub connected_market_makers: usize,
+    pub connected_market_makers: Vec<Uuid>,
 }
 
 static PROMETHEUS_HANDLE: OnceLock<Arc<PrometheusHandle>> = OnceLock::new();
@@ -129,12 +129,8 @@ pub async fn run_server(args: RfqServerArgs) -> Result<()> {
         // WebSocket endpoint for market makers
         .route("/ws/mm", get(mm_websocket_handler))
         // API endpoints
-        .route("/api/v1/quotes/request", post(request_quotes))
-        .route("/api/v1/liquidity", get(get_liquidity))
-        .route(
-            "/api/v1/market-makers/connected",
-            get(get_connected_market_makers),
-        )
+        .route("/api/v2/quote", post(request_quotes))
+        .route("/api/v2/liquidity", get(get_liquidity))
         .with_state(state);
 
     // Add CORS layer if cors_domain is specified
@@ -258,7 +254,7 @@ async fn status_handler(State(state): State<AppState>) -> Json<Status> {
     Json(Status {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        connected_market_makers: state.mm_registry.get_connection_count(),
+        connected_market_makers: state.mm_registry.get_connected_market_makers(),
     })
 }
 
@@ -359,7 +355,11 @@ impl MessageHandler for RFQMessageHandler {
         }
     }
 
-    async fn on_connect(&self, mm_id: Uuid, _sender: &MessageSender) -> Result<(), mm_websocket_server::handler::MessageError> {
+    async fn on_connect(
+        &self,
+        mm_id: Uuid,
+        _sender: &MessageSender,
+    ) -> Result<(), mm_websocket_server::handler::MessageError> {
         // RFQ doesn't need initialization logic on connect
         debug!("RFQ MM {} connected", mm_id);
         Ok(())
@@ -378,20 +378,17 @@ impl MessageHandler for RFQMessageHandler {
 async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     // Generate unique connection ID to prevent race conditions
     let connection_id = Uuid::new_v4();
-    
+
     // Create channel for registry to send messages to the connection
     let (tx, rx) = mpsc::channel::<Message>(100);
 
     // Convert ProtocolMessage channel from registry into Message channel
     let (protocol_tx, mut protocol_rx) = mpsc::channel::<ProtocolMessage<RFQRequest>>(100);
-    
+
     // Register the MM with the registry
-    state.mm_registry.register(
-        mm_uuid,
-        connection_id,
-        protocol_tx,
-        "1.0.0".to_string(),
-    );
+    state
+        .mm_registry
+        .register(mm_uuid, connection_id, protocol_tx, "1.0.0".to_string());
 
     // Spawn task to convert ProtocolMessage to Message
     let tx_clone = tx.clone();
@@ -411,14 +408,8 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     });
 
     // Use the mm-websocket-server crate to handle the connection
-    let _ = mm_websocket_server::handle_mm_connection(
-        socket,
-        mm_uuid,
-        connection_id,
-        handler,
-        rx,
-    )
-    .await;
+    let _ = mm_websocket_server::handle_mm_connection(socket, mm_uuid, connection_id, handler, rx)
+        .await;
 }
 
 async fn request_quotes(
@@ -545,4 +536,3 @@ async fn get_liquidity(
         }
     }
 }
-

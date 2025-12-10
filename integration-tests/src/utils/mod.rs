@@ -109,7 +109,7 @@ pub async fn wait_for_swap_status(
     let timeout = Duration::from_secs(crate::utils::INTEGRATION_TEST_TIMEOUT_SECS);
     let start = Instant::now();
     let poll_interval = Duration::from_millis(500);
-    let url = format!("http://localhost:{otc_port}/api/v1/swaps/{swap_id}");
+    let url = format!("http://localhost:{otc_port}/api/v2/swap/{swap_id}");
 
     loop {
         let response = client.get(&url).send().await.unwrap();
@@ -190,7 +190,7 @@ pub async fn wait_for_swap_to_be_settled(otc_port: u16, swap_id: Uuid) {
     loop {
         let response = client
             .get(format!(
-                "http://localhost:{otc_port}/api/v1/swaps/{swap_id}"
+                "http://localhost:{otc_port}/api/v2/swap/{swap_id}"
             ))
             .send()
             .await

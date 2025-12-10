@@ -198,7 +198,7 @@ async fn test_insufficient_bitcoin_deposit_refund(
     };
 
     let response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
@@ -250,7 +250,7 @@ async fn test_insufficient_bitcoin_deposit_refund(
     // Check swap status
     let swap = client
         .get(format!(
-            "http://localhost:{otc_port}/api/v1/swaps/{}",
+            "http://localhost:{otc_port}/api/v2/swap/{}",
             response_json.swap_id
         ))
         .send()
@@ -351,7 +351,7 @@ async fn test_insufficient_bitcoin_deposit_refund(
     // Verify swap is now in RefundingUser status
     let final_swap = client
         .get(format!(
-            "http://localhost:{otc_port}/api/v1/swaps/{}",
+            "http://localhost:{otc_port}/api/v2/swap/{}",
             response_json.swap_id
         ))
         .send()
@@ -530,7 +530,7 @@ async fn test_insufficient_evm_deposit_refund(
     };
 
     let response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
@@ -593,7 +593,7 @@ async fn test_insufficient_evm_deposit_refund(
     // Check swap status
     let swap = client
         .get(format!(
-            "http://localhost:{otc_port}/api/v1/swaps/{}",
+            "http://localhost:{otc_port}/api/v2/swap/{}",
             response_json.swap_id
         ))
         .send()
@@ -703,7 +703,7 @@ async fn test_insufficient_evm_deposit_refund(
     // Verify swap is in RefundingUser status
     let final_swap = client
         .get(format!(
-            "http://localhost:{otc_port}/api/v1/swaps/{}",
+            "http://localhost:{otc_port}/api/v2/swap/{}",
             response_json.swap_id
         ))
         .send()

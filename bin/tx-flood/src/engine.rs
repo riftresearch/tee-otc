@@ -38,8 +38,8 @@ pub async fn run_load_test(
         .build()
         .context("failed to build HTTP client")?;
 
-    let create_swap_url = join_path(&config.otc_url, "/api/v1/swaps")?;
-    let swap_status_base = join_path(&config.otc_url, "/api/v1/swaps/")?;
+    let create_swap_url = join_path(&config.otc_url, "/api/v2/swap")?;
+    let swap_status_base = join_path(&config.otc_url, "/api/v2/swap/")?;
 
     let mut handles = Vec::with_capacity(config.total_swaps);
     for idx in 0..config.total_swaps {

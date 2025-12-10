@@ -211,7 +211,7 @@ async fn test_refund_from_bitcoin_user_deposit(
     };
 
     let response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
@@ -273,7 +273,7 @@ async fn test_refund_from_bitcoin_user_deposit(
     loop {
         let swap = client
             .get(format!(
-                "http://localhost:{otc_port}/api/v1/swaps/{}",
+                "http://localhost:{otc_port}/api/v2/swap/{}",
                 response_json.swap_id
             ))
             .send()
@@ -514,7 +514,7 @@ async fn test_refund_from_evm_user_deposit(
     };
 
     let response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
@@ -576,7 +576,7 @@ async fn test_refund_from_evm_user_deposit(
     loop {
         let swap = client
             .get(format!(
-                "http://localhost:{otc_port}/api/v1/swaps/{}",
+                "http://localhost:{otc_port}/api/v2/swap/{}",
                 response_json.swap_id
             ))
             .send()

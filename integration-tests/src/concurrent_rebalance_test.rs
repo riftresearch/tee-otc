@@ -131,7 +131,7 @@ async fn execute_user_swap(
     };
 
     let swap_response = match client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
@@ -259,7 +259,7 @@ async fn wait_for_swap_settlement(
         }
 
         let response = match client
-            .get(format!("http://localhost:{otc_port}/api/v1/swaps/{swap_id}"))
+            .get(format!("http://localhost:{otc_port}/api/v2/swap/{swap_id}"))
             .send()
             .await
         {

@@ -202,7 +202,7 @@ async fn test_swap_from_bitcoin_to_ethereum(
     };
 
     let response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
@@ -399,7 +399,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
     };
 
     let swap_response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
@@ -636,7 +636,7 @@ async fn test_swap_from_ethereum_to_bitcoin(
     };
 
     let response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await

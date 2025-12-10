@@ -28,11 +28,11 @@ use axum::{
     routing::{get, post, Router},
     Json,
 };
-use mm_websocket_server::{MessageHandler, MessageSender};
 use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use dstack_sdk::dstack_client::{DstackClient, GetQuoteResponse, InfoResponse};
-use metrics::{describe_gauge, describe_histogram, describe_counter, gauge, histogram};
+use metrics::{describe_counter, describe_gauge, describe_histogram, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use mm_websocket_server::{MessageHandler, MessageSender};
 use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
 use otc_chains::{bitcoin::BitcoinChain, evm::EvmChain, ChainRegistry};
 use otc_protocols::mm::{MMRequest, MMResponse, ProtocolMessage};
@@ -65,6 +65,7 @@ struct Status {
     status: String,
     version: String,
     last_monitor_pass: u64,
+    connected_market_makers: Vec<Uuid>,
 }
 
 const QUOTE_LATENCY_METRIC: &str = "otc_quote_response_seconds";
@@ -185,7 +186,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
             let mut interval = tokio::time::interval(Duration::from_secs(10));
             loop {
                 interval.tick().await;
-                
+
                 // Sync volume metrics
                 if let Ok(volumes) = db.swaps().get_settled_volume_totals().await {
                     for (market, total) in volumes {
@@ -196,7 +197,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
                         .set(total as f64);
                     }
                 }
-                
+
                 // Sync fee metrics
                 if let Ok(fees) = db.swaps().get_settled_fee_totals().await {
                     for (market, total) in fees {
@@ -261,25 +262,12 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         .route("/ws", get(websocket_handler))
         .route("/ws/mm", get(mm_websocket_handler))
         // API endpoints
-        .route("/api/v1/swaps", post(create_swap))
-        .route("/api/v1/swaps/:id", get(get_swap))
-        .route(
-            "/api/v1/market-makers/connected",
-            get(get_connected_market_makers),
-        )
-        .route("/api/v1/refund", post(refund_swap))
-        .route(
-            "/api/v1/chains/bitcoin/best-hash",
-            get(get_best_bitcoin_hash),
-        )
-        .route(
-            "/api/v1/chains/ethereum/best-hash",
-            get(get_best_ethereum_hash),
-        )
-        .route(
-            "/api/v1/chains/base/best-hash",
-            get(get_best_base_hash),
-        )
+        .route("/api/v2/swap", post(create_swap))
+        .route("/api/v2/swap/:id", get(get_swap))
+        .route("/api/v2/refund", post(refund_swap))
+        .route("/api/v2/chains/bitcoin/tip", get(get_best_bitcoin_hash))
+        .route("/api/v2/chains/ethereum/tip", get(get_best_ethereum_hash))
+        .route("/api/v2/chains/base/tip", get(get_best_base_hash))
         .route("/api/v1/tdx/quote", get(get_tdx_quote))
         .route("/api/v1/tdx/info", get(get_tdx_info))
         .with_state(state);
@@ -447,6 +435,7 @@ async fn status_handler(State(state): State<AppState>) -> impl IntoResponse {
         status: "online".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         last_monitor_pass: state.swap_monitoring_service.last_monitor_pass(),
+        connected_market_makers: state.mm_registry.get_connected_market_makers(),
     })
 }
 
@@ -693,12 +682,12 @@ struct OTCMessageHandler {
 impl MessageHandler for OTCMessageHandler {
     async fn handle_message(&self, mm_id: Uuid, text: &str) -> Option<String> {
         match serde_json::from_str::<ProtocolMessage<MMResponse>>(text) {
-                Ok(msg) => {
-                    let ProtocolMessage {
-                        version: _,
-                        sequence: _,
-                        payload,
-                    } = msg;
+            Ok(msg) => {
+                let ProtocolMessage {
+                    version: _,
+                    sequence: _,
+                    payload,
+                } = msg;
 
                 match payload {
                     MMResponse::QuoteValidated {
@@ -726,11 +715,14 @@ impl MessageHandler for OTCMessageHandler {
                         let mm_registry = self.mm_registry.clone();
                         let chain_registry = self.chain_registry.clone();
                         let swap_manager = self.swap_manager.clone();
-                        
+
                         tokio::spawn(async move {
                             match db
                                 .swaps()
-                                .get_settled_swaps_for_market_maker(mm_id, swap_settlement_timestamp)
+                                .get_settled_swaps_for_market_maker(
+                                    mm_id,
+                                    swap_settlement_timestamp,
+                                )
                                 .await
                             {
                                 Ok(settled_swaps) => {
@@ -738,7 +730,9 @@ impl MessageHandler for OTCMessageHandler {
                                         let master_key = swap_manager.master_key_bytes();
 
                                         for swap in settled_swaps {
-                                            let Some(chain_ops) = chain_registry.get(&swap.deposit_chain) else {
+                                            let Some(chain_ops) =
+                                                chain_registry.get(&swap.deposit_chain)
+                                            else {
                                                 error!(
                                                     market_maker_id = %mm_id,
                                                     swap_id = %swap.swap_id,
@@ -748,7 +742,8 @@ impl MessageHandler for OTCMessageHandler {
                                                 continue;
                                             };
 
-                                            let wallet = match chain_ops.derive_wallet(&master_key, &swap.user_deposit_salt)
+                                            let wallet = match chain_ops
+                                                .derive_wallet(&master_key, &swap.user_deposit_salt)
                                             {
                                                 Ok(wallet) => wallet,
                                                 Err(err) => {
@@ -788,10 +783,7 @@ impl MessageHandler for OTCMessageHandler {
                         });
                         None
                     }
-                    MMResponse::Batches {
-                        batches,
-                        ..
-                    } => {
+                    MMResponse::Batches { batches, .. } => {
                         for batch in batches {
                             let tx_hash = batch.tx_hash;
                             let swap_ids = batch.swap_ids;
@@ -846,7 +838,11 @@ impl MessageHandler for OTCMessageHandler {
         }
     }
 
-    async fn on_connect(&self, mm_id: Uuid, _sender: &MessageSender) -> Result<(), mm_websocket_server::handler::MessageError> {
+    async fn on_connect(
+        &self,
+        mm_id: Uuid,
+        _sender: &MessageSender,
+    ) -> Result<(), mm_websocket_server::handler::MessageError> {
         // Send pending swaps awaiting MM deposit
         match self.db.swaps().get_waiting_mm_deposit_swaps(mm_id).await {
             Ok(pending_swaps) => {
@@ -875,22 +871,41 @@ impl MessageHandler for OTCMessageHandler {
         }
 
         // Request latest deposit vault timestamp
-        if let Err(e) = self.mm_registry.request_latest_deposit_vault_timestamp(&mm_id).await {
+        if let Err(e) = self
+            .mm_registry
+            .request_latest_deposit_vault_timestamp(&mm_id)
+            .await
+        {
             error!(
                 market_maker_id = %mm_id,
                 error = %e,
                 "Failed to request latest deposit vault timestamp"
             );
         } else {
-            info!("Requested latest deposit vault timestamp from market maker {}", mm_id);
+            info!(
+                "Requested latest deposit vault timestamp from market maker {}",
+                mm_id
+            );
         }
 
         // Get and request new batches
-        match self.db.batches().get_latest_known_batch_timestamp_by_market_maker(&mm_id).await {
+        match self
+            .db
+            .batches()
+            .get_latest_known_batch_timestamp_by_market_maker(&mm_id)
+            .await
+        {
             Ok(newest_batch_timestamp) => {
-                info!("Latest known batch timestamp for market maker {} is {:#?}", mm_id, newest_batch_timestamp);
-                
-                if let Err(e) = self.mm_registry.request_new_batches(&mm_id, newest_batch_timestamp).await {
+                info!(
+                    "Latest known batch timestamp for market maker {} is {:#?}",
+                    mm_id, newest_batch_timestamp
+                );
+
+                if let Err(e) = self
+                    .mm_registry
+                    .request_new_batches(&mm_id, newest_batch_timestamp)
+                    .await
+                {
                     error!(
                         market_maker_id = %mm_id,
                         error = %e,
@@ -925,20 +940,17 @@ impl MessageHandler for OTCMessageHandler {
 async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     // Generate unique connection ID to prevent race conditions
     let connection_id = Uuid::new_v4();
-    
+
     // Create channel for registry to send messages to the connection
     let (tx, rx) = mpsc::channel::<Message>(100);
 
     // Convert ProtocolMessage channel from registry into Message channel
     let (protocol_tx, mut protocol_rx) = mpsc::channel::<ProtocolMessage<MMRequest>>(100);
-    
+
     // Register the MM with the registry
-    state.mm_registry.register(
-        mm_uuid,
-        connection_id,
-        protocol_tx,
-        "1.0.0".to_string(),
-    );
+    state
+        .mm_registry
+        .register(mm_uuid, connection_id, protocol_tx, "1.0.0".to_string());
 
     // Spawn task to convert ProtocolMessage to Message
     let tx_clone = tx.clone();
@@ -962,14 +974,8 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     });
 
     // Use the mm-websocket-server crate to handle the connection
-    let _ = mm_websocket_server::handle_mm_connection(
-        socket,
-        mm_uuid,
-        connection_id,
-        handler,
-        rx,
-    )
-    .await;
+    let _ = mm_websocket_server::handle_mm_connection(socket, mm_uuid, connection_id, handler, rx)
+        .await;
 }
 
 #[derive(Deserialize)]

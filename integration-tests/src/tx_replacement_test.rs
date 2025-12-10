@@ -8,7 +8,9 @@ use bitcoincore_rpc_async::RpcApi;
 use devnet::bitcoin_devnet::MiningMode;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::db::{BroadcastedTransactionRepository, Database};
-use market_maker::{bitcoin_wallet::BitcoinWallet, evm_wallet::EVMWallet, run_market_maker, wallet::Wallet};
+use market_maker::{
+    bitcoin_wallet::BitcoinWallet, evm_wallet::EVMWallet, run_market_maker, wallet::Wallet,
+};
 use otc_chains::traits::Payment;
 use otc_models::{ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
@@ -27,7 +29,11 @@ use tracing::{info, warn};
 use uuid::Uuid;
 
 use crate::utils::{
-    PgConnectOptionsExt, build_bitcoin_wallet_descriptor, build_mm_test_args, build_otc_server_test_args, build_rfq_server_test_args, build_test_user_ethereum_wallet, build_tmp_bitcoin_wallet_db_file, create_test_database, get_free_port, wait_for_market_maker_to_connect_to_rfq_server, wait_for_otc_server_to_be_ready, wait_for_rfq_server_to_be_ready, wait_for_swap_status, wait_for_swap_to_be_settled
+    build_bitcoin_wallet_descriptor, build_mm_test_args, build_otc_server_test_args,
+    build_rfq_server_test_args, build_test_user_ethereum_wallet, build_tmp_bitcoin_wallet_db_file,
+    create_test_database, get_free_port, wait_for_market_maker_to_connect_to_rfq_server,
+    wait_for_otc_server_to_be_ready, wait_for_rfq_server_to_be_ready, wait_for_swap_status,
+    wait_for_swap_to_be_settled, PgConnectOptionsExt,
 };
 
 /// Test that a replaced user deposit transaction (RBF) is properly detected and tracked
@@ -36,7 +42,6 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
     _: PoolOptions<sqlx::Postgres>,
     connect_options: PgConnectOptions,
 ) {
-    
     let market_maker_account = MultichainAccount::new(1);
     let user_account_1 = MultichainAccount::new(2);
     let user_account_2 = MultichainAccount::new(3);
@@ -53,14 +58,7 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
     let mut wallet_join_set = JoinSet::new();
 
     let tx_repo_db_url = create_test_database(&connect_options).await.unwrap();
-    let database = Arc::new(
-        Database::connect(
-            &tx_repo_db_url,
-            5,
-            1,
-        )
-        .await.unwrap()
-    );
+    let database = Arc::new(Database::connect(&tx_repo_db_url, 5, 1).await.unwrap());
 
     let broadcasted_transaction_repository = Arc::new(database.broadcasted_transactions());
 
@@ -110,7 +108,7 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
         )
         .await
         .unwrap();
-    
+
     devnet
         .ethereum
         .fund_eth_address(
@@ -228,7 +226,7 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
     };
 
     let swap_response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
@@ -243,7 +241,10 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
         ..
     } = swap_response.json().await.unwrap();
 
-    info!("Created swap {} with deposit address {}", swap_id, deposit_address);
+    info!(
+        "Created swap {} with deposit address {}",
+        swap_id, deposit_address
+    );
 
     // Create FIRST user deposit transaction using wallet 1
     let first_tx_hash = user_bitcoin_wallet_1
@@ -264,7 +265,10 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
         .await
         .unwrap();
 
-    info!("First user deposit tx broadcast from wallet 1: {}", first_tx_hash);
+    info!(
+        "First user deposit tx broadcast from wallet 1: {}",
+        first_tx_hash
+    );
 
     // Don't mine the transaction yet - let monitoring detect it in mempool
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -275,7 +279,7 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
 
     // Get swap details to verify the tx_hash
     let swap_response = client
-        .get(format!("http://localhost:{otc_port}/api/v1/swaps/{swap_id}"))
+        .get(format!("http://localhost:{otc_port}/api/v2/swap/{swap_id}"))
         .send()
         .await
         .unwrap();
@@ -286,10 +290,9 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
         "Swap should be tracking the first transaction"
     );
 
-
     // Now create a SECOND transaction from a different wallet to the same address
     info!("Creating second transaction from wallet 2...");
-    
+
     let second_tx_hash = user_bitcoin_wallet_2
         .create_batch_payment(
             vec![Payment {
@@ -308,16 +311,19 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
         .await
         .unwrap();
 
-    info!("Second user deposit tx broadcast from wallet 2: {}", second_tx_hash);
+    info!(
+        "Second user deposit tx broadcast from wallet 2: {}",
+        second_tx_hash
+    );
     // explicitly cancel the first transaction
     user_bitcoin_wallet_1
-    .cancel_tx(&first_tx_hash)
-    .await
-    .unwrap();
+        .cancel_tx(&first_tx_hash)
+        .await
+        .unwrap();
 
     // Mine the second transaction to confirm it
     devnet.bitcoin.mine_blocks(6).await.unwrap();
-    
+
     // Wait for esplora to sync
     tokio::time::sleep(Duration::from_secs(3)).await;
 
@@ -328,14 +334,14 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
 
     // Get swap details again to verify it now tracks the SECOND transaction
     let swap_response = client
-        .get(format!("http://localhost:{otc_port}/api/v1/swaps/{swap_id}"))
+        .get(format!("http://localhost:{otc_port}/api/v2/swap/{swap_id}"))
         .send()
         .await
         .unwrap();
     let swap: otc_server::api::SwapResponse = swap_response.json().await.unwrap();
-    
+
     info!("Swap user deposit: {:?}", swap.user_deposit);
-    
+
     // The swap should now be tracking the second transaction (which is confirmed)
     assert_eq!(
         swap.user_deposit.deposit_tx.as_ref().unwrap(),
@@ -347,7 +353,7 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
 
     // Now wait for the swap to fully settle (like simple_swap_test does)
     wait_for_swap_to_be_settled(otc_port, swap_id).await;
-    
+
     info!("✅ Swap fully settled with second transaction!");
 
     drop(devnet);
