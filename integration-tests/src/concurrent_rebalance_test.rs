@@ -1,7 +1,7 @@
-use alloy::{primitives::U256, providers::ext::AnvilApi};
 use alloy::signers::local::PrivateKeySigner;
+use alloy::{primitives::U256, providers::ext::AnvilApi};
 use devnet::{MultichainAccount, RiftDevnet, WithdrawalProcessingMode};
-use market_maker::{MarketMakerArgs, run_market_maker, wallet::Wallet};
+use market_maker::{run_market_maker, wallet::Wallet, MarketMakerArgs};
 use otc_models::{ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::{CreateSwapRequest, CreateSwapResponse};
@@ -65,7 +65,7 @@ async fn execute_user_swap(
     };
 
     let quote_response = match client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
@@ -86,7 +86,10 @@ async fn execute_user_swap(
             user_index,
             swap_id: None,
             success: false,
-            error_message: Some(format!("Quote request returned status {}", quote_response.status())),
+            error_message: Some(format!(
+                "Quote request returned status {}",
+                quote_response.status()
+            )),
         };
     }
 
@@ -178,11 +181,14 @@ async fn execute_user_swap(
     info!("User {} created swap {}", user_index, swap_id);
 
     // Create user wallet and deposit cbBTC
-    let (mut wallet_join_set, user_wallet) = build_test_user_ethereum_wallet(devnet.as_ref(), &user_account).await;
+    let (mut wallet_join_set, user_wallet) =
+        build_test_user_ethereum_wallet(devnet.as_ref(), &user_account).await;
 
     // Ensure EIP-7702 delegation
     if let Err(e) = user_wallet
-        .ensure_eip7702_delegation(PrivateKeySigner::from_slice(&user_account.secret_bytes).unwrap())
+        .ensure_eip7702_delegation(
+            PrivateKeySigner::from_slice(&user_account.secret_bytes).unwrap(),
+        )
         .await
     {
         wallet_join_set.shutdown().await;
@@ -201,9 +207,7 @@ async fn execute_user_swap(
                 lot: Lot {
                     currency: Currency {
                         chain: ChainType::Ethereum,
-                        token: TokenIdentifier::Address(
-                            cbbtc_address.clone(),
-                        ),
+                        token: TokenIdentifier::Address(cbbtc_address.clone()),
                         decimals,
                     },
                     amount: min_input,
@@ -339,7 +343,10 @@ async fn test_concurrent_swaps_with_aggressive_rebalancing(
     let coinbase_mock_port = devnet
         .coinbase_mock_server_port
         .expect("Coinbase mock server should be running");
-    info!("Coinbase mock server running on port {}", coinbase_mock_port);
+    info!(
+        "Coinbase mock server running on port {}",
+        coinbase_mock_port
+    );
 
     // Fund market maker with limited, symmetric inventory
     info!("Funding market maker with limited inventory...");
@@ -449,9 +456,15 @@ async fn test_concurrent_swaps_with_aggressive_rebalancing(
     mm_args.rebalance_poll_interval_secs = 3; // Check every 3 seconds
 
     info!("MM rebalancing config:");
-    info!("  - Target ratio: {}% BTC", mm_args.inventory_target_ratio_bps / 100);
+    info!(
+        "  - Target ratio: {}% BTC",
+        mm_args.inventory_target_ratio_bps / 100
+    );
     info!("  - Tolerance: ±{}%", mm_args.rebalance_tolerance_bps / 100);
-    info!("  - Poll interval: {}s", mm_args.rebalance_poll_interval_secs);
+    info!(
+        "  - Poll interval: {}s",
+        mm_args.rebalance_poll_interval_secs
+    );
 
     service_join_set.spawn(async move {
         run_market_maker(mm_args)
@@ -523,7 +536,10 @@ async fn test_concurrent_swaps_with_aggressive_rebalancing(
         .unwrap();
 
     // Wait for all successful swaps to settle
-    info!("Waiting for all swaps to settle (timeout: {}s)...", TEST_TIMEOUT_SECS);
+    info!(
+        "Waiting for all swaps to settle (timeout: {}s)...",
+        TEST_TIMEOUT_SECS
+    );
     let settlement_start = Instant::now();
     let client = reqwest::Client::new();
     let timeout = Duration::from_secs(TEST_TIMEOUT_SECS);
@@ -579,7 +595,11 @@ async fn test_concurrent_swaps_with_aggressive_rebalancing(
     // Final summary
     info!("=== Test Complete ===");
     info!("Total duration: {:?}", total_duration);
-    info!("Swap initiation: {}/{} successful", successful_initiations.len(), NUM_USERS);
+    info!(
+        "Swap initiation: {}/{} successful",
+        successful_initiations.len(),
+        NUM_USERS
+    );
     info!(
         "Swap settlement: {}/{} successful",
         settled_swaps.len(),
@@ -615,4 +635,3 @@ async fn test_concurrent_swaps_with_aggressive_rebalancing(
     drop(devnet);
     service_join_set.shutdown().await;
 }
-

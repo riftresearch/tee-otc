@@ -102,7 +102,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         },
     };
 
-    let quote_request_url = format!("http://127.0.0.1:{rfq_port}/api/v1/quotes/request");
+    let quote_request_url = format!("http://127.0.0.1:{rfq_port}/api/v2/quote");
     let client = reqwest::Client::new();
 
     // Start timing the quote request
@@ -186,7 +186,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         },
     };
 
-    let quote_request_url = format!("http://127.0.0.1:{rfq_port}/api/v1/quotes/request");
+    let quote_request_url = format!("http://127.0.0.1:{rfq_port}/api/v2/quote");
     let client = reqwest::Client::new();
 
     let response = client
@@ -241,7 +241,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         },
     };
 
-    let quote_request_url = format!("http://127.0.0.1:{rfq_port}/api/v1/quotes/request");
+    let quote_request_url = format!("http://127.0.0.1:{rfq_port}/api/v2/quote");
     let client = reqwest::Client::new();
 
     let response = client

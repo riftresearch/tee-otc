@@ -180,7 +180,7 @@ async fn test_refund_from_bitcoin_user_deposit(
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
@@ -302,7 +302,7 @@ async fn test_refund_from_bitcoin_user_deposit(
     };
 
     let refund_response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/refund",))
+        .post(format!("http://localhost:{otc_port}/api/v2/refund",))
         .json(&refund_request)
         .send()
         .await
@@ -488,7 +488,7 @@ async fn test_refund_from_evm_user_deposit(
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
@@ -606,7 +606,7 @@ async fn test_refund_from_evm_user_deposit(
     };
 
     let refund_response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/refund"))
+        .post(format!("http://localhost:{otc_port}/api/v2/refund"))
         .json(&refund_request)
         .send()
         .await

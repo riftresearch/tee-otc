@@ -1,6 +1,10 @@
 use alloy::signers::k256::ecdsa::SigningKey;
 use alloy::signers::local::PrivateKeySigner;
-use alloy::{network::TransactionBuilder, primitives::U256, providers::{Provider, ProviderBuilder, WsConnect}};
+use alloy::{
+    network::TransactionBuilder,
+    primitives::U256,
+    providers::{Provider, ProviderBuilder, WsConnect},
+};
 use bitcoincore_rpc_async::RpcApi;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, wallet::Wallet};
@@ -173,7 +177,7 @@ async fn test_insufficient_bitcoin_deposit_refund(
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
@@ -181,8 +185,7 @@ async fn test_insufficient_bitcoin_deposit_refund(
 
     assert_eq!(quote_response.status(), 200);
 
-    let quote_response: rfq_server::server::QuoteResponse =
-        quote_response.json().await.unwrap();
+    let quote_response: rfq_server::server::QuoteResponse = quote_response.json().await.unwrap();
 
     let quote = match quote_response.quote.as_ref().unwrap() {
         RFQResult::Success(quote) => quote.clone(),
@@ -214,7 +217,7 @@ async fn test_insufficient_bitcoin_deposit_refund(
 
     // Send INSUFFICIENT funds (expected_amount - 1 satoshi)
     let insufficient_amount = response_json.min_input - U256::from(1);
-    
+
     info!(
         "Sending insufficient amount: {} (expected: {})",
         insufficient_amount, response_json.min_input
@@ -284,7 +287,7 @@ async fn test_insufficient_bitcoin_deposit_refund(
     };
 
     let refund_response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/refund"))
+        .post(format!("http://localhost:{otc_port}/api/v2/refund"))
         .json(&refund_request)
         .send()
         .await
@@ -505,7 +508,7 @@ async fn test_insufficient_evm_deposit_refund(
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
@@ -513,8 +516,7 @@ async fn test_insufficient_evm_deposit_refund(
 
     assert_eq!(quote_response.status(), 200);
 
-    let quote_response: rfq_server::server::QuoteResponse =
-        quote_response.json().await.unwrap();
+    let quote_response: rfq_server::server::QuoteResponse = quote_response.json().await.unwrap();
 
     let quote = match quote_response.quote.expect("Quote should be present") {
         RFQResult::Success(q) => q,
@@ -626,7 +628,7 @@ async fn test_insufficient_evm_deposit_refund(
     };
 
     let refund_response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/refund"))
+        .post(format!("http://localhost:{otc_port}/api/v2/refund"))
         .json(&refund_request)
         .send()
         .await
@@ -726,4 +728,3 @@ async fn test_insufficient_evm_deposit_refund(
     }
     join_set.abort_all();
 }
-

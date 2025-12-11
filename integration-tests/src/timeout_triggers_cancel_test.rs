@@ -178,7 +178,7 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await

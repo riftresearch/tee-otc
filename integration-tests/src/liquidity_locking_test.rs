@@ -38,7 +38,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
     connect_options: PgConnectOptions,
 ) {
     tokio::spawn(async move {
-        loop { 
+        loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
             MockClock::advance_system_time(Duration::from_secs(1));
         }
@@ -129,7 +129,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
     // Step 1: Get initial liquidity
     info!("=== Step 1: Getting initial liquidity ===");
     let liquidity_response = client
-        .get(format!("http://localhost:{rfq_port}/api/v1/liquidity"))
+        .get(format!("http://localhost:{rfq_port}/api/v2/liquidity"))
         .send()
         .await
         .unwrap();
@@ -152,7 +152,10 @@ async fn test_liquidity_locking_reduces_available_liquidity(
 
     let initial_max_amount = btc_to_cbbtc_pair.max_amount;
     info!("Initial BTC->cbBTC max_amount: {}", initial_max_amount);
-    assert!(initial_max_amount > U256::ZERO, "Should have initial liquidity");
+    assert!(
+        initial_max_amount > U256::ZERO,
+        "Should have initial liquidity"
+    );
 
     // Step 2: Request a quote and create a swap
     info!("=== Step 2: Creating swap to trigger liquidity lock ===");
@@ -167,30 +170,30 @@ async fn test_liquidity_locking_reduces_available_liquidity(
         },
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(
-                devnet.ethereum.cbbtc_contract.address().to_string(),
-            ),
+            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
         .unwrap();
 
     assert_eq!(quote_response.status(), 200);
-    let quote_response: rfq_server::server::QuoteResponse =
-        quote_response.json().await.unwrap();
+    let quote_response: rfq_server::server::QuoteResponse = quote_response.json().await.unwrap();
 
     let quote = match quote_response.quote.expect("Should have quote") {
         RFQResult::Success(quote) => quote,
         _ => panic!("Should get successful quote"),
     };
 
-    info!("Got quote: min_input = {}, max_input = {}", quote.min_input, quote.max_input);
+    info!(
+        "Got quote: min_input = {}, max_input = {}",
+        quote.min_input, quote.max_input
+    );
 
     // Create swap
     let swap_request = CreateSwapRequest {
@@ -258,7 +261,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
 
     // Step 4: Verify liquidity decreased after lock (before deposit confirmation)
     info!("=== Step 4: Verifying liquidity decreased after lock (before confirmation) ===");
-    
+
     // Poll liquidity endpoint until cache updates (up to 20 seconds to account for 15s cache interval)
     let mut max_amount_after_lock = None;
     let mut attempts = 0;
@@ -266,11 +269,11 @@ async fn test_liquidity_locking_reduces_available_liquidity(
     while attempts < max_attempts && max_amount_after_lock.is_none() {
         tokio::time::sleep(Duration::from_secs(1)).await;
         let liquidity_response = client
-            .get(format!("http://localhost:{rfq_port}/api/v1/liquidity"))
+            .get(format!("http://localhost:{rfq_port}/api/v2/liquidity"))
             .send()
             .await
             .unwrap();
-        
+
         assert_eq!(liquidity_response.status(), 200);
         let liquidity: rfq_server::liquidity_aggregator::LiquidityAggregatorResult =
             liquidity_response.json().await.unwrap();
@@ -287,7 +290,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
                     && matches!(&tp.to.token, TokenIdentifier::Address(addr) if addr.to_lowercase() == devnet.ethereum.cbbtc_contract.address().to_string().to_lowercase())
             })
             .expect("Should have BTC->cbBTC trading pair");
-        
+
         max_amount_after_lock = Some(btc_to_cbbtc.max_amount);
         attempts += 1;
     }
@@ -322,15 +325,13 @@ async fn test_liquidity_locking_reduces_available_liquidity(
         },
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(
-                devnet.ethereum.cbbtc_contract.address().to_string(),
-            ),
+            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
     };
 
     let large_quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&large_quote_request)
         .send()
         .await
@@ -346,9 +347,13 @@ async fn test_liquidity_locking_reduces_available_liquidity(
             RFQResult::Success(_) => {
                 // If we get a quote, it should be for an amount <= max_amount_after_lock
                 // This is acceptable if the strategy allows it
-                info!("Got quote even though it exceeds reported max - acceptable if strategy allows");
+                info!(
+                    "Got quote even though it exceeds reported max - acceptable if strategy allows"
+                );
             }
-            RFQResult::MakerUnavailable(_) | RFQResult::InvalidRequest(_) | RFQResult::Unsupported(_) => {
+            RFQResult::MakerUnavailable(_)
+            | RFQResult::InvalidRequest(_)
+            | RFQResult::Unsupported(_) => {
                 info!("Got expected error for amount exceeding locked liquidity");
             }
         }
@@ -368,7 +373,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
     // Step 7: Verify liquidity is restored after unlock
     info!("=== Step 7: Verifying liquidity restored after unlock ===");
     let liquidity_response_after_unlock = client
-        .get(format!("http://localhost:{rfq_port}/api/v1/liquidity"))
+        .get(format!("http://localhost:{rfq_port}/api/v2/liquidity"))
         .send()
         .await
         .unwrap();
@@ -405,4 +410,3 @@ async fn test_liquidity_locking_reduces_available_liquidity(
     drop(devnet);
     tokio::join!(wallet_join_set.shutdown(), service_join_set.shutdown());
 }
-

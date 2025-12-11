@@ -129,7 +129,7 @@ async fn test_connection_reset_and_reconnection(
 /// Wait for market maker to connect to OTC server
 async fn wait_for_mm_connection_to_otc(otc_port: u16) {
     let client = reqwest::Client::new();
-    let connected_url = format!("http://127.0.0.1:{otc_port}/api/v1/market-makers/connected");
+    let status_url = format!("http://127.0.0.1:{otc_port}/status");
 
     let start_time = std::time::Instant::now();
     let timeout = Duration::from_secs(INTEGRATION_TEST_TIMEOUT_SECS);
@@ -142,12 +142,12 @@ async fn wait_for_mm_connection_to_otc(otc_port: u16) {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        if let Ok(response) = client.get(&connected_url).send().await {
+        if let Ok(response) = client.get(&status_url).send().await {
             if response.status() == 200 {
                 if let Ok(body) = response.json::<serde_json::Value>().await {
-                    if let Some(market_makers) = body["market_makers"].as_array() {
-                        if market_makers.len() == 1
-                            && market_makers[0].as_str() == Some(TEST_MARKET_MAKER_API_ID)
+                    if let Some(connected_mms) = body["connected_market_makers"].as_array() {
+                        if connected_mms.len() == 1
+                            && connected_mms[0].as_str() == Some(TEST_MARKET_MAKER_API_ID)
                         {
                             return;
                         }
@@ -161,7 +161,7 @@ async fn wait_for_mm_connection_to_otc(otc_port: u16) {
 /// Wait for market maker to connect to RFQ server
 async fn wait_for_mm_connection_to_rfq(rfq_port: u16) {
     let client = reqwest::Client::new();
-    let connected_url = format!("http://127.0.0.1:{rfq_port}/api/v1/market-makers/connected");
+    let status_url = format!("http://127.0.0.1:{rfq_port}/status");
 
     let start_time = std::time::Instant::now();
     let timeout = Duration::from_secs(INTEGRATION_TEST_TIMEOUT_SECS);
@@ -174,12 +174,12 @@ async fn wait_for_mm_connection_to_rfq(rfq_port: u16) {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        if let Ok(response) = client.get(&connected_url).send().await {
+        if let Ok(response) = client.get(&status_url).send().await {
             if response.status() == 200 {
                 if let Ok(body) = response.json::<serde_json::Value>().await {
-                    if let Some(market_makers) = body["market_makers"].as_array() {
-                        if market_makers.len() == 1
-                            && market_makers[0].as_str() == Some(TEST_MARKET_MAKER_API_ID)
+                    if let Some(connected_mms) = body["connected_market_makers"].as_array() {
+                        if connected_mms.len() == 1
+                            && connected_mms[0].as_str() == Some(TEST_MARKET_MAKER_API_ID)
                         {
                             return;
                         }
@@ -415,11 +415,14 @@ async fn test_connection_reset_hammering(
         otc_proxy.reset_all_from_server().await;
         rfq_proxy.reset_all_from_server().await;
         reset_count += 1;
-        
+
         tokio::time::sleep(reset_interval).await;
     }
 
-    println!("✓ Completed {} server-side resets over 5 seconds", reset_count);
+    println!(
+        "✓ Completed {} server-side resets over 5 seconds",
+        reset_count
+    );
 
     // After hammering, verify that the market maker can still reconnect
     println!("\nWaiting for market maker to reconnect after hammering...");
@@ -429,4 +432,3 @@ async fn test_connection_reset_hammering(
 
     println!("\n=== Connection reset hammering test completed successfully! ===");
 }
-

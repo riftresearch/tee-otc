@@ -18,7 +18,7 @@ use crate::utils::{
 
 /// This test verifies that when a market maker is configured for Ethereum,
 /// it correctly rejects quote requests for Base <> Bitcoin swaps.
-/// 
+///
 /// The market maker should only provide quotes for its configured EVM chain,
 /// which in this case is Ethereum. Requests for Base swaps should fail.
 #[sqlx::test]
@@ -146,7 +146,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&base_to_btc_quote_request)
         .send()
         .await
@@ -158,8 +158,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
         "Quote request should return 200 (but quote may be rejected)"
     );
 
-    let quote_response: rfq_server::server::QuoteResponse =
-        quote_response.json().await.unwrap();
+    let quote_response: rfq_server::server::QuoteResponse = quote_response.json().await.unwrap();
 
     info!("Base -> Bitcoin quote response: {:?}", quote_response.quote);
 
@@ -169,7 +168,10 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
             info!("✓ Quote correctly rejected (None returned)");
         }
         Some(RFQResult::MakerUnavailable(reason)) => {
-            info!("✓ Quote correctly rejected (MakerUnavailable): {:?}", reason);
+            info!(
+                "✓ Quote correctly rejected (MakerUnavailable): {:?}",
+                reason
+            );
         }
         Some(RFQResult::InvalidRequest(reason)) => {
             info!("✓ Quote correctly rejected (InvalidRequest): {:?}", reason);
@@ -178,7 +180,9 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
             info!("✓ Quote correctly rejected (Unsupported): {:?}", reason);
         }
         Some(RFQResult::Success(_)) => {
-            panic!("Quote should NOT succeed for Base -> Bitcoin when MM is configured for Ethereum");
+            panic!(
+                "Quote should NOT succeed for Base -> Bitcoin when MM is configured for Ethereum"
+            );
         }
     }
 
@@ -199,7 +203,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&btc_to_base_quote_request)
         .send()
         .await
@@ -207,8 +211,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
 
     assert_eq!(quote_response.status(), 200);
 
-    let quote_response: rfq_server::server::QuoteResponse =
-        quote_response.json().await.unwrap();
+    let quote_response: rfq_server::server::QuoteResponse = quote_response.json().await.unwrap();
 
     info!("Bitcoin -> Base quote response: {:?}", quote_response.quote);
 
@@ -218,7 +221,10 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
             info!("✓ Quote correctly rejected (None returned)");
         }
         Some(RFQResult::MakerUnavailable(reason)) => {
-            info!("✓ Quote correctly rejected (MakerUnavailable): {:?}", reason);
+            info!(
+                "✓ Quote correctly rejected (MakerUnavailable): {:?}",
+                reason
+            );
         }
         Some(RFQResult::InvalidRequest(reason)) => {
             info!("✓ Quote correctly rejected (InvalidRequest): {:?}", reason);
@@ -227,7 +233,9 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
             info!("✓ Quote correctly rejected (Unsupported): {:?}", reason);
         }
         Some(RFQResult::Success(_)) => {
-            panic!("Quote should NOT succeed for Bitcoin -> Base when MM is configured for Ethereum");
+            panic!(
+                "Quote should NOT succeed for Bitcoin -> Base when MM is configured for Ethereum"
+            );
         }
     }
 
@@ -248,7 +256,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&btc_to_eth_quote_request)
         .send()
         .await
@@ -256,10 +264,12 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
 
     assert_eq!(quote_response.status(), 200);
 
-    let quote_response: rfq_server::server::QuoteResponse =
-        quote_response.json().await.unwrap();
+    let quote_response: rfq_server::server::QuoteResponse = quote_response.json().await.unwrap();
 
-    info!("Bitcoin -> Ethereum quote response: {:?}", quote_response.quote);
+    info!(
+        "Bitcoin -> Ethereum quote response: {:?}",
+        quote_response.quote
+    );
 
     // This quote SHOULD succeed since the MM is configured for Ethereum
     match quote_response.quote {
@@ -289,9 +299,10 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
         }
     }
 
-    info!("All tests passed! Market maker correctly rejects Base swaps when configured for Ethereum");
+    info!(
+        "All tests passed! Market maker correctly rejects Base swaps when configured for Ethereum"
+    );
 
     drop(devnet);
     service_join_set.shutdown().await;
 }
-

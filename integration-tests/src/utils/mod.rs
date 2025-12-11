@@ -216,7 +216,7 @@ pub async fn wait_for_swap_to_be_settled(otc_port: u16, swap_id: Uuid) {
 
 pub async fn wait_for_market_maker_to_connect_to_rfq_server(rfq_port: u16) {
     let client = reqwest::Client::new();
-    let connected_url = format!("http://127.0.0.1:{rfq_port}/api/v1/market-makers/connected");
+    let status_url = format!("http://127.0.0.1:{rfq_port}/status");
 
     let start_time = std::time::Instant::now();
     let timeout = Duration::from_secs(INTEGRATION_TEST_TIMEOUT_SECS);
@@ -229,12 +229,12 @@ pub async fn wait_for_market_maker_to_connect_to_rfq_server(rfq_port: u16) {
 
         tokio::time::sleep(Duration::from_millis(100)).await;
 
-        if let Ok(response) = client.get(&connected_url).send().await {
+        if let Ok(response) = client.get(&status_url).send().await {
             if response.status() == 200 {
                 if let Ok(body) = response.json::<serde_json::Value>().await {
-                    if let Some(market_makers) = body["market_makers"].as_array() {
-                        if market_makers.len() == 1
-                            && market_makers[0].as_str() == Some(TEST_MARKET_MAKER_API_ID)
+                    if let Some(connected_mms) = body["connected_market_makers"].as_array() {
+                        if connected_mms.len() == 1
+                            && connected_mms[0].as_str() == Some(TEST_MARKET_MAKER_API_ID)
                         {
                             println!("Market maker is connected to RFQ server!");
                             break;
