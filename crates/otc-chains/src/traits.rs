@@ -109,6 +109,14 @@ impl MarketMakerQueuedPaymentExt for [MarketMakerQueuedPayment] {
 // implementors of this trait should be stateless
 #[async_trait]
 pub trait ChainOperations: Send + Sync {
+    /// Optional access to an Esplora client for chains that are backed by Esplora.
+    ///
+    /// Most chains do not expose any Esplora API; they should keep the default `None`.
+    #[must_use]
+    fn esplora_client(&self) -> Option<&esplora_client::AsyncClient> {
+        None
+    }
+
     /// Create a new wallet, returning the wallet and the salt used
     fn create_wallet(&self) -> Result<(Wallet, [u8; 32])>;
 

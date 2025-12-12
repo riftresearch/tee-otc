@@ -91,7 +91,7 @@ impl SwapRepository {
                 id, quote_id, market_maker_id,
                 metadata,
                 user_deposit_salt, user_deposit_address, mm_nonce,
-                user_destination_address, user_evm_account_address,
+                user_destination_address, refund_address,
                 status,
                 user_deposit_status, mm_deposit_status, settlement_status,
                 latest_refund,
@@ -117,7 +117,7 @@ impl SwapRepository {
         .bind(&swap.user_deposit_address)
         .bind(&swap.mm_nonce[..])
         .bind(&swap.user_destination_address)
-        .bind(swap.user_evm_account_address.to_string())
+        .bind(swap.refund_address.to_string())
         .bind(swap.status)
         .bind(user_deposit_json)
         .bind(mm_deposit_json)
@@ -142,7 +142,7 @@ impl SwapRepository {
                 s.id, s.quote_id, s.market_maker_id,
                 s.metadata, s.realized_swap,
                 s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
-                s.user_destination_address, s.user_evm_account_address,
+                s.user_destination_address, s.refund_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
                 s.latest_refund,
@@ -181,7 +181,7 @@ impl SwapRepository {
                 s.id, s.quote_id, s.market_maker_id,
                 s.metadata, s.realized_swap,
                 s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
-                s.user_destination_address, s.user_evm_account_address,
+                s.user_destination_address, s.refund_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
                 s.latest_refund,
@@ -359,7 +359,7 @@ impl SwapRepository {
                 s.id, s.quote_id, s.market_maker_id,
                 s.metadata, s.realized_swap,
                 s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
-                s.user_destination_address, s.user_evm_account_address,
+                s.user_destination_address, s.refund_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
                 s.latest_refund,
@@ -732,7 +732,7 @@ impl SwapRepository {
                 s.id, s.quote_id, s.market_maker_id,
                 s.metadata, s.realized_swap,
                 s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
-                s.user_destination_address, s.user_evm_account_address,
+                s.user_destination_address, s.refund_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
                 s.latest_refund,
@@ -1277,9 +1277,7 @@ mod tests {
             user_deposit_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
             mm_nonce,
             user_destination_address: "0x1234567890123456789012345678901234567890".to_string(),
-            user_evm_account_address: "0x1234567890123456789012345678901234567890"
-                .parse()
-                .unwrap(),
+            refund_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx124".to_string(),
             status: SwapStatus::WaitingUserDepositInitiated,
             user_deposit_status: None,
             mm_deposit_status: None,
@@ -1339,8 +1337,8 @@ mod tests {
             original_swap.user_destination_address
         );
         assert_eq!(
-            retrieved_swap.user_evm_account_address,
-            original_swap.user_evm_account_address
+            retrieved_swap.refund_address,
+            original_swap.refund_address
         );
         assert_eq!(retrieved_swap.status, original_swap.status);
 

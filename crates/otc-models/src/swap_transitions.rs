@@ -260,12 +260,8 @@ impl Swap {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
-    use crate::{ChainType, Currency, Metadata, Quote, SwapRates, TokenIdentifier};
-
     use super::*;
-    use alloy::primitives::Address;
+    use crate::{ChainType, Currency, Metadata, Quote, SwapRates, TokenIdentifier};
     use chrono::Duration;
     use uuid::Uuid;
 
@@ -298,10 +294,7 @@ mod tests {
             user_deposit_address: "0x123".to_string(),
             mm_nonce: [0u8; 16],
             user_destination_address: "0x123".to_string(),
-            user_evm_account_address: Address::from_str(
-                "0x1234567890123456789012345678901234567890",
-            )
-            .unwrap(),
+            refund_address: "0x1234".to_string(),
             status: SwapStatus::WaitingUserDepositInitiated,
             user_deposit_status: None,
             mm_deposit_status: None,

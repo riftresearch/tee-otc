@@ -1,82 +1,12 @@
-use alloy::{
-    dyn_abi::{DynSolType, Eip712Domain}, primitives::{Address, U256}, signers::Signature, sol, sol_types::SolStruct
-};
+use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
 use otc_models::{ChainType, Metadata, Quote, RefundSwapReason};
 use serde::{Deserialize, Serialize};
-use std::sync::LazyLock;
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BlockHashResponse {
     pub block_hash: String,
-}
-
-
-
-/// Request to refund a swap
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct RefundSwapRequest {
-    /// The "message" part of the EIP712 typed data
-    pub payload: RefundPayload,
-
-    /// The signature of the full EIP712 typed data
-    pub signature: Vec<u8>,
-}
-
-pub static RIFT_DOMAIN_TYPE: LazyLock<DynSolType> = LazyLock::new(|| {
-    DynSolType::Tuple(vec![
-        DynSolType::String,    // name
-        DynSolType::String,    // version
-        DynSolType::Uint(256), // chainId
-        DynSolType::Address,   // verifyingContract
-    ])
-});
-
-pub static RIFT_DOMAIN_VALUE: LazyLock<Eip712Domain> = LazyLock::new(|| {
-    Eip712Domain::new(
-        Some("Rift OTC".to_string().into()),
-        Some("1.0.0".to_string().into()),
-        Some(U256::from(1)),
-        None,
-        None,
-    )
-});
-
-
-sol! {
-    struct SolRefundPayload {
-        string swap_id;
-        string refund_recipient;
-        uint256 refund_transaction_fee;
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RefundPayload {
-    pub swap_id: Uuid,
-    pub refund_recipient: String,
-    pub refund_transaction_fee: U256,
-}
-
-
-
-impl RefundPayload {
-    pub fn get_signer_address_from_signature(&self, signature: &[u8]) -> Result<Address, String> {
-        let message_value = SolRefundPayload {
-            swap_id: self.swap_id.to_string(),
-            refund_recipient: self.refund_recipient.to_string(),
-            refund_transaction_fee: self.refund_transaction_fee,
-        };
-
-        let eip712_hash = message_value.eip712_signing_hash(&RIFT_DOMAIN_VALUE);
-        let recovered_address = Signature::from_raw(signature)
-            .map_err(|e| format!("Passed signature could not be parsed: {}", e))?
-            .recover_address_from_prehash(&eip712_hash)
-            .map_err(|e| format!("Bad signature for prehash: {}", e))?;
-
-        Ok(recovered_address)
-    }
 }
 
 /// Response after refunding a swap
@@ -101,8 +31,8 @@ pub struct CreateSwapRequest {
     /// User's destination address for receiving funds
     pub user_destination_address: String,
 
-    /// User's EVM account that is authorized to control the swap
-    pub user_evm_account_address: Address,
+    /// User's refund address for receiving their "from" currency if the swap fails
+    pub refund_address: String,
 
     /// Optional metadata describing the swap source
     #[serde(default)]

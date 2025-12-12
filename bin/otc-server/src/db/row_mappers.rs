@@ -174,8 +174,7 @@ impl<'r> FromRow<'r> for Swap {
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
         let updated_at: DateTime<Utc> = row.try_get("updated_at")?;
 
-        let user_evm_account_address: Address =
-            Address::from_str(row.try_get("user_evm_account_address")?).unwrap(); // Assume that if it's in the DB the address is valid
+        let refund_address: String = row.try_get("refund_address")?;
 
         Ok(Swap {
             id,
@@ -187,7 +186,7 @@ impl<'r> FromRow<'r> for Swap {
             user_deposit_address,
             mm_nonce,
             user_destination_address,
-            user_evm_account_address,
+            refund_address,
             status,
             user_deposit_status,
             mm_deposit_status,

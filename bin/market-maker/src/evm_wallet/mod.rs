@@ -12,7 +12,7 @@ use alloy::{
     sol_types::SolValue,
 };
 use async_trait::async_trait;
-use blockchain_utils::{create_receive_with_authorization_execution, WebsocketWalletProvider};
+use blockchain_utils::{WebsocketWalletProvider, create_transfer_with_authorization_execution};
 use eip3009_erc20_contract::GenericEIP3009ERC20::GenericEIP3009ERC20Instance;
 use eip7702_delegator_contract::{
     EIP7702Delegator::{EIP7702DelegatorInstance, Execution},
@@ -765,14 +765,14 @@ impl DepositToAuthorizedERC20Transfer for Deposit {
                 loc: location!(),
             }
         })?;
-        create_receive_with_authorization_execution(
+        create_transfer_with_authorization_execution(
             &self.holdings,
             &lot_signer,
             provider,
             recipient,
         )
         .await
-        .map_err(|e| WalletError::ReceiveAuthorizationFailed {
+        .map_err(|e| WalletError::TransferAuthorizationFailed {
             source: e,
             loc: location!(),
         })

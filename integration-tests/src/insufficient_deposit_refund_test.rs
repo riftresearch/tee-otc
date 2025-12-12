@@ -1,5 +1,3 @@
-use alloy::signers::k256::ecdsa::SigningKey;
-use alloy::signers::local::PrivateKeySigner;
 use alloy::{
     network::TransactionBuilder,
     primitives::U256,
@@ -12,7 +10,7 @@ use otc_chains::traits::Payment;
 use otc_models::{ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::{
-    swaps::{RefundPayload, RefundSwapRequest, RefundSwapResponse},
+    swaps::RefundSwapResponse,
     CreateSwapRequest, CreateSwapResponse, SwapResponse,
 };
 use reqwest::StatusCode;
@@ -27,7 +25,7 @@ use crate::utils::{
     build_bitcoin_wallet_descriptor, build_mm_test_args, build_otc_server_test_args,
     build_rfq_server_test_args, build_tmp_bitcoin_wallet_db_file, get_free_port,
     wait_for_market_maker_to_connect_to_rfq_server, wait_for_otc_server_to_be_ready,
-    wait_for_rfq_server_to_be_ready, PgConnectOptionsExt, RefundRequestSignature,
+    wait_for_rfq_server_to_be_ready, PgConnectOptionsExt,
 };
 
 /// Test that a user can immediately refund when they send insufficient Bitcoin deposit
@@ -196,7 +194,7 @@ async fn test_insufficient_bitcoin_deposit_refund(
     let swap_request = CreateSwapRequest {
         quote: quote.clone(),
         user_destination_address: user_account.ethereum_address.to_string(),
-        user_evm_account_address: user_account.ethereum_address,
+        refund_address: user_account.bitcoin_wallet.address.to_string(),
         metadata: None,
     };
 
@@ -270,25 +268,11 @@ async fn test_insufficient_bitcoin_deposit_refund(
     );
 
     // Now attempt immediate refund (no time advancement needed for early refund)
-    let refund_payload = RefundPayload {
-        swap_id: response_json.swap_id,
-        refund_recipient: user_account.bitcoin_wallet.address.to_string(),
-        refund_transaction_fee: U256::from(2000),
-    };
-
-    let signer = PrivateKeySigner::from_signing_key(
-        SigningKey::from_bytes(&user_account.secret_bytes.into()).unwrap(),
-    );
-    let signature = refund_payload.sign(&signer).to_vec();
-
-    let refund_request = RefundSwapRequest {
-        payload: refund_payload,
-        signature,
-    };
-
     let refund_response = client
-        .post(format!("http://localhost:{otc_port}/api/v2/refund"))
-        .json(&refund_request)
+        .post(format!(
+            "http://localhost:{otc_port}/api/v2/swap/{}/refund",
+            response_json.swap_id
+        ))
         .send()
         .await
         .unwrap();
@@ -527,7 +511,7 @@ async fn test_insufficient_evm_deposit_refund(
     let swap_request = CreateSwapRequest {
         quote,
         user_destination_address: user_account.bitcoin_wallet.address.to_string(),
-        user_evm_account_address: user_account.ethereum_address,
+        refund_address: user_account.ethereum_address.to_string(),
         metadata: None,
     };
 
@@ -612,24 +596,11 @@ async fn test_insufficient_evm_deposit_refund(
     );
 
     // Attempt immediate refund (no time advancement needed)
-    let signer = PrivateKeySigner::from_signing_key(
-        SigningKey::from_bytes(&user_account.secret_bytes.into()).unwrap(),
-    );
-    let refund_payload = RefundPayload {
-        swap_id: response_json.swap_id,
-        refund_recipient: user_account.ethereum_address.to_string(),
-        refund_transaction_fee: U256::from(0), // EVM doesn't need explicit fee
-    };
-    let signature = refund_payload.sign(&signer).to_vec();
-
-    let refund_request = RefundSwapRequest {
-        payload: refund_payload,
-        signature,
-    };
-
     let refund_response = client
-        .post(format!("http://localhost:{otc_port}/api/v2/refund"))
-        .json(&refund_request)
+        .post(format!(
+            "http://localhost:{otc_port}/api/v2/swap/{}/refund",
+            response_json.swap_id
+        ))
         .send()
         .await
         .unwrap();

@@ -221,7 +221,7 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
     let swap_request = CreateSwapRequest {
         quote: quote.clone(),
         user_destination_address: user_account_1.ethereum_address.to_string(),
-        user_evm_account_address: user_account_1.ethereum_address,
+        refund_address: user_account_1.bitcoin_wallet.address.to_string(),
         metadata: None,
     };
 

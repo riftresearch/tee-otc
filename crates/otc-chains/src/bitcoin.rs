@@ -122,6 +122,10 @@ impl BitcoinChain {
 
 #[async_trait]
 impl ChainOperations for BitcoinChain {
+    fn esplora_client(&self) -> Option<&esplora_client::AsyncClient> {
+        Some(&self.untrusted_esplora_client)
+    }
+
     fn create_wallet(&self) -> Result<(Wallet, [u8; 32])> {
         // Generate a random salt
         let mut salt = [0u8; 32];

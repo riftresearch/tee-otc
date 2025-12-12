@@ -1,5 +1,5 @@
 use crate::{constants::MIN_VIABLE_OUTPUT_SATS, Quote, SwapRates, SwapStatus};
-use alloy::primitives::{Address, U256};
+use alloy::primitives::U256;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -117,7 +117,7 @@ pub struct Swap {
 
     // User's addresses
     pub user_destination_address: String,
-    pub user_evm_account_address: Address,
+    pub refund_address: String,
 
     // Core status
     pub status: SwapStatus,
@@ -203,7 +203,7 @@ pub fn can_be_refunded_soon(
 mod tests {
     use super::*;
     use crate::{ChainType, Currency, Quote, SwapRates, TokenIdentifier};
-    use alloy::primitives::{Address, U256};
+    use alloy::primitives::U256;
     use chrono::Duration;
 
     fn make_test_quote() -> Quote {
@@ -239,7 +239,7 @@ mod tests {
             user_deposit_address: "test_address".to_string(),
             mm_nonce: [0u8; 16],
             user_destination_address: "0x1234".to_string(),
-            user_evm_account_address: Address::ZERO,
+            refund_address: "0x1234".to_string(),
             status,
             user_deposit_status: None,
             mm_deposit_status: None,

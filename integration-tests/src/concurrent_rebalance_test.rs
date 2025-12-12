@@ -129,7 +129,7 @@ async fn execute_user_swap(
     let swap_request = CreateSwapRequest {
         quote: quote.clone(),
         user_destination_address: user_account.bitcoin_wallet.address.to_string(),
-        user_evm_account_address: user_account.ethereum_address,
+        refund_address: user_account.ethereum_address.to_string(),
         metadata: None,
     };
 

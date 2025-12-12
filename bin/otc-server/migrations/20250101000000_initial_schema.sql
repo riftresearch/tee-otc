@@ -61,7 +61,7 @@ CREATE TABLE swaps (
     
     -- User addresses
     user_destination_address VARCHAR(255) NOT NULL,
-    user_evm_account_address VARCHAR(255) NOT NULL,
+    refund_address VARCHAR(255) NOT NULL,
 
     -- Core status using enum
     status swap_status NOT NULL DEFAULT 'waiting_user_deposit_initiated',

@@ -11,11 +11,6 @@ use std::{
     time::Instant,
 };
 
-use alloy::{
-    dyn_abi::DynSolValue,
-    primitives::keccak256,
-    signers::{local::PrivateKeySigner, SignerSync},
-};
 use bitcoincore_rpc_async::Auth;
 use blockchain_utils::{create_websocket_wallet_provider, init_logger};
 use ctor::ctor;
@@ -23,7 +18,6 @@ use devnet::MultichainAccount;
 use market_maker::{evm_wallet::EVMWallet, MarketMakerArgs};
 use otc_server::{
     api::{
-        swaps::{RefundPayload, SolRefundPayload, RIFT_DOMAIN_VALUE},
         SwapResponse,
     },
     OtcServerArgs,
@@ -34,23 +28,6 @@ use tokio::{net::TcpListener, task::JoinSet};
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
-
-pub trait RefundRequestSignature {
-    fn sign(&self, signer: &PrivateKeySigner) -> Vec<u8>;
-}
-
-impl RefundRequestSignature for RefundPayload {
-    fn sign(&self, signer: &PrivateKeySigner) -> Vec<u8> {
-        let message_value = SolRefundPayload {
-            swap_id: self.swap_id.to_string(),
-            refund_recipient: self.refund_recipient.to_string(),
-            refund_transaction_fee: self.refund_transaction_fee,
-        };
-        let domain_value = RIFT_DOMAIN_VALUE.clone();
-        let signature = signer.sign_typed_data_sync(&message_value, &domain_value).unwrap();
-        signature.as_bytes().to_vec()
-    }
-}
 
 pub trait PgConnectOptionsExt {
     fn to_database_url(&self) -> String;

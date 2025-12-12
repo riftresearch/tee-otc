@@ -1,5 +1,5 @@
 use crate::api::swaps::{
-    CreateSwapRequest, CreateSwapResponse, DepositInfoResponse, RefundSwapRequest,
+    CreateSwapRequest, CreateSwapResponse, DepositInfoResponse, 
     RefundSwapResponse, SwapResponse,
 };
 use crate::config::Settings;
@@ -7,8 +7,10 @@ use crate::db::Database;
 use crate::error::OtcServerError;
 use crate::services::MMRegistry;
 use alloy::hex::FromHexError;
+use alloy::primitives::U256;
+use blockchain_utils::MempoolEsploraFeeExt;
 use otc_chains::ChainRegistry;
-use otc_models::{LatestRefund, Metadata, Swap, SwapStatus, TokenIdentifier};
+use otc_models::{ChainType, LatestRefund, Metadata, Swap, SwapStatus, TokenIdentifier};
 use snafu::prelude::*;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -105,21 +107,9 @@ impl SwapManager {
 
     pub async fn refund_swap(
         &self,
-        refund_request: RefundSwapRequest,
+        swap_id: Uuid,
     ) -> SwapResult<RefundSwapResponse> {
-        let swap_id = refund_request.payload.swap_id;
         let swap = self.db.swaps().get(swap_id).await.context(DatabaseSnafu)?;
-        let signer_address = refund_request
-            .payload
-            .get_signer_address_from_signature(&refund_request.signature)
-            .map_err(|_| SwapError::BadRefundRequest {
-                reason: "Bad signature".to_string(),
-            })?;
-        if signer_address != swap.user_evm_account_address {
-            return Err(SwapError::BadRefundRequest {
-                reason: "Wrong signer address".to_string(),
-            });
-        }
 
         match swap.can_be_refunded() {
             Some(reason) => {
@@ -140,19 +130,39 @@ impl SwapManager {
                     .derive_wallet(&self.settings.master_key_bytes(), &swap.user_deposit_salt)
                     .map_err(|e| SwapError::WalletDerivation { source: e })?;
 
+
+                let fee = match swap.quote.from_currency.chain { 
+                    ChainType::Bitcoin => { 
+                        let esplora = deposit_chain.esplora_client().ok_or(SwapError::BadRefundRequest {
+                            reason: "Esplora client not available for Bitcoin chain".to_string(),
+                        })?;
+
+                        let next_block_fee_rate = esplora
+                            .get_mempool_fee_estimate_next_block()
+                            .await
+                            .map_err(|e| SwapError::BadRefundRequest {
+                                reason: format!("Failed to query mempool fee estimate: {e}"),
+                            })?;
+                        // 111 estimated vbytes for a refund tx that is P2WPKH
+                        (next_block_fee_rate * 111 as f64).ceil() as u64
+                    },
+                    ChainType::Ethereum => 0,
+                    ChainType::Base => 0,
+                };
+
                 let tx_data = deposit_chain
                     .dump_to_address(
                         &swap.quote.from_currency.token,
                         deposit_wallet.private_key(),
-                        &refund_request.payload.refund_recipient,
-                        refund_request.payload.refund_transaction_fee,
+                        &swap.refund_address,
+                        U256::from(fee),
                     )
                     .await
                     .map_err(|e| SwapError::DumpToAddress { err: e.to_string() })?;
 
                 let latest_refund = LatestRefund {
                     timestamp: utc::now(),
-                    recipient_address: refund_request.payload.refund_recipient.clone(),
+                    recipient_address: swap.refund_address.clone(),
                 };
 
                 self.db
@@ -191,24 +201,38 @@ impl SwapManager {
         let CreateSwapRequest {
             quote,
             user_destination_address,
-            user_evm_account_address,
+            refund_address,
             metadata,
         } = request;
 
         let metadata = metadata.unwrap_or_default();
         Self::validate_metadata(&metadata)?;
 
-        // ensure the user destination address is valid
-        let receive_chain = self.chain_registry.get(&quote.to_currency.chain).ok_or(
+        // Ensure the user destination address is valid for the "to" chain.
+        let destination_chain = self.chain_registry.get(&quote.to_currency.chain).ok_or(
             SwapError::ChainNotSupported {
                 chain: quote.to_currency.chain,
             },
         )?;
 
-        if !receive_chain.validate_address(&user_destination_address) {
+        if !destination_chain.validate_address(&user_destination_address) {
             return Err(SwapError::InvalidDestinationAddress {
                 address: user_destination_address,
                 chain: quote.to_currency.chain,
+            });
+        }
+
+        // Ensure the refund address is valid for the "from" chain.
+        let refund_chain = self.chain_registry.get(&quote.from_currency.chain).ok_or(
+            SwapError::ChainNotSupported {
+                chain: quote.from_currency.chain,
+            },
+        )?;
+
+        if !refund_chain.validate_address(&refund_address) {
+            return Err(SwapError::InvalidDestinationAddress {
+                address: refund_address,
+                chain: quote.from_currency.chain,
             });
         }
 
@@ -304,7 +328,7 @@ impl SwapManager {
             metadata,
             realized: None, // Populated when user deposit is detected
             user_destination_address,
-            user_evm_account_address,
+            refund_address,
             status: SwapStatus::WaitingUserDepositInitiated,
             user_deposit_status: None,
             mm_deposit_status: None,

@@ -7,7 +7,7 @@ use alloy::rpc::types::{Log as RpcLog, TransactionReceipt};
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
 use alloy::{hex, sol};
 use async_trait::async_trait;
-use blockchain_utils::create_receive_with_authorization_execution;
+use blockchain_utils::create_transfer_with_authorization_execution;
 use eip3009_erc20_contract::GenericEIP3009ERC20::GenericEIP3009ERC20Instance;
 use evm_token_indexer_client::TokenIndexerClient;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier, TransferInfo, TxStatus, Wallet};
@@ -427,7 +427,7 @@ impl ChainOperations for EvmChain {
             amount: token_balance,
         };
 
-        let execution = create_receive_with_authorization_execution(
+        let execution = create_transfer_with_authorization_execution(
             &lot,
             &sender_signer,
             &self.provider,

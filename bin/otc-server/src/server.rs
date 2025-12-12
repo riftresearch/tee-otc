@@ -1,6 +1,6 @@
 use crate::{
     api::swaps::{
-        BlockHashResponse, CreateSwapRequest, CreateSwapResponse, RefundSwapRequest,
+        BlockHashResponse, CreateSwapRequest, CreateSwapResponse,
         RefundSwapResponse, SwapResponse,
     },
     config::Settings,
@@ -264,7 +264,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         // API endpoints
         .route("/api/v2/swap", post(create_swap))
         .route("/api/v2/swap/:id", get(get_swap))
-        .route("/api/v2/refund", post(refund_swap))
+        .route("/api/v2/swap/:id/refund", post(refund_swap))
         .route("/api/v2/chains/bitcoin/tip", get(get_best_bitcoin_hash))
         .route("/api/v2/chains/ethereum/tip", get(get_best_ethereum_hash))
         .route("/api/v2/chains/base/tip", get(get_best_base_hash))
@@ -526,11 +526,11 @@ async fn handle_socket(mut socket: WebSocket) {
 
 async fn refund_swap(
     State(state): State<AppState>,
-    Json(request): Json<RefundSwapRequest>,
+    Path(swap_id): Path<Uuid>,
 ) -> Result<Json<RefundSwapResponse>, crate::error::OtcServerError> {
     state
         .swap_manager
-        .refund_swap(request)
+        .refund_swap(swap_id)
         .await
         .map(Json)
         .map_err(Into::into)
@@ -592,8 +592,10 @@ async fn create_swap(
 ) -> Result<Json<CreateSwapResponse>, crate::error::OtcServerError> {
     // Address screening (only if configured). Block if either address is High/Severe risk.
     if let Some(screener) = &state.address_screener {
-        let mut to_check: Vec<String> = vec![request.user_destination_address.clone()];
-        to_check.push(request.user_evm_account_address.to_string());
+        let to_check: Vec<String> = vec![
+            request.user_destination_address.clone(),
+            request.refund_address.clone(),
+        ];
 
         for addr in to_check {
             match screener.get_address_risk(&addr).await {
