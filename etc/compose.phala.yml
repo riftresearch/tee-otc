@@ -2111,32 +2111,6 @@ configs:
 
 
 services:
-  volume-cleanup:
-    container_name: tee-volume-cleanup
-    image: alpine:3.22.1
-    command: >
-      sh -c "
-        echo 'Starting volume cleanup...';
-        echo 'Removing reth_logs...';
-        rm -rf /cleanup/reth_logs/* /cleanup/reth_logs/.[!.]* 2>/dev/null || true;
-        echo 'Removing eth_jwt_data...';
-        rm -rf /cleanup/eth_jwt_data/* /cleanup/eth_jwt_data/.[!.]* 2>/dev/null || true;
-        echo 'Removing lighthouse_data...';
-        rm -rf /cleanup/lighthouse_data/* /cleanup/lighthouse_data/.[!.]* 2>/dev/null || true;
-        echo 'Removing reth_mainnet_data...';
-        rm -rf /cleanup/reth_mainnet_data/* /cleanup/reth_mainnet_data/.[!.]* 2>/dev/null || true;
-        echo 'Volume cleanup complete!';
-        echo 'You can now remove these volumes with: docker volume rm tee-otc_reth_logs tee-otc_eth_jwt_data tee-otc_lighthouse_data tee-otc_reth_mainnet_data'
-      "
-    volumes:
-      - reth_logs:/cleanup/reth_logs
-      - eth_jwt_data:/cleanup/eth_jwt_data
-      - lighthouse_data:/cleanup/lighthouse_data
-      - reth_mainnet_data:/cleanup/reth_mainnet_data
-    restart: "no"
-    networks:
-      - rift-network
-
   pg-secret-generator:
     container_name: tee-pg-secret-generator
     image: alpine:3.22.1
@@ -2519,8 +2493,3 @@ volumes:
   pg_secrets:
   eth_helios_data:
   base_helios_data:
-  # Volumes for cleanup - can be removed after cleanup service runs
-  reth_logs:
-  eth_jwt_data:
-  lighthouse_data:
-  reth_mainnet_data:
