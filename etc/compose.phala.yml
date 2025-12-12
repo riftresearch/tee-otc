@@ -142,8 +142,8 @@ configs:
     content: |
       #!/bin/bash
       set -euo pipefail
-
-      archive_url="https://rift-blockchain-archive.s3.us-west-1.amazonaws.com/bitcoind-datadir-2025-09-11.tar.lz4"
+      base_archive_url="https://snapshots.publicnode.com/bitcoin-base.tar.lz4"
+      part_archive_url="https://snapshots.publicnode.com/bitcoin-part-927450.tar.lz4"
 
       echo "Checking Bitcoin directory: $$BITCOIN_DATA_DIR"
 
@@ -155,12 +155,22 @@ configs:
           # Ensure target dir exists
           mkdir -p "$$BITCOIN_DATA_DIR"
 
-          echo "Downloading from: $$archive_url"
+          echo "Downloading base snapshot from: $$base_archive_url"
           echo "Extracting directly to: $$BITCOIN_DATA_DIR"
 
-          # Stream download -> lz4 decode -> tar extract
-          if wget -O - "$$archive_url" | tar -I lz4 -xvf - -C "$$BITCOIN_DATA_DIR"; then
-              echo "Download and extraction successful"
+          # Stream download -> lz4 decode -> tar extract (base)
+          if wget -O - "$$base_archive_url" | tar -I lz4 -xvf - -C "$$BITCOIN_DATA_DIR"; then
+              echo "Base snapshot download and extraction successful"
+
+              echo "Downloading part snapshot from: $$part_archive_url"
+              echo "Extracting directly to: $$BITCOIN_DATA_DIR"
+
+              # Stream download -> lz4 decode -> tar extract (part)
+              if wget -O - "$$part_archive_url" | tar -I lz4 -xvf - -C "$$BITCOIN_DATA_DIR"; then
+                  echo "Part snapshot download and extraction successful"
+              else
+                  echo "Warning: Failed to download or extract part snapshot. Bitcoin Core may need to sync remaining blocks."
+              fi
 
               # Ensure correct ownership if running as root
               if id -u bitcoin >/dev/null 2>&1; then
@@ -169,7 +179,7 @@ configs:
 
               echo "Data directory size: $$(du -sh $$BITCOIN_DATA_DIR | cut -f1)"
           else
-              echo "Warning: Failed to download or extract blockchain data. Bitcoin Core will sync from genesis."
+              echo "Warning: Failed to download or extract base snapshot. Bitcoin Core will sync from genesis."
               echo "This will take significantly longer but is still functional."
           fi
       else
@@ -2233,7 +2243,7 @@ services:
           && mkdir -p /home/bitcoin/.bitcoin \
           && chown -R bitcoin:bitcoin /home/bitcoin/.bitcoin
         WORKDIR /opt/bitcoin
-        RUN curl -fsSL "https://bitcoincore.org/bin/bitcoin-core-29.0/bitcoin-29.0-x86_64-linux-gnu.tar.gz" -o bitcoin.tar.gz \
+        RUN curl -fsSL "https://bitcoincore.org/bin/bitcoin-core-30.0/bitcoin-30.0-x86_64-linux-gnu.tar.gz" -o bitcoin.tar.gz \
           && tar -xzf bitcoin.tar.gz --strip-components=1 \
           && install -m 0755 -o root -g root -t /usr/local/bin bin/* \
           && rm -rf /opt/bitcoin
