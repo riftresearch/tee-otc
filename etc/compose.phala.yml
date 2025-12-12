@@ -2152,7 +2152,7 @@ services:
 
       POSTGRES_INITDB_ARGS: "--data-checksums"
     volumes:
-      - otc_postgres_data_v3:/var/lib/postgresql/data
+      - otc_postgres_data_v4:/var/lib/postgresql/data
       - pg_secrets:/run/postgres-secrets:ro
     configs:
       - source: postgres-conf
@@ -2485,7 +2485,7 @@ networks:
         - subnet: 172.21.0.0/16
 
 volumes:
-  otc_postgres_data_v3:
+  otc_postgres_data_v4:
   bitcoin_data:
   otc_server_config_data:
   prometheus_data_v4:
