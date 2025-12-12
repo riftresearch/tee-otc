@@ -94,7 +94,10 @@ impl MarketMakerQueuedPaymentExt for [MarketMakerQueuedPayment] {
             // safety note: mm_nonce is 16 bytes always, so no risk of ambiguity attacks
             nonce_data.extend_from_slice(&qp.mm_nonce);
         }
-        let batch_nonce_digest = alloy::primitives::keccak256(&nonce_data).0;
+        let mut batch_nonce_digest = alloy::primitives::keccak256(&nonce_data).0;
+        // SECURITY: vanity-prefixing 4 bytes reduces the effective output length from 256 -> 224 bits.
+        // That implies ~224-bit preimage/2nd-preimage work (idealized) and ~112-bit collision security (birthday bound).
+        batch_nonce_digest[0..4].copy_from_slice(b"rift");
 
         Some(MarketMakerBatch {
             ordered_payments,
