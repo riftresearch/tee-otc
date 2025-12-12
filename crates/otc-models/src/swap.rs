@@ -109,8 +109,8 @@ pub struct Swap {
     pub realized: Option<RealizedSwap>,
 
     // Salt for deterministic wallet generation when combined with the TEE master key
-    pub user_deposit_salt: [u8; 32],
-    pub user_deposit_address: String, // cached for convenience, can be derived from the salt and master key
+    pub deposit_vault_salt: [u8; 32],
+    pub deposit_vault_address: String, // cached for convenience, can be derived from the salt and master key
 
     // Nonce for the market maker to embed in their payment address
     pub mm_nonce: [u8; 16],
@@ -235,8 +235,8 @@ mod tests {
             quote: make_test_quote(),
             metadata: Metadata::default(),
             realized: None,
-            user_deposit_salt: [0u8; 32],
-            user_deposit_address: "test_address".to_string(),
+            deposit_vault_salt: [0u8; 32],
+            deposit_vault_address: "test_address".to_string(),
             mm_nonce: [0u8; 16],
             user_destination_address: "0x1234".to_string(),
             refund_address: "0x1234".to_string(),

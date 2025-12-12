@@ -36,7 +36,7 @@ pub struct PendingMMDepositSwap {
 #[derive(Debug, Clone)]
 pub struct SettledSwapNotification {
     pub swap_id: Uuid,
-    pub user_deposit_salt: [u8; 32],
+    pub deposit_vault_salt: [u8; 32],
     pub user_deposit_tx_hash: String,
     pub lot: Lot,
     pub deposit_chain: ChainType,
@@ -47,7 +47,7 @@ pub struct SettledSwapNotification {
 pub struct ForceSwapNotification {
     pub swap_id: Uuid,
     pub market_maker_id: Uuid,
-    pub user_deposit_salt: [u8; 32],
+    pub deposit_vault_salt: [u8; 32],
     pub user_deposit_tx_hash: String,
     pub lot: Lot,
 }
@@ -90,7 +90,7 @@ impl SwapRepository {
             INSERT INTO swaps (
                 id, quote_id, market_maker_id,
                 metadata,
-                user_deposit_salt, user_deposit_address, mm_nonce,
+                deposit_vault_salt, deposit_vault_address, mm_nonce,
                 user_destination_address, refund_address,
                 status,
                 user_deposit_status, mm_deposit_status, settlement_status,
@@ -113,8 +113,8 @@ impl SwapRepository {
         .bind(swap.quote.id)
         .bind(swap.market_maker_id)
         .bind(metadata_json)
-        .bind(&swap.user_deposit_salt[..])
-        .bind(&swap.user_deposit_address)
+        .bind(&swap.deposit_vault_salt[..])
+        .bind(&swap.deposit_vault_address)
         .bind(&swap.mm_nonce[..])
         .bind(&swap.user_destination_address)
         .bind(swap.refund_address.to_string())
@@ -141,7 +141,7 @@ impl SwapRepository {
             SELECT 
                 s.id, s.quote_id, s.market_maker_id,
                 s.metadata, s.realized_swap,
-                s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
+                s.deposit_vault_salt, s.deposit_vault_address, s.mm_nonce,
                 s.user_destination_address, s.refund_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
@@ -180,7 +180,7 @@ impl SwapRepository {
             SELECT 
                 s.id, s.quote_id, s.market_maker_id,
                 s.metadata, s.realized_swap,
-                s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
+                s.deposit_vault_salt, s.deposit_vault_address, s.mm_nonce,
                 s.user_destination_address, s.refund_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
@@ -358,7 +358,7 @@ impl SwapRepository {
             SELECT 
                 s.id, s.quote_id, s.market_maker_id,
                 s.metadata, s.realized_swap,
-                s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
+                s.deposit_vault_salt, s.deposit_vault_address, s.mm_nonce,
                 s.user_destination_address, s.refund_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
@@ -483,7 +483,7 @@ impl SwapRepository {
             r#"
             SELECT
                 s.id AS swap_id,
-                s.user_deposit_salt,
+                s.deposit_vault_salt,
                 s.user_deposit_status,
                 s.updated_at,
                 q.from_chain,
@@ -505,14 +505,14 @@ impl SwapRepository {
 
         let mut swaps = Vec::with_capacity(rows.len());
         for row in rows {
-            let salt_vec: Vec<u8> = row.try_get("user_deposit_salt")?;
+            let salt_vec: Vec<u8> = row.try_get("deposit_vault_salt")?;
             if salt_vec.len() != 32 {
                 return Err(OtcServerError::InvalidData {
-                    message: "user_deposit_salt must be exactly 32 bytes".to_string(),
+                    message: "deposit_vault_salt must be exactly 32 bytes".to_string(),
                 });
             }
-            let mut user_deposit_salt = [0u8; 32];
-            user_deposit_salt.copy_from_slice(&salt_vec);
+            let mut deposit_vault_salt = [0u8; 32];
+            deposit_vault_salt.copy_from_slice(&salt_vec);
 
             let from_chain: String = row.try_get("from_chain")?;
             let deposit_chain = ChainType::from_db_string(&from_chain).ok_or(OtcServerError::InvalidData {
@@ -537,7 +537,7 @@ impl SwapRepository {
 
             swaps.push(SettledSwapNotification {
                 swap_id: row.try_get("swap_id")?,
-                user_deposit_salt,
+                deposit_vault_salt,
                 user_deposit_tx_hash: deposit_status.tx_hash,
                 lot: actual_deposit_lot,
                 deposit_chain,
@@ -556,7 +556,7 @@ impl SwapRepository {
             SELECT
                 s.id AS swap_id,
                 s.market_maker_id,
-                s.user_deposit_salt,
+                s.deposit_vault_salt,
                 s.user_deposit_status,
                 q.from_chain,
                 q.from_token,
@@ -574,14 +574,14 @@ impl SwapRepository {
 
         let mut swaps = Vec::with_capacity(rows.len());
         for row in rows {
-            let salt_vec: Vec<u8> = row.try_get("user_deposit_salt")?;
+            let salt_vec: Vec<u8> = row.try_get("deposit_vault_salt")?;
             if salt_vec.len() != 32 {
                 return Err(OtcServerError::InvalidData {
-                    message: "user_deposit_salt must be exactly 32 bytes".to_string(),
+                    message: "deposit_vault_salt must be exactly 32 bytes".to_string(),
                 });
             }
-            let mut user_deposit_salt = [0u8; 32];
-            user_deposit_salt.copy_from_slice(&salt_vec);
+            let mut deposit_vault_salt = [0u8; 32];
+            deposit_vault_salt.copy_from_slice(&salt_vec);
 
             let user_deposit_status_json: serde_json::Value = row.try_get("user_deposit_status")?;
             let user_deposit_status = user_deposit_status_from_json(user_deposit_status_json)?;
@@ -599,7 +599,7 @@ impl SwapRepository {
             swaps.push(ForceSwapNotification {
                 swap_id: row.try_get("swap_id")?,
                 market_maker_id: row.try_get("market_maker_id")?,
-                user_deposit_salt,
+                deposit_vault_salt,
                 user_deposit_tx_hash: user_deposit_status.tx_hash,
                 lot,
             });
@@ -731,7 +731,7 @@ impl SwapRepository {
             SELECT 
                 s.id, s.quote_id, s.market_maker_id,
                 s.metadata, s.realized_swap,
-                s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
+                s.deposit_vault_salt, s.deposit_vault_address, s.mm_nonce,
                 s.user_destination_address, s.refund_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
@@ -1273,8 +1273,8 @@ mod tests {
                 start_asset: Some("btc".to_string()),
             },
             realized: None,
-            user_deposit_salt: user_salt,
-            user_deposit_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
+            deposit_vault_salt: user_salt,
+            deposit_vault_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
             mm_nonce,
             user_destination_address: "0x1234567890123456789012345678901234567890".to_string(),
             refund_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx124".to_string(),
@@ -1316,12 +1316,12 @@ mod tests {
             original_swap.market_maker_id
         );
         assert_eq!(
-            retrieved_swap.user_deposit_salt,
-            original_swap.user_deposit_salt
+            retrieved_swap.deposit_vault_salt,
+            original_swap.deposit_vault_salt
         );
         assert_eq!(
-            retrieved_swap.user_deposit_address,
-            original_swap.user_deposit_address
+            retrieved_swap.deposit_vault_address,
+            original_swap.deposit_vault_address
         );
         assert_eq!(
             retrieved_swap.metadata.affiliate,

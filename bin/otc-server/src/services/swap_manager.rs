@@ -127,7 +127,7 @@ impl SwapManager {
                     })?;
 
                 let deposit_wallet = deposit_chain
-                    .derive_wallet(&self.settings.master_key_bytes(), &swap.user_deposit_salt)
+                    .derive_wallet(&self.settings.master_key_bytes(), &swap.deposit_vault_salt)
                     .map_err(|e| SwapError::WalletDerivation { source: e })?;
 
 
@@ -300,9 +300,9 @@ impl SwapManager {
 
         // 5. Generate random salts for wallet derivation
         let swap_id = Uuid::new_v4();
-        let mut user_deposit_salt = [0u8; 32];
+        let mut deposit_vault_salt = [0u8; 32];
         let mut mm_nonce = [0u8; 16]; // 128 bits of collision resistance against an existing tx w/ a given output address && amount
-        getrandom::getrandom(&mut user_deposit_salt).expect("Failed to generate random salt");
+        getrandom::getrandom(&mut deposit_vault_salt).expect("Failed to generate random salt");
         getrandom::getrandom(&mut mm_nonce).expect("Failed to generate random nonce");
         // 7. Derive user deposit address for response
         let user_chain = self.chain_registry.get(&quote.from_currency.chain).ok_or(
@@ -311,8 +311,8 @@ impl SwapManager {
             },
         )?;
 
-        let user_deposit_address = &user_chain
-            .derive_wallet(&self.settings.master_key_bytes(), &user_deposit_salt)
+        let deposit_vault_address = &user_chain
+            .derive_wallet(&self.settings.master_key_bytes(), &deposit_vault_salt)
             .map_err(|e| SwapError::WalletDerivation { source: e })?
             .address;
 
@@ -322,8 +322,8 @@ impl SwapManager {
             id: swap_id,
             quote: quote.clone(),
             market_maker_id: quote.market_maker_id,
-            user_deposit_salt,
-            user_deposit_address: user_deposit_address.clone(),
+            deposit_vault_salt,
+            deposit_vault_address: deposit_vault_address.clone(),
             mm_nonce,
             metadata,
             realized: None, // Populated when user deposit is detected
@@ -355,7 +355,7 @@ impl SwapManager {
         )?;
 
         let user_wallet = user_chain
-            .derive_wallet(&self.settings.master_key_bytes(), &user_deposit_salt)
+            .derive_wallet(&self.settings.master_key_bytes(), &deposit_vault_salt)
             .map_err(|e| SwapError::WalletDerivation { source: e })?;
 
         // 8. Return response
@@ -391,7 +391,7 @@ impl SwapManager {
             })?;
 
         let user_wallet = user_chain
-            .derive_wallet(&master_key, &swap.user_deposit_salt)
+            .derive_wallet(&master_key, &swap.deposit_vault_salt)
             .map_err(|e| SwapError::WalletDerivation { source: e })?;
 
         // Build response

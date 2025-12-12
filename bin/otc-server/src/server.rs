@@ -657,18 +657,6 @@ async fn get_swap(
         })
 }
 
-#[derive(Serialize)]
-struct ConnectedMarketMakersResponse {
-    market_makers: Vec<Uuid>,
-}
-
-async fn get_connected_market_makers(
-    State(state): State<AppState>,
-) -> Json<ConnectedMarketMakersResponse> {
-    let market_makers = state.mm_registry.get_connected_market_makers();
-    Json(ConnectedMarketMakersResponse { market_makers })
-}
-
 // ========== MM WebSocket Handler Implementation ==========
 
 /// Message handler for OTC protocol
@@ -745,7 +733,7 @@ impl MessageHandler for OTCMessageHandler {
                                             };
 
                                             let wallet = match chain_ops
-                                                .derive_wallet(&master_key, &swap.user_deposit_salt)
+                                                .derive_wallet(&master_key, &swap.deposit_vault_salt)
                                             {
                                                 Ok(wallet) => wallet,
                                                 Err(err) => {

@@ -55,8 +55,8 @@ CREATE TABLE swaps (
     realized_swap JSONB,
     
     -- Salt and nonce columns for deterministic wallet generation
-    user_deposit_salt BYTEA NOT NULL,
-    user_deposit_address VARCHAR(255) NOT NULL,
+    deposit_vault_salt BYTEA NOT NULL,
+    deposit_vault_address VARCHAR(255) NOT NULL,
     mm_nonce BYTEA NOT NULL,
     
     -- User addresses

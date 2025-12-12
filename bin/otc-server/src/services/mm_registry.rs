@@ -124,7 +124,7 @@ impl MMRegistry {
         market_maker_id: &Uuid,
         swap_id: &Uuid,
         quote_id: &Uuid,
-        user_deposit_address: &str,
+        deposit_vault_address: &str,
         user_tx_hash: &str,
         deposit_amount: U256,
     ) {
@@ -137,7 +137,7 @@ impl MMRegistry {
                     swap_id: *swap_id,
                     quote_id: *quote_id,
                     user_tx_hash: user_tx_hash.to_string(),
-                    deposit_address: user_deposit_address.to_string(),
+                    deposit_address: deposit_vault_address.to_string(),
                     deposit_amount,
                     timestamp: utc::now(),
                 },

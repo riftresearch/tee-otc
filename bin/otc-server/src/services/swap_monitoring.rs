@@ -330,7 +330,7 @@ impl SwapMonitoringService {
 
         // Derive the user deposit address
         let user_wallet = chain_ops
-            .derive_wallet(&self.settings.master_key_bytes(), &swap.user_deposit_salt)
+            .derive_wallet(&self.settings.master_key_bytes(), &swap.deposit_vault_salt)
             .context(ChainOperationSnafu)?;
 
 
@@ -396,7 +396,7 @@ impl SwapMonitoringService {
             let market_maker_id = swap.market_maker_id;
             let swap_id = swap.id;
             let quote_id = swap.quote.id;
-            let user_deposit_address = swap.user_deposit_address.clone();
+            let deposit_vault_address = swap.deposit_vault_address.clone();
             let tx_hash = deposit.tx_hash.clone();
             let deposit_amount = deposit.amount;
             tokio::spawn(async move {
@@ -405,7 +405,7 @@ impl SwapMonitoringService {
                         &market_maker_id,
                         &swap_id,
                         &quote_id,
-                        &user_deposit_address,
+                        &deposit_vault_address,
                         &tx_hash,
                         deposit_amount,
                     )
@@ -779,7 +779,7 @@ impl SwapMonitoringService {
                         let user_wallet = user_chain_ops
                             .derive_wallet(
                                 &self.settings.master_key_bytes(),
-                                &swap.user_deposit_salt,
+                                &swap.deposit_vault_salt,
                             )
                             .context(ChainOperationSnafu)?;
 

@@ -67,15 +67,15 @@ impl<'r> FromRow<'r> for Swap {
         let market_maker_id: Uuid = row.try_get("market_maker_id")?;
 
         // Get salt as Vec<u8> from database and convert to [u8; 32]
-        let user_deposit_salt_vec: Vec<u8> = row.try_get("user_deposit_salt")?;
-        let mut user_deposit_salt = [0u8; 32];
+        let deposit_vault_salt_vec: Vec<u8> = row.try_get("deposit_vault_salt")?;
+        let mut deposit_vault_salt = [0u8; 32];
 
-        if user_deposit_salt_vec.len() != 32 {
+        if deposit_vault_salt_vec.len() != 32 {
             return Err(OtcServerError::InvalidData {
-                message: "user_deposit_salt must be exactly 32 bytes".to_string(),
+                message: "deposit_vault_salt must be exactly 32 bytes".to_string(),
             });
         }
-        user_deposit_salt.copy_from_slice(&user_deposit_salt_vec);
+        deposit_vault_salt.copy_from_slice(&deposit_vault_salt_vec);
 
         // Get mm_nonce as Vec<u8> from database and convert to [u8; 16]
         let mm_nonce_vec: Vec<u8> = row.try_get("mm_nonce")?;
@@ -128,7 +128,7 @@ impl<'r> FromRow<'r> for Swap {
             created_at: quote_created_at,
         };
 
-        let user_deposit_address: String = row.try_get("user_deposit_address")?;
+        let deposit_vault_address: String = row.try_get("deposit_vault_address")?;
         let user_destination_address: String = row.try_get("user_destination_address")?;
         let status: SwapStatus = row.try_get("status")?;
         let metadata_json: serde_json::Value = row.try_get("metadata")?;
@@ -182,8 +182,8 @@ impl<'r> FromRow<'r> for Swap {
             quote,
             metadata,
             realized,
-            user_deposit_salt,
-            user_deposit_address,
+            deposit_vault_salt,
+            deposit_vault_address,
             mm_nonce,
             user_destination_address,
             refund_address,
