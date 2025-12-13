@@ -154,19 +154,19 @@ pub fn spawn_fee_settlement_engine(
 
             // Select oldest-first up to threshold alignment.
             let mut selected = Vec::new();
-            let mut referenced_fee_sats: i64 = 0;
+            let mut referenced_fee_sats: u64 = 0;
             for b in batches {
                 if selected.len() >= MAX_BATCHES_PER_SETTLEMENT {
                     break;
                 }
                 selected.push(b);
                 referenced_fee_sats = referenced_fee_sats.saturating_add(selected.last().unwrap().aggregated_fee_sats);
-                if referenced_fee_sats >= standing.threshold_sats {
+                if referenced_fee_sats >= standing.threshold_sats as u64 {
                     break;
                 }
             }
 
-            if referenced_fee_sats <= 0 {
+            if referenced_fee_sats == 0 {
                 continue;
             }
 
@@ -202,7 +202,7 @@ pub fn spawn_fee_settlement_engine(
                     token,
                     decimals: 8,
                 },
-                amount: alloy::primitives::U256::from(referenced_fee_sats as u64),
+                amount: alloy::primitives::U256::from(referenced_fee_sats),
             };
 
             let tx_hash = wallet

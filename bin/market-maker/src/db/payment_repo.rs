@@ -49,7 +49,7 @@ pub struct StoredBatch {
     pub chain: ChainType,
     pub swap_ids: Vec<Uuid>,
     pub batch_nonce_digest: [u8; 32],
-    pub aggregated_fee_sats: i64,
+    pub aggregated_fee_sats: u64,
     pub fee_settlement_txid: Option<String>,
     pub created_at: DateTime<Utc>,
     pub status: BatchStatus,
@@ -126,7 +126,7 @@ impl PaymentRepository {
         txid: impl Into<String>,
         chain: ChainType,
         batch_nonce_digest: [u8; 32],
-        aggregated_fee_sats: i64,
+        aggregated_fee_sats: u64,
     ) -> PaymentRepositoryResult<()> {
         let txid = txid.into();
 
@@ -151,7 +151,7 @@ impl PaymentRepository {
         .bind(chain.to_db_string())
         .bind(&swap_ids)
         .bind(batch_nonce_digest.as_slice())
-        .bind(aggregated_fee_sats)
+        .bind(aggregated_fee_sats as i64)
         .bind(batch_status_to_db(&BatchStatus::Created))
         .bind(created_at)
         .execute(&mut *transaction)
@@ -249,8 +249,8 @@ impl PaymentRepository {
         chain: ChainType,
         settlement_digest: [u8; 32],
         batch_nonce_digests: Vec<[u8; 32]>,
-        referenced_fee_sats: i64,
-        amount_sats: i64,
+        referenced_fee_sats: u64,
+        amount_sats: u64,
         batch_txids: &[String],
     ) -> PaymentRepositoryResult<()> {
         let mut transaction = self.pool.begin().await.context(DatabaseSnafu)?;
@@ -283,8 +283,8 @@ impl PaymentRepository {
         })
         .bind(settlement_digest)
         .bind(batch_nonce_digests)
-        .bind(referenced_fee_sats)
-        .bind(amount_sats)
+        .bind(referenced_fee_sats as i64)
+        .bind(amount_sats as i64)
         .bind(created_at)
         .execute(&mut *transaction)
         .await
@@ -491,6 +491,7 @@ impl PaymentRepository {
             let swap_ids: Vec<Uuid> = row.try_get("swap_ids").context(DatabaseSnafu)?;
             let digest: Vec<u8> = row.try_get("batch_nonce_digest").context(DatabaseSnafu)?;
             let aggregated_fee_sats: i64 = row.try_get("aggregated_fee_sats").context(DatabaseSnafu)?;
+            let aggregated_fee_sats = aggregated_fee_sats as u64;
             let fee_settlement_txid: Option<String> = row.try_get("fee_settlement_txid").context(DatabaseSnafu)?;
             let created_at: DateTime<Utc> = row.try_get("created_at").context(DatabaseSnafu)?;
             let status: String = row.try_get("status").context(DatabaseSnafu)?;

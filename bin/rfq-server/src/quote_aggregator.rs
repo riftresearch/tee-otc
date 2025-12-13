@@ -201,7 +201,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_no_market_makers() {
-        let registry = Arc::new(RfqMMRegistry::new());
+        let registry = Arc::new(RfqMMRegistry::new(None));
         let aggregator = QuoteAggregator::new(registry, 5);
 
         let request = QuoteRequest {

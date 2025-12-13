@@ -303,7 +303,7 @@ configs:
         retention_delete_delay: 2h
         retention_delete_worker_count: 150
 
-  grafana-datasource-v5:
+  grafana-datasource-grafv6:
     content: |
       apiVersion: 1
       deleteDatasources:
@@ -323,7 +323,7 @@ configs:
           url: http://otc-loki:3100
           isDefault: false
 
-  grafana-dashboard-provider-v5:
+  grafana-dashboard-provider-grafv6:
     content: |
       apiVersion: 1
       providers:
@@ -335,7 +335,7 @@ configs:
           options:
             path: /etc/grafana/provisioning/dashboards
 
-  grafana-node-dashboard-v5:
+  grafana-node-dashboard-grafv6:
     content: |
       {
         "annotations": {
@@ -407,8 +407,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -677,8 +676,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -904,8 +902,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1020,8 +1017,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1121,8 +1117,167 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                }
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 0,
+              "y": 16
+            },
+            "id": 17,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "disableTextWrap": false,
+                "editorMode": "builder",
+                "expr": "otc_mm_fee_debt_sats{job=\"otc-server\"}",
+                "fullMetaSearch": false,
+                "includeNullMetadata": true,
+                "instant": false,
+                "legendFormat": "{{market_maker_id}}",
+                "range": true,
+                "refId": "A",
+                "useBackend": false
+              }
+            ],
+            "title": "MM Fee Debt",
+            "transformations": [
+              {
+                "id": "joinByField",
+                "options": {
+                  "byField": "Time",
+                  "mode": "outer"
+                }
+              },
+              {
+                "disabled": true,
+                "id": "organize",
+                "options": {
+                  "excludeByName": {
+                    "f901369b-84d7-4c03-8799-f504c22125f9": false
+                  },
+                  "includeByName": {},
+                  "indexByName": {},
+                  "renameByName": {
+                    "96c0bedb-bfda-4680-a8df-1317d1e09c8d": "",
+                    "Time": "",
+                    "{__name__=\"otc_mm_fee_debt_sats\", instance=\"otc-server:9000\", job=\"otc-server\", market_maker_id=\"96c0bedb-bfda-4680-a8df-1317d1e09c8d\"}": ""
+                  }
+                }
+              }
+            ],
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "loki",
+              "uid": "LOKI01"
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 12,
+              "y": 16
+            },
+            "id": 12,
+            "options": {
+              "dedupStrategy": "none",
+              "enableLogDetails": true,
+              "prettifyLogMessage": false,
+              "showCommonLabels": false,
+              "showLabels": false,
+              "showTime": false,
+              "sortOrder": "Descending",
+              "wrapLogMessage": false
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "loki",
+                  "uid": "LOKI01"
+                },
+                "editorMode": "code",
+                "expr": "{service=\"otc-server\"}\n| json\n| level=~\"(warn|error)\"\n| regexp \"(?:\\\"_spans\\\":\\\\[\\\"(?P<span>[^\\\"]+)\\\")?\"\n| line_format \"{{if .span}}{{.span}} | {{end}}{{._target}}: {{.message}}\"",
+                "queryType": "range",
+                "refId": "A"
+              }
+            ],
+            "title": "Warnings & Errors",
+            "type": "logs"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1138,7 +1293,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 0,
-              "y": 16
+              "y": 24
             },
             "id": 14,
             "options": {
@@ -1221,8 +1376,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1237,7 +1391,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 16
+              "y": 24
             },
             "id": 13,
             "options": {
@@ -1319,8 +1473,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1336,7 +1489,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 0,
-              "y": 24
+              "y": 32
             },
             "id": 15,
             "options": {
@@ -1419,8 +1572,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1435,7 +1587,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 24
+              "y": 32
             },
             "id": 16,
             "options": {
@@ -1472,43 +1624,6 @@ configs:
           },
           {
             "datasource": {
-              "type": "loki",
-              "uid": "LOKI01"
-            },
-            "gridPos": {
-              "h": 8,
-              "w": 12,
-              "x": 0,
-              "y": 32
-            },
-            "id": 12,
-            "options": {
-              "dedupStrategy": "none",
-              "enableLogDetails": true,
-              "prettifyLogMessage": false,
-              "showCommonLabels": false,
-              "showLabels": false,
-              "showTime": false,
-              "sortOrder": "Descending",
-              "wrapLogMessage": false
-            },
-            "targets": [
-              {
-                "datasource": {
-                  "type": "loki",
-                  "uid": "LOKI01"
-                },
-                "editorMode": "code",
-                "expr": "{service=\"otc-server\"}\n| json\n| level=~\"(warn|error)\"\n| regexp \"(?:\\\"_spans\\\":\\\\[\\\"(?P<span>[^\\\"]+)\\\")?\"\n| line_format \"{{if .span}}{{.span}} | {{end}}{{._target}}: {{.message}}\"",
-                "queryType": "range",
-                "refId": "A"
-              }
-            ],
-            "title": "Warnings & Errors",
-            "type": "logs"
-          },
-          {
-            "datasource": {
               "type": "prometheus",
               "uid": "PBFA97CFB590B2093"
             },
@@ -1554,114 +1669,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "red",
-                      "value": 80
-                    }
-                  ]
-                },
-                "unit": "Bps"
-              },
-              "overrides": []
-            },
-            "gridPos": {
-              "h": 8,
-              "w": 12,
-              "x": 12,
-              "y": 32
-            },
-            "id": 4,
-            "options": {
-              "legend": {
-                "calcs": [],
-                "displayMode": "list",
-                "placement": "right",
-                "showLegend": true
-              },
-              "tooltip": {
-                "mode": "single",
-                "sort": "none"
-              }
-            },
-            "targets": [
-              {
-                "datasource": {
-                  "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
-                },
-                "editorMode": "code",
-                "expr": "sum by (name) (rate(container_network_receive_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
-                "legendFormat": "RX {{name}}",
-                "range": true,
-                "refId": "A"
-              },
-              {
-                "datasource": {
-                  "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
-                },
-                "editorMode": "code",
-                "expr": "sum by (name) (rate(container_network_transmit_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
-                "legendFormat": "TX {{name}}",
-                "range": true,
-                "refId": "B"
-              }
-            ],
-            "title": "Container Network I/O",
-            "type": "timeseries"
-          },
-          {
-            "datasource": {
-              "type": "prometheus",
-              "uid": "PBFA97CFB590B2093"
-            },
-            "fieldConfig": {
-              "defaults": {
-                "color": {
-                  "mode": "palette-classic"
-                },
-                "custom": {
-                  "axisBorderShow": false,
-                  "axisCenteredZero": false,
-                  "axisColorMode": "text",
-                  "axisLabel": "",
-                  "axisPlacement": "auto",
-                  "barAlignment": 0,
-                  "drawStyle": "line",
-                  "fillOpacity": 0,
-                  "gradientMode": "none",
-                  "hideFrom": {
-                    "legend": false,
-                    "tooltip": false,
-                    "viz": false
-                  },
-                  "insertNulls": false,
-                  "lineInterpolation": "linear",
-                  "lineWidth": 1,
-                  "pointSize": 5,
-                  "scaleDistribution": {
-                    "type": "linear"
-                  },
-                  "showPoints": "auto",
-                  "spanNulls": false,
-                  "stacking": {
-                    "group": "A",
-                    "mode": "none"
-                  },
-                  "thresholdsStyle": {
-                    "mode": "off"
-                  }
-                },
-                "mappings": [],
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1755,8 +1763,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1764,7 +1771,7 @@ configs:
                     }
                   ]
                 },
-                "unit": "decbytes"
+                "unit": "Bps"
               },
               "overrides": []
             },
@@ -1774,7 +1781,7 @@ configs:
               "x": 12,
               "y": 40
             },
-            "id": 2,
+            "id": 4,
             "options": {
               "legend": {
                 "calcs": [],
@@ -1794,13 +1801,24 @@ configs:
                   "uid": "PBFA97CFB590B2093"
                 },
                 "editorMode": "code",
-                "expr": "max by (name) (container_memory_working_set_bytes{name=~\"tee-.*\"})",
-                "legendFormat": "{{name}}",
+                "expr": "sum by (name) (rate(container_network_receive_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
+                "legendFormat": "RX {{name}}",
                 "range": true,
                 "refId": "A"
+              },
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "sum by (name) (rate(container_network_transmit_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
+                "legendFormat": "TX {{name}}",
+                "range": true,
+                "refId": "B"
               }
             ],
-            "title": "Container Memory Usage",
+            "title": "Container Network I/O",
             "type": "timeseries"
           },
           {
@@ -1850,8 +1868,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1945,8 +1962,101 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "decbytes"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 12,
+              "y": 48
+            },
+            "id": 2,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "max by (name) (container_memory_working_set_bytes{name=~\"tee-.*\"})",
+                "legendFormat": "{{name}}",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Container Memory Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1962,7 +2072,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 48
+              "y": 56
             },
             "id": 6,
             "options": {
@@ -2040,8 +2150,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -2057,7 +2166,7 @@ configs:
               "h": 8,
               "w": 24,
               "x": 0,
-              "y": 56
+              "y": 64
             },
             "id": 7,
             "options": {
@@ -2098,17 +2207,16 @@ configs:
           "list": []
         },
         "time": {
-          "from": "now-1h",
+          "from": "now-15m",
           "to": "now"
         },
         "timepicker": {},
         "timezone": "",
         "title": "TEE Monitoring dev",
         "uid": "tee-monitoring-dev",
-        "version": 1,
+        "version": 3,
         "weekStart": ""
       }
-
 
 services:
   pg-secret-generator:
@@ -2407,11 +2515,11 @@ services:
       GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER}
       GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
     configs:
-      - source: grafana-datasource-v5
+      - source: grafana-datasource-grafv6
         target: /etc/grafana/provisioning/datasources/prometheus.yml
-      - source: grafana-dashboard-provider-v5
+      - source: grafana-dashboard-provider-grafv6
         target: /etc/grafana/provisioning/dashboards/provider.yml
-      - source: grafana-node-dashboard-v5
+      - source: grafana-node-dashboard-grafv6
         target: /etc/grafana/provisioning/dashboards/tee-monitoring.json
     networks:
       - rift-network

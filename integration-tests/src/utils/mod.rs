@@ -422,6 +422,7 @@ pub async fn create_test_database(connect_options: &PgConnectOptions) -> sqlx::R
 
 pub fn build_rfq_server_test_args(rfq_port: u16) -> RfqServerArgs {
     RfqServerArgs {
+        otc_server_url: None,
         port: rfq_port,
         host: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
         log_level: "info".to_string(),

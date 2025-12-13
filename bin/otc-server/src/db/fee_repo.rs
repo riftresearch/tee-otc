@@ -327,5 +327,33 @@ impl FeeRepository {
         }
         Ok(out)
     }
+
+    /// Returns UUIDs of all market makers currently in bad standing.
+    ///
+    /// A market maker is in bad standing if their debt exceeds the threshold
+    /// and they have been over the threshold for longer than the grace window.
+    pub async fn list_bad_standing(&self, now: DateTime<Utc>) -> OtcServerResult<Vec<Uuid>> {
+        let cutoff = now - GOOD_STANDING_WINDOW;
+
+        let rows = sqlx::query(
+            r#"
+            SELECT market_maker_id
+            FROM mm_fee_state
+            WHERE debt_sats > $1
+              AND over_threshold_since IS NOT NULL
+              AND over_threshold_since < $2
+            "#,
+        )
+        .bind(GOOD_STANDING_THRESHOLD_SATS)
+        .bind(cutoff)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            out.push(row.try_get("market_maker_id")?);
+        }
+        Ok(out)
+    }
 }
 

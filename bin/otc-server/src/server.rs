@@ -69,6 +69,11 @@ struct Status {
     connected_market_makers: Vec<Uuid>,
 }
 
+#[derive(Serialize)]
+struct SuspendedMarketMakersResponse {
+    market_maker_ids: Vec<Uuid>,
+}
+
 const QUOTE_LATENCY_METRIC: &str = "otc_quote_response_seconds";
 static PROMETHEUS_HANDLE: OnceLock<Arc<PrometheusHandle>> = OnceLock::new();
 
@@ -280,6 +285,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         .route("/api/v2/chains/bitcoin/tip", get(get_best_bitcoin_hash))
         .route("/api/v2/chains/ethereum/tip", get(get_best_ethereum_hash))
         .route("/api/v2/chains/base/tip", get(get_best_base_hash))
+        .route("/api/v2/market-makers/suspended", get(get_suspended_market_makers))
         .route("/api/v1/tdx/quote", get(get_tdx_quote))
         .route("/api/v1/tdx/info", get(get_tdx_info))
         .with_state(state);
@@ -601,6 +607,18 @@ async fn get_best_base_hash(
             })
         }
     })
+}
+
+async fn get_suspended_market_makers(
+    State(state): State<AppState>,
+) -> Result<Json<SuspendedMarketMakersResponse>, crate::error::OtcServerError> {
+    let now = utc::now();
+    let market_maker_ids = state
+        .db
+        .fees()
+        .list_bad_standing(now)
+        .await?;
+    Ok(Json(SuspendedMarketMakersResponse { market_maker_ids }))
 }
 
 async fn create_swap(

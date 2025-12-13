@@ -3,6 +3,7 @@ use crate::{
     liquidity_aggregator::{LiquidityAggregator, LiquidityAggregatorResult},
     mm_registry::RfqMMRegistry,
     quote_aggregator::QuoteAggregator,
+    suspension_watcher::SuspensionWatcher,
     Result, RfqServerArgs,
 };
 use async_trait::async_trait;
@@ -76,8 +77,18 @@ pub async fn run_server(args: RfqServerArgs) -> Result<()> {
             .map_err(|e| crate::Error::ApiKeyLoad { source: e })?,
     );
 
+    // Initialize suspension watcher if OTC server URL is configured
+    let suspension_watcher = args.otc_server_url.as_ref().map(|url| {
+        info!(%url, "Suspension watcher: enabled");
+        SuspensionWatcher::spawn(url.clone())
+    });
+
+    if suspension_watcher.is_none() {
+        info!("Suspension watcher: disabled (no OTC server URL configured)");
+    }
+
     // Initialize MM registry
-    let mm_registry = Arc::new(RfqMMRegistry::new());
+    let mm_registry = Arc::new(RfqMMRegistry::new(suspension_watcher));
 
     // Initialize quote aggregator
     let quote_aggregator = Arc::new(QuoteAggregator::new(
@@ -491,18 +502,6 @@ async fn request_quotes(
             Err(err)
         }
     }
-}
-
-#[derive(Serialize)]
-struct ConnectedMarketMakersResponse {
-    market_makers: Vec<Uuid>,
-}
-
-async fn get_connected_market_makers(
-    State(state): State<AppState>,
-) -> Json<ConnectedMarketMakersResponse> {
-    let market_makers = state.mm_registry.get_connected_market_makers();
-    Json(ConnectedMarketMakersResponse { market_makers })
 }
 
 async fn get_liquidity(

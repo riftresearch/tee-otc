@@ -6165,6 +6165,7 @@ dependencies = [
  "otc-auth",
  "otc-models",
  "otc-protocols",
+ "reqwest",
  "serde",
  "serde_json",
  "snafu",
@@ -6172,6 +6173,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "utc",
  "uuid",
 ]

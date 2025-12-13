@@ -2,12 +2,14 @@ use clap::Parser;
 use metrics_exporter_prometheus::BuildError;
 use snafu::prelude::*;
 use std::net::{IpAddr, SocketAddr};
+use url::Url;
 
 pub mod error;
 pub mod liquidity_aggregator;
 pub mod mm_registry;
 pub mod quote_aggregator;
 pub mod server;
+pub mod suspension_watcher;
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -75,4 +77,9 @@ pub struct RfqServerArgs {
     /// Chainalysis API token
     #[arg(long, env = "CHAINALYSIS_TOKEN")]
     pub chainalysis_token: Option<String>,
+
+    /// OTC server URL for fetching suspended market makers (e.g. http://localhost:3000)
+    /// If not provided, suspension checking is disabled.
+    #[arg(long, env = "OTC_SERVER_URL")]
+    pub otc_server_url: Option<Url>,
 }
