@@ -1,4 +1,8 @@
-use crate::{key_derivation, traits::MarketMakerBatch, ChainOperations, Result};
+use crate::{
+    key_derivation,
+    traits::{FeeSettlementVerification, MarketMakerBatch},
+    ChainOperations, Result,
+};
 use alloy::hex;
 use alloy::primitives::U256;
 use async_trait::async_trait;
@@ -505,29 +509,102 @@ impl ChainOperations for BitcoinChain {
             track_index += 1;
         }
 
-        let fee_index = track_index;
+        // At this point, the batch is valid so return the confirmations
+        Ok(Some(confirmations))
+    }
 
-        // finally validate fee
-        let fee = market_maker_batch.payment_verification.aggregated_fee;
-        let fee_address =
-            Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Bitcoin])?
-                .assume_checked();
-        let fee_output = &tx.output[fee_index];
-        if fee_output.script_pubkey != fee_address.script_pubkey()
-            || fee_output.value < Amount::from_sat(fee.to::<u64>())
+    async fn verify_fee_settlement_transaction(
+        &self,
+        tx_hash: &str,
+        settlement_digest: [u8; 32],
+    ) -> Result<Option<FeeSettlementVerification>> {
+        let txid = bitcoin::Txid::from_str(tx_hash).map_err(|e| {
+            crate::Error::TransactionDeserializationFailed {
+                context: format!("Failed to parse txid: {e}"),
+                loc: location!(),
+            }
+        })?;
+
+        let tx_verbose_result = self.rpc_client.get_raw_transaction_verbose(&txid).await;
+        let tx_verbose = match tx_verbose_result {
+            Ok(tx_verbose) => tx_verbose,
+            Err(e) => {
+                warn!("Was unable to get raw transaction verbose to verify fee settlement: {tx_hash} - {e}");
+                return Ok(None);
+            }
+        };
+
+        let confirmations = tx_verbose.confirmations.unwrap_or(0) as u64;
+        let tx_bytes = hex::decode(tx_verbose.hex).map_err(|e| {
+            crate::Error::TransactionDeserializationFailed {
+                context: format!("Failed to decode bitcoin tx data hex to bytes: {e}"),
+                loc: location!(),
+            }
+        })?;
+
+        let tx = bitcoin::consensus::deserialize::<Transaction>(&tx_bytes).map_err(|e| {
+            crate::Error::TransactionDeserializationFailed {
+                context: format!("Failed to deserialize tx data as bitcoin transaction: {e}"),
+                loc: location!(),
+            }
+        })?;
+
+        // Require exactly one OP_RETURN carrying the 32-byte digest.
+        if tx
+            .output
+            .iter()
+            .filter(|output| output.script_pubkey.to_bytes().starts_with(&[0x6a, 0x20]))
+            .count()
+            != 1
         {
-            // The fee is not valid in some way
             return Err(crate::Error::BadMarketMakerBatch {
                 chain: ChainType::Bitcoin,
                 tx_hash: tx_hash.to_string(),
-                message: format!(
-                    "Fee output {fee_output:?} does not match expected at index {fee_index}"
-                ),
+                message: "Fee settlement tx has an invalid number of OP_RETURN outputs".to_string(),
                 loc: location!(),
             });
         }
-        // At this point, the batch is valid so return the confirmations
-        Ok(Some(confirmations))
+
+        let mut needle = vec![0x6a, 0x20];
+        needle.extend_from_slice(&settlement_digest);
+        if !tx
+            .output
+            .iter()
+            .any(|output| output.script_pubkey.to_bytes() == needle)
+        {
+            return Err(crate::Error::BadMarketMakerBatch {
+                chain: ChainType::Bitcoin,
+                tx_hash: tx_hash.to_string(),
+                message: "Fee settlement tx does not contain expected digest in OP_RETURN".to_string(),
+                loc: location!(),
+            });
+        }
+
+        let fee_address =
+            Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Bitcoin])?
+                .assume_checked();
+        let fee_spk = fee_address.script_pubkey();
+
+        let amount_paid_sats: u64 = tx
+            .output
+            .iter()
+            .filter(|o| o.script_pubkey == fee_spk)
+            .map(|o| o.value.to_sat())
+            .sum();
+
+        if amount_paid_sats == 0 {
+            return Err(crate::Error::BadMarketMakerBatch {
+                chain: ChainType::Bitcoin,
+                tx_hash: tx_hash.to_string(),
+                message: "Fee settlement tx pays 0 sats to protocol fee address".to_string(),
+                loc: location!(),
+            });
+        }
+
+        Ok(Some(FeeSettlementVerification {
+            confirmations,
+            amount_sats: U256::from(amount_paid_sats),
+        }))
     }
 
     fn validate_address(&self, address: &str) -> bool {

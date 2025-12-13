@@ -37,6 +37,9 @@ pub enum SwapError {
     #[snafu(display("Market maker not connected: {}", market_maker_id))]
     MarketMakerNotConnected { market_maker_id: String },
 
+    #[snafu(display("Market maker not in good standing: {}", market_maker_id))]
+    MarketMakerNotInGoodStanding { market_maker_id: String },
+
     #[snafu(display("Market maker validation timeout"))]
     MarketMakerValidationTimeout,
 
@@ -254,6 +257,20 @@ impl SwapManager {
                 quote.market_maker_id
             );
             return Err(SwapError::MarketMakerNotConnected {
+                market_maker_id: quote.market_maker_id.to_string(),
+            });
+        }
+
+        // Enforce protocol fee good-standing gate.
+        let now = utc::now();
+        let is_good = self
+            .db
+            .fees()
+            .is_good_standing(quote.market_maker_id, now)
+            .await
+            .map_err(SwapError::from)?;
+        if !is_good {
+            return Err(SwapError::MarketMakerNotInGoodStanding {
                 market_maker_id: quote.market_maker_id.to_string(),
             });
         }

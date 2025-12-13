@@ -118,3 +118,71 @@ $$ language 'plpgsql';
 
 CREATE TRIGGER update_swaps_updated_at BEFORE UPDATE ON swaps
     FOR EACH ROW EXECUTE PROCEDURE update_updated_at_column();
+
+-- =============================================================================
+-- Protocol fee debt + settlement tables (no legacy direct-pay mode)
+-- =============================================================================
+
+-- Append-only ledger of debt changes (accruals and payments)
+CREATE TABLE mm_protocol_fee_ledger (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    market_maker_id UUID NOT NULL,
+    delta_sats BIGINT NOT NULL,
+    kind TEXT NOT NULL,
+    ref_chain TEXT,
+    ref_tx_hash TEXT,
+    batch_nonce_digest BYTEA,
+    settlement_digest BYTEA,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (delta_sats <> 0)
+);
+
+-- Idempotency constraints
+CREATE UNIQUE INDEX mm_protocol_fee_ledger_unique_accrual
+    ON mm_protocol_fee_ledger (kind, market_maker_id, batch_nonce_digest)
+    WHERE kind = 'batch_accrual';
+
+CREATE UNIQUE INDEX mm_protocol_fee_ledger_unique_settlement
+    ON mm_protocol_fee_ledger (kind, market_maker_id, ref_chain, ref_tx_hash)
+    WHERE kind = 'settlement_payment';
+
+CREATE INDEX mm_protocol_fee_ledger_mm_created_at
+    ON mm_protocol_fee_ledger (market_maker_id, created_at DESC);
+
+-- Fee settlements (one per on-chain settlement tx), storing referenced batches directly (Option 1)
+CREATE TABLE mm_fee_settlements (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    market_maker_id UUID NOT NULL,
+    chain TEXT NOT NULL,
+    tx_hash TEXT NOT NULL,
+    settlement_digest BYTEA NOT NULL,
+    amount_sats BIGINT NOT NULL,
+    batch_nonce_digests BYTEA[] NOT NULL,
+    referenced_fee_sats BIGINT NOT NULL,
+    confirmed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CHECK (amount_sats >= 0),
+    CHECK (referenced_fee_sats >= 0)
+);
+
+CREATE UNIQUE INDEX mm_fee_settlements_unique_tx
+    ON mm_fee_settlements (chain, tx_hash);
+
+CREATE UNIQUE INDEX mm_fee_settlements_unique_digest
+    ON mm_fee_settlements (market_maker_id, settlement_digest);
+
+-- Optional: membership queries on batch_nonce_digests
+CREATE INDEX mm_fee_settlements_batch_nonce_digests_gin
+    ON mm_fee_settlements
+    USING GIN (batch_nonce_digests);
+
+-- Cached per-MM fee standing state for fast routing checks
+-- `debt_sats` may go negative to represent pre-paid credit from over-settlements.
+-- Good-standing checks treat `debt_sats <= threshold` as compliant.
+CREATE TABLE mm_fee_state (
+    market_maker_id UUID PRIMARY KEY,
+    debt_sats BIGINT NOT NULL DEFAULT 0,
+    over_threshold_since TIMESTAMPTZ,
+    last_payment_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

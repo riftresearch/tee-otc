@@ -757,9 +757,39 @@ impl SwapMonitoringService {
                     );
 
                     // Transition all swaps to settled state atomically
+                    let now = utc::now();
                     let swap_settlement_timestamp = self.db
                         .swaps()
                         .batch_mm_deposit_confirmed(&swap_ids)
+                        .await
+                        .context(DatabaseSnafu)?;
+
+                    // Mark batch confirmed and accrue protocol fee debt once (idempotent).
+                    self.db
+                        .batches()
+                        .mark_confirmed(deposit_chain, mm_tx_hash, now)
+                        .await
+                        .context(DatabaseSnafu)?;
+
+                    let market_maker_id = swaps[0].market_maker_id;
+                    let fee_sats: i64 = market_maker_batch
+                        .payment_verification
+                        .aggregated_fee
+                        .to::<u64>()
+                        .try_into()
+                        .map_err(|_| MonitoringError::InvalidMarketMakerBatch {
+                            context: "Aggregated fee does not fit into i64".to_string(),
+                            tx_hash: mm_tx_hash.clone(),
+                            loc: location!(),
+                        })?;
+                    self.db
+                        .fees()
+                        .accrue_batch_fee(
+                            market_maker_id,
+                            market_maker_batch.payment_verification.batch_nonce_digest,
+                            fee_sats,
+                            now,
+                        )
                         .await
                         .context(DatabaseSnafu)?;
 

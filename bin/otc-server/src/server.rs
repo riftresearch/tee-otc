@@ -6,7 +6,8 @@ use crate::{
     config::Settings,
     db::{
         swap_repo::{SWAP_FEES_TOTAL_METRIC, SWAP_VOLUME_TOTAL_METRIC},
-        Database,
+        Database, GOOD_STANDING_THRESHOLD_SATS, GOOD_STANDING_WINDOW_SECS,
+        MM_FEE_DEBT_SATS_METRIC,
     },
     services::{
         swap_monitoring::{
@@ -208,6 +209,17 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
                         .set(total as f64);
                     }
                 }
+
+                // Sync MM fee debt metrics
+                if let Ok(states) = db.fees().list_all_fee_states().await {
+                    for (mm_id, debt_sats) in states {
+                        gauge!(
+                            MM_FEE_DEBT_SATS_METRIC,
+                            "market_maker_id" => mm_id.to_string(),
+                        )
+                        .set(debt_sats as f64);
+                    }
+                }
             }
         }
     });
@@ -368,6 +380,11 @@ fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
     describe_gauge!(
         SWAP_FEES_TOTAL_METRIC,
         "Settled protocol fees per market (sats), synced from database aggregate tables."
+    );
+
+    describe_gauge!(
+        MM_FEE_DEBT_SATS_METRIC,
+        "Current protocol fee debt per market maker (sats). Negative values indicate credit."
     );
 
     describe_counter!(
@@ -805,6 +822,282 @@ impl MessageHandler for OTCMessageHandler {
                             });
                         }
                         None
+                    }
+                    MMResponse::FeeSettlementSubmitted {
+                        request_id,
+                        chain,
+                        tx_hash,
+                        batch_nonce_digests,
+                        ..
+                    } => {
+                        info!(
+                            market_maker_id = %mm_id,
+                            chain = ?chain,
+                            tx_hash = %tx_hash,
+                            batch_count = batch_nonce_digests.len(),
+                            "Received fee settlement notification from MM"
+                        );
+
+                        let db = self.db.clone();
+                        let chain_registry = self.chain_registry.clone();
+                        let mm_registry = self.mm_registry.clone();
+                        tokio::spawn(async move {
+                            let now = utc::now();
+                            let reject = |reason: &str| {
+                                mm_registry.notify_fee_settlement_ack(
+                                    &mm_id,
+                                    request_id,
+                                    chain,
+                                    &tx_hash,
+                                    false,
+                                    Some(reason.to_string()),
+                                )
+                            };
+                            let accept = || {
+                                mm_registry.notify_fee_settlement_ack(
+                                    &mm_id,
+                                    request_id,
+                                    chain,
+                                    &tx_hash,
+                                    true,
+                                    None,
+                                )
+                            };
+
+                            let mut digests = batch_nonce_digests;
+                            digests.sort();
+                            digests.dedup();
+
+                            if digests.is_empty() {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    tx_hash = %tx_hash,
+                                    "Fee settlement contains no batch digests"
+                                );
+                                reject("no_batch_digests").await;
+                                return;
+                            }
+
+                            // Compute settlement digest = keccak256(domain || mm_id || concat(sorted digests))
+                            let mut preimage = Vec::with_capacity(
+                                b"rift-fee-settle-v1".len() + 16 + 32 * digests.len(),
+                            );
+                            preimage.extend_from_slice(b"rift-fee-settle-v1");
+                            preimage.extend_from_slice(mm_id.as_bytes());
+                            for d in &digests {
+                                preimage.extend_from_slice(d);
+                            }
+                            let settlement_digest = alloy::primitives::keccak256(&preimage).0;
+
+                            // Fetch referenced batches (must be confirmed) and compute referenced fee total.
+                            let batches = match db
+                                .batches()
+                                .get_confirmed_batches_by_nonce_digests(mm_id, &digests)
+                                .await
+                            {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    error!(
+                                        market_maker_id = %mm_id,
+                                        tx_hash = %tx_hash,
+                                        error = %e,
+                                        "Failed to load confirmed batches for fee settlement"
+                                    );
+                                    reject("db_error_loading_batches").await;
+                                    return;
+                                }
+                            };
+
+                            if batches.len() != digests.len() {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    tx_hash = %tx_hash,
+                                    expected = digests.len(),
+                                    got = batches.len(),
+                                    "Fee settlement references missing/unconfirmed batches"
+                                );
+                                reject("missing_or_unconfirmed_batches").await;
+                                return;
+                            }
+
+                            let referenced_fee_sats_u64: u64 = batches
+                                .iter()
+                                .map(|b| b.payment_verification.aggregated_fee.to::<u64>())
+                                .sum();
+                            let referenced_fee_sats: i64 = match referenced_fee_sats_u64.try_into() {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    error!(
+                                        market_maker_id = %mm_id,
+                                        tx_hash = %tx_hash,
+                                        "Referenced fee does not fit into i64"
+                                    );
+                                    reject("referenced_fee_overflow").await;
+                                    return;
+                                }
+                            };
+
+                            let Some(chain_ops) = chain_registry.get(&chain) else {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    chain = ?chain,
+                                    "Chain not supported for fee settlement"
+                                );
+                                reject("unsupported_chain").await;
+                                return;
+                            };
+
+                            let verification = match chain_ops
+                                .verify_fee_settlement_transaction(&tx_hash, settlement_digest)
+                                .await
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    error!(
+                                        market_maker_id = %mm_id,
+                                        chain = ?chain,
+                                        tx_hash = %tx_hash,
+                                        error = %e,
+                                        "Fee settlement tx verification failed"
+                                    );
+                                    reject("verification_failed").await;
+                                    return;
+                                }
+                            };
+
+                            let Some(verification) = verification else {
+                                // Not visible yet; MM can retry later.
+                                info!(
+                                    market_maker_id = %mm_id,
+                                    chain = ?chain,
+                                    tx_hash = %tx_hash,
+                                    "Fee settlement tx not found yet; ignoring for now"
+                                );
+                                reject("tx_not_found_yet").await;
+                                return;
+                            };
+
+                            let min_conf = chain_ops.minimum_block_confirmations() as u64;
+                            if verification.confirmations < min_conf {
+                                info!(
+                                    market_maker_id = %mm_id,
+                                    chain = ?chain,
+                                    tx_hash = %tx_hash,
+                                    confirmations = verification.confirmations,
+                                    min_confirmations = min_conf,
+                                    "Fee settlement tx not sufficiently confirmed; ignoring for now"
+                                );
+                                reject("insufficient_confirmations").await;
+                                return;
+                            }
+
+                            let amount_sats_u64 = verification.amount_sats.to::<u64>();
+                            let amount_sats: i64 = match amount_sats_u64.try_into() {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    error!(
+                                        market_maker_id = %mm_id,
+                                        tx_hash = %tx_hash,
+                                        "Settlement amount does not fit into i64"
+                                    );
+                                    reject("amount_overflow").await;
+                                    return;
+                                }
+                            };
+
+                            if amount_sats < referenced_fee_sats {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    tx_hash = %tx_hash,
+                                    amount_sats,
+                                    referenced_fee_sats,
+                                    "Fee settlement amount is less than referenced batch fee total"
+                                );
+                                reject("amount_less_than_referenced_fee").await;
+                                return;
+                            }
+
+                            if let Err(e) = db
+                                .fees()
+                                .record_settlement(
+                                    mm_id,
+                                    &chain.to_db_string(),
+                                    &tx_hash,
+                                    settlement_digest,
+                                    amount_sats,
+                                    &digests,
+                                    referenced_fee_sats,
+                                    now,
+                                )
+                                .await
+                            {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    chain = ?chain,
+                                    tx_hash = %tx_hash,
+                                    error = %e,
+                                    "Failed to record fee settlement"
+                                );
+                                reject("db_error_recording_settlement").await;
+                                return;
+                            }
+
+                            info!(
+                                market_maker_id = %mm_id,
+                                chain = ?chain,
+                                tx_hash = %tx_hash,
+                                amount_sats,
+                                referenced_fee_sats,
+                                "Fee settlement accepted and recorded"
+                            );
+                            accept().await;
+                        });
+
+                        None
+                    }
+                    MMResponse::FeeStandingStatusRequest { request_id, .. } => {
+                        let now = utc::now();
+                        let (debt_sats, over_threshold_since) = match self
+                            .db
+                            .fees()
+                            .get_fee_state(mm_id)
+                            .await
+                        {
+                            Ok(v) => v,
+                            Err(e) => {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    error = %e,
+                                    "Failed to load fee standing state"
+                                );
+                                return None;
+                            }
+                        };
+
+                        let response = ProtocolMessage {
+                            version: msg.version.clone(),
+                            sequence: msg.sequence + 1,
+                            payload: MMRequest::FeeStandingStatusResponse {
+                                request_id,
+                                debt_sats,
+                                over_threshold_since,
+                                threshold_sats: GOOD_STANDING_THRESHOLD_SATS,
+                                window_secs: GOOD_STANDING_WINDOW_SECS,
+                                timestamp: now,
+                            },
+                        };
+
+                        match serde_json::to_string(&response) {
+                            Ok(json) => Some(json),
+                            Err(e) => {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    error = %e,
+                                    "Failed to serialize FeeStandingStatusResponse"
+                                );
+                                None
+                            }
+                        }
                     }
                     MMResponse::PaymentQueued { .. } => {
                         // Handle payment queued notification

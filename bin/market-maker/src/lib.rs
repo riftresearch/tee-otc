@@ -6,6 +6,7 @@ pub mod db;
 pub mod evm_wallet;
 mod liquidity_cache;
 mod liquidity_lock;
+mod fee_settlement;
 mod otc_handler;
 pub mod payment_manager;
 pub mod price_oracle;
@@ -25,6 +26,7 @@ use alloy::{providers::Provider, signers::local::PrivateKeySigner};
 use bdk_wallet::bitcoin;
 use blockchain_utils::{create_websocket_wallet_provider, handle_background_thread_result};
 use clap::Parser;
+use clap::ValueEnum;
 use otc_models::ChainType;
 use reqwest::Url;
 use snafu::{prelude::*, ResultExt};
@@ -160,6 +162,13 @@ impl From<wallet::WalletError> for Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[clap(rename_all = "kebab_case")]
+pub enum FeeSettlementRail {
+    Evm,
+    Bitcoin,
+}
 
 #[derive(Parser, Debug, Clone)]
 #[command(name = "market-maker")]
@@ -345,6 +354,19 @@ pub struct MarketMakerArgs {
     /// Enable tokio console subscriber
     #[arg(long, env = "ENABLE_TOKIO_CONSOLE_SUBSCRIBER", default_value = "false")]
     pub enable_tokio_console_subscriber: bool,
+
+    /// Preferred fee settlement rail: either EVM (configured `--evm-chain`) or Bitcoin.
+    #[arg(long, env = "FEE_SETTLEMENT_RAIL", value_enum, default_value = "evm")]
+    pub fee_settlement_rail: FeeSettlementRail,
+
+    /// Fee settlement polling interval in seconds.
+    #[arg(long, env = "FEE_SETTLEMENT_INTERVAL_SECS", default_value = "300")]
+    pub fee_settlement_interval_secs: u64,
+
+    /// Number of confirmations required before notifying otc-server about an EVM fee settlement tx.
+    /// Defaults to `--evm-confirmations` if not provided.
+    #[arg(long, env = "FEE_SETTLEMENT_EVM_CONFIRMATIONS")]
+    pub fee_settlement_evm_confirmations: Option<u64>,
 }
 
 fn parse_hex_string(s: &str) -> std::result::Result<[u8; 32], String> {
@@ -572,12 +594,14 @@ pub async fn run_market_maker(
     ));
 
     // Set up OTC WebSocket client
+    let standing_requests = fee_settlement::StandingRequestRegistry::new();
     let otc_handler = otc_handler::OTCMessageHandler::new(
         quote_repository.clone(),
         deposit_repository.clone(),
         payment_manager.clone(),
         payment_repository.clone(),
         liquidity_lock_manager.clone(),
+        standing_requests.clone(),
     );
     let otc_ws_client = websocket_client::WebSocketClient::new(
         args.otc_ws_url.clone(),
@@ -606,6 +630,17 @@ pub async fn run_market_maker(
         tracing::info!("OTC response forwarder task ended");
         Ok(())
     });
+
+    // Spawn fee settlement engine (deadline-aware; confirmation-gated notify)
+    fee_settlement::spawn_fee_settlement_engine(
+        args.clone(),
+        market_maker_id,
+        wallet_manager.clone(),
+        payment_repository.clone(),
+        otc_handle.clone(),
+        standing_requests,
+        &mut join_set,
+    );
 
     // LiquidityCache was already created above (needed by WrappedBitcoinQuoter)
 

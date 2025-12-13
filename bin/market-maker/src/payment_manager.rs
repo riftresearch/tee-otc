@@ -29,6 +29,7 @@ trait BatchPaymentRecorder: Send + Sync {
         txid: String,
         chain: ChainType,
         batch_nonce_digest: [u8; 32],
+        aggregated_fee_sats: i64,
     ) -> crate::db::PaymentRepositoryResult<()>;
 }
 
@@ -40,8 +41,17 @@ impl BatchPaymentRecorder for PaymentRepository {
         txid: String,
         chain: ChainType,
         batch_nonce_digest: [u8; 32],
+        aggregated_fee_sats: i64,
     ) -> crate::db::PaymentRepositoryResult<()> {
-        PaymentRepository::set_batch_payment(self, swap_ids, txid, chain, batch_nonce_digest).await
+        PaymentRepository::set_batch_payment(
+            self,
+            swap_ids,
+            txid,
+            chain,
+            batch_nonce_digest,
+            aggregated_fee_sats,
+        )
+        .await
     }
 }
 
@@ -460,6 +470,12 @@ async fn process_batch(
     };
 
     let batch_nonce_digest = payment_batch.payment_verification.batch_nonce_digest;
+    let aggregated_fee_sats: i64 = payment_batch
+        .payment_verification
+        .aggregated_fee
+        .to::<u64>()
+        .try_into()
+        .unwrap_or(i64::MAX);
 
     // Execute the batch payment
     match wallet
@@ -478,7 +494,13 @@ async fn process_batch(
 
             // Store all payments with the same tx_hash
             if let Err(e) = payment_recorder
-                .record_batch_payment(swap_ids.clone(), tx_hash.clone(), chain_type, batch_nonce_digest)
+                .record_batch_payment(
+                    swap_ids.clone(),
+                    tx_hash.clone(),
+                    chain_type,
+                    batch_nonce_digest,
+                    aggregated_fee_sats,
+                )
                 .await
             {
                 error!(
@@ -567,6 +589,7 @@ mod tests {
             _txid: String,
             _chain: ChainType,
             _batch_nonce_digest: [u8; 32],
+            _aggregated_fee_sats: i64,
         ) -> crate::db::PaymentRepositoryResult<()> {
             self.recorded.lock().unwrap().push(swap_ids);
             Ok(())

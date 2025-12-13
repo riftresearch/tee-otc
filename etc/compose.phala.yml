@@ -2152,7 +2152,7 @@ services:
 
       POSTGRES_INITDB_ARGS: "--data-checksums"
     volumes:
-      - otc_postgres_data_v4:/var/lib/postgresql/data
+      - otc_postgres_data_v3:/var/lib/postgresql/data
       - pg_secrets:/run/postgres-secrets:ro
     configs:
       - source: postgres-conf
@@ -2436,13 +2436,14 @@ services:
       --network mainnet
       --execution-rpc ${HELIOS_ETHEREUM_EXECUTION_RPC}
       --consensus-rpc ${HELIOS_ETHEREUM_CONSENSUS_RPC}
+      --checkpoint 0x9f6bfa8015ffd20cf5bcb56c6eca13a4edfdcefd75c14f5599e5aeffa92a537c
       --rpc-port 8190
       --rpc-bind-ip 0.0.0.0
       --freezer-archive-from 23730000
       --data-dir /data
 
     volumes:
-      - eth_helios_data:/data
+      - eth_helios_data_v2:/data
 
     networks:
       - rift-network
@@ -2485,11 +2486,11 @@ networks:
         - subnet: 172.21.0.0/16
 
 volumes:
-  otc_postgres_data_v4:
+  otc_postgres_data_v3:
   bitcoin_data:
   otc_server_config_data:
   prometheus_data_v4:
   otc_loki_data:
   pg_secrets:
-  eth_helios_data:
+  eth_helios_data_v2:
   base_helios_data:

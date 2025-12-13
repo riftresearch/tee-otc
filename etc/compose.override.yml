@@ -310,6 +310,8 @@ services:
       BITCOIN_BATCH_SIZE: 100
       ETHEREUM_BATCH_INTERVAL_SECS: 2
       ETHEREUM_BATCH_SIZE: 392
+      FEE_SETTLEMENT_RAIL: evm
+      FEE_SETTLEMENT_INTERVAL_SECS: 60
       LOKI_URL: http://mm-loki-eth:3100
     volumes:
       - market_maker_eth_bitcoin_wallet_db_data:/app/bitcoin-wallet-db
@@ -455,6 +457,8 @@ services:
       BITCOIN_BATCH_SIZE: 100
       ETHEREUM_BATCH_INTERVAL_SECS: 2
       ETHEREUM_BATCH_SIZE: 392
+      FEE_SETTLEMENT_RAIL: evm
+      FEE_SETTLEMENT_INTERVAL_SECS: 60
       LOKI_URL: http://mm-loki-base:3100
     volumes:
       - market_maker_base_bitcoin_wallet_db_data:/app/bitcoin-wallet-db

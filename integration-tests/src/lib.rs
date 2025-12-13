@@ -67,3 +67,6 @@ mod tx_replacement_test;
 
 #[cfg(test)]
 mod base_swap_rejection_test;
+
+#[cfg(test)]
+mod fee_settlement_test;

@@ -2,6 +2,7 @@ use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use otc_models::Lot;
+use otc_models::ChainType;
 use otc_protocols::mm::{MMRequest, ProtocolMessage};
 use snafu::Snafu;
 use std::sync::Arc;
@@ -292,6 +293,43 @@ impl MMRegistry {
             if let Err(e) = conn.sender.send(request).await {
                 error!(market_maker_id = %market_maker_id, error = %e, "Failed to send swap complete notification");
             }
+        }
+    }
+
+    pub async fn notify_fee_settlement_ack(
+        &self,
+        market_maker_id: &Uuid,
+        request_id: Uuid,
+        chain: ChainType,
+        tx_hash: &str,
+        accepted: bool,
+        rejection_reason: Option<String>,
+    ) {
+        if let Some(conn) = self.connections.get(market_maker_id) {
+            let request = ProtocolMessage {
+                version: conn.protocol_version.clone(),
+                sequence: 0,
+                payload: MMRequest::FeeSettlementAck {
+                    request_id,
+                    chain,
+                    tx_hash: tx_hash.to_string(),
+                    accepted,
+                    rejection_reason,
+                    timestamp: utc::now(),
+                },
+            };
+            if let Err(e) = conn.sender.send(request).await {
+                error!(
+                    market_maker_id = %market_maker_id,
+                    error = %e,
+                    "Failed to send fee settlement ack to market maker"
+                );
+            }
+        } else {
+            warn!(
+                market_maker_id = %market_maker_id,
+                "Cannot send fee settlement ack - market maker not connected"
+            );
         }
     }
 

@@ -57,9 +57,16 @@ pub async fn get_free_port() -> u16 {
         .port()
 }
 
+// Ethereum market maker credentials
 pub const TEST_MARKET_MAKER_TAG: &str = "test-mm-eth";
 pub const TEST_MARKET_MAKER_API_ID: &str = "96c0bedb-bfda-4680-a8df-1317d1e09c8d";
 pub const TEST_MARKET_MAKER_API_SECRET: &str = "Bt7nDfOLlstMLLMvj3dlY3kFozxHk6An";
+
+// Base market maker credentials
+pub const TEST_BASE_MARKET_MAKER_TAG: &str = "test-mm-base";
+pub const TEST_BASE_MARKET_MAKER_API_ID: &str = "f901369b-84d7-4c03-8799-f504c22125f9";
+pub const TEST_BASE_MARKET_MAKER_API_SECRET: &str = "5iAlXNoDVsGvjwiEjqhbLBVOpAN0wFZ8";
+
 pub const TEST_MM_WHITELIST_FILE: &str =
     "integration-tests/src/utils/test_whitelisted_market_makers.json";
 pub const INTEGRATION_TEST_TIMEOUT_SECS: u64 = 60;
@@ -223,6 +230,49 @@ pub async fn wait_for_market_maker_to_connect_to_rfq_server(rfq_port: u16) {
     }
 }
 
+/// Wait for multiple market makers to connect to the RFQ server.
+pub async fn wait_for_market_makers_to_connect_to_rfq_server(rfq_port: u16, expected_mm_ids: &[&str]) {
+    let client = reqwest::Client::new();
+    let status_url = format!("http://127.0.0.1:{rfq_port}/status");
+
+    let start_time = std::time::Instant::now();
+    let timeout = Duration::from_secs(INTEGRATION_TEST_TIMEOUT_SECS);
+
+    loop {
+        assert!(
+            start_time.elapsed() <= timeout,
+            "Timeout waiting for market makers to connect to RFQ server"
+        );
+
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        if let Ok(response) = client.get(&status_url).send().await {
+            if response.status() == 200 {
+                if let Ok(body) = response.json::<serde_json::Value>().await {
+                    if let Some(connected_mms) = body["connected_market_makers"].as_array() {
+                        let connected_ids: Vec<&str> = connected_mms
+                            .iter()
+                            .filter_map(|v| v.as_str())
+                            .collect();
+                        
+                        let all_connected = expected_mm_ids
+                            .iter()
+                            .all(|id| connected_ids.contains(id));
+                        
+                        if all_connected {
+                            println!(
+                                "All {} market makers connected to RFQ server!",
+                                expected_mm_ids.len()
+                            );
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 pub fn build_bitcoin_wallet_descriptor(private_key: &bitcoin::PrivateKey) -> String {
     format!("wpkh({private_key})")
 }
@@ -286,6 +336,72 @@ pub async fn build_mm_test_args(
         ethereum_max_deposits_per_lot: 350,
         bitcoin_max_deposits_per_lot: 100,
         loki_url: None,
+        fee_settlement_rail: market_maker::FeeSettlementRail::Evm,
+        fee_settlement_interval_secs: 300,
+        fee_settlement_evm_confirmations: None,
+    }
+}
+
+/// Build market maker args configured for Base chain.
+pub async fn build_mm_test_args_for_base(
+    otc_port: u16,
+    rfq_port: u16,
+    multichain_account: &MultichainAccount,
+    devnet: &devnet::RiftDevnet,
+    connect_options: &PgConnectOptions,
+) -> MarketMakerArgs {
+    let coinbase_exchange_api_base_url =
+        format!("http://127.0.0.1:{}", devnet.coinbase_mock_server_port.unwrap_or(8080));
+    let auto_manage_inventory = devnet.coinbase_mock_server_port.is_some();
+    let db_url = create_test_database(connect_options).await.unwrap();
+    MarketMakerArgs {
+        enable_tokio_console_subscriber: false,
+        admin_api_listen_addr: None,
+        bitcoin_batch_interval_secs: 1,
+        bitcoin_batch_size: 100,
+        ethereum_batch_interval_secs: 1,
+        ethereum_batch_size: 392,
+        market_maker_tag: TEST_BASE_MARKET_MAKER_TAG.to_string(),
+        market_maker_id: TEST_BASE_MARKET_MAKER_API_ID.to_string(),
+        api_secret: TEST_BASE_MARKET_MAKER_API_SECRET.to_string(),
+        otc_ws_url: format!("ws://127.0.0.1:{otc_port}/ws/mm"),
+        rfq_ws_url: format!("ws://127.0.0.1:{rfq_port}/ws/mm"),
+        log_level: "info".to_string(),
+        bitcoin_wallet_db_file: build_tmp_bitcoin_wallet_db_file(),
+        bitcoin_wallet_descriptor: build_bitcoin_wallet_descriptor(
+            &multichain_account.bitcoin_wallet.private_key,
+        ),
+        bitcoin_wallet_network: bitcoin::Network::Regtest,
+        bitcoin_wallet_esplora_url: devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
+        evm_chain: otc_models::ChainType::Base, // Configured for Base
+        evm_wallet_private_key: multichain_account.secret_bytes,
+        evm_confirmations: 1,
+        evm_rpc_ws_url: devnet.base.anvil.ws_endpoint(),
+        trade_spread_bps: 0,
+        fee_safety_multiplier: 1.5,
+        database_url: db_url,
+        db_max_connections: 10,
+        db_min_connections: 2,
+        inventory_target_ratio_bps: 5000,
+        rebalance_tolerance_bps: 2500,
+        rebalance_poll_interval_secs: 5,
+        balance_utilization_threshold_bps: 9500,
+        confirmation_poll_interval_secs: 1,
+        btc_coinbase_confirmations: 2,
+        cbbtc_coinbase_confirmations: 3,
+        coinbase_exchange_api_base_url: coinbase_exchange_api_base_url.parse().unwrap(),
+        coinbase_exchange_api_key: "".to_string(),
+        coinbase_exchange_api_passphrase: "".to_string(),
+        coinbase_exchange_api_secret: "".to_string(),
+        auto_manage_inventory,
+        metrics_listen_addr: None,
+        batch_monitor_interval_secs: 5,
+        ethereum_max_deposits_per_lot: 350,
+        bitcoin_max_deposits_per_lot: 100,
+        loki_url: None,
+        fee_settlement_rail: market_maker::FeeSettlementRail::Evm,
+        fee_settlement_interval_secs: 5, // Fast settlement for tests
+        fee_settlement_evm_confirmations: None,
     }
 }
 
@@ -382,6 +498,28 @@ pub async fn build_test_user_ethereum_wallet(
         devnet.ethereum.anvil.ws_endpoint(),
         1,
         ChainType::Ethereum,
+        None,
+        350,
+        &mut join_set,
+    );
+    (join_set, wallet)
+}
+
+pub async fn build_test_user_base_wallet(
+    devnet: &devnet::RiftDevnet,
+    account: &MultichainAccount,
+) -> (JoinSet<market_maker::Result<()>>, EVMWallet) {
+    let private_key = account.secret_bytes;
+    let provider =
+        create_websocket_wallet_provider(&devnet.base.anvil.ws_endpoint(), private_key)
+            .await
+            .unwrap();
+    let mut join_set = JoinSet::new();
+    let wallet = EVMWallet::new(
+        Arc::new(provider),
+        devnet.base.anvil.ws_endpoint(),
+        1,
+        ChainType::Base,
         None,
         350,
         &mut join_set,

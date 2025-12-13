@@ -14,6 +14,13 @@ pub struct MarketMakerPaymentVerification {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeeSettlementVerification {
+    pub confirmations: u64,
+    /// Amount paid to the protocol fee address, denominated in sats of the BTC-like fee asset.
+    pub amount_sats: U256,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Payment {
     pub lot: Lot,
     pub to_address: String,
@@ -132,6 +139,15 @@ pub trait ChainOperations: Send + Sync {
         tx_hash: &str,
         market_maker_batch: &MarketMakerBatch,
     ) -> Result<Option<u64>>;
+
+    /// Verify a protocol fee settlement transaction.
+    ///
+    /// Returns `Ok(None)` if the tx is not found / not yet visible.
+    async fn verify_fee_settlement_transaction(
+        &self,
+        tx_hash: &str,
+        settlement_digest: [u8; 32],
+    ) -> Result<Option<FeeSettlementVerification>>;
 
     /// Check for transfers to an address for a given currency.
     /// Returns the first/largest transfer found (regardless of amount).

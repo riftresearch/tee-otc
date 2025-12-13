@@ -59,11 +59,11 @@ pub struct Args {
     #[arg(long, env = "OTC_URL", default_value = "http://127.0.0.1:4422")]
     pub otc_url: Url,
 
-    /// Override URL for the quote endpoint (defaults to <otc_url>/api/v1/quotes/request)
+    /// Override URL for the quote endpoint (defaults to <otc_url>/api/v2/quote)
     #[arg(
         long,
         env = "QUOTE_URL",
-        default_value = "http://127.0.0.1:3001/api/v1/quotes/request"
+        default_value = "http://127.0.0.1:3001/api/v2/quote"
     )]
     pub quote_url: Url,
 

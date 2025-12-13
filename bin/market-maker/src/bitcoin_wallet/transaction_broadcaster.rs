@@ -217,20 +217,10 @@ async fn process_transaction(
         tx_builder.add_recipient(address.script_pubkey(), amount);
     }
 
-    // Then fee DIRECTLY after the last recipient && OP_RETURN w/ nonce if this is a market maker payment
+    // If this is a market maker payment, embed OP_RETURN with nonce.
+    // Protocol fees are NOT paid in batch transactions (handled via separate settlement txs).
     if let Some(mm_payment_validation) = mm_payment_validation {
-        // Now handle fees
-        let fee_amount = mm_payment_validation.aggregated_fee;
-        let fee_address =
-            Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Bitcoin])
-                .unwrap()
-                .assume_checked();
-        tx_builder.add_recipient(
-            fee_address.script_pubkey(),
-            Amount::from_sat(fee_amount.to::<u64>()),
-        );
-
-        // Then OP_RETURN w/ nonce
+        // OP_RETURN w/ nonce
         let nonce = mm_payment_validation.batch_nonce_digest;
         let op_return_script = create_op_return_script(&nonce);
         tx_builder.add_recipient(op_return_script, Amount::ZERO);

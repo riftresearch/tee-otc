@@ -168,10 +168,38 @@ impl Wallet for EVMWallet {
         unimplemented!()
     }
 
-    async fn check_tx_confirmations(&self, _tx_hash: &str) -> WalletResult<u64> {
-        // Mock implementation - always return that the transaction is confirmed
-        // This is acceptable since Ethereum batches aren't relevant for the batch monitor
-        Ok(u64::MAX)
+    async fn check_tx_confirmations(&self, tx_hash: &str) -> WalletResult<u64> {
+        let tx_hash: TxHash = tx_hash.parse().map_err(|e| WalletError::TransactionCreationFailed {
+            reason: format!("invalid tx hash: {e}"),
+        })?;
+
+        let receipt = self
+            .provider
+            .get_transaction_receipt(tx_hash)
+            .await
+            .map_err(|e| WalletError::RpcCallError {
+                source: e,
+                loc: location!(),
+            })?;
+
+        let Some(receipt) = receipt else {
+            return Ok(0);
+        };
+
+        let current_block = self
+            .provider
+            .get_block_number()
+            .await
+            .map_err(|e| WalletError::RpcCallError {
+                source: e,
+                loc: location!(),
+            })?;
+
+        let Some(included_block) = receipt.block_number else {
+            return Ok(0);
+        };
+
+        Ok((current_block - included_block) as u64)
     }
 
     async fn create_batch_payment(
@@ -654,7 +682,7 @@ pub fn build_transaction_with_validation(
 }
 
 pub async fn create_evm_transfer_transaction(
-    chain_type: ChainType,
+    _chain_type: ChainType,
     sender: &Address,
     provider: &Arc<WebsocketWalletProvider>,
     payments: Vec<Payment>,
@@ -682,7 +710,7 @@ pub async fn create_evm_transfer_transaction(
                         context: "invalid token address".to_string(),
                     })?;
 
-            let mut recipients = payments
+            let recipients = payments
                 .iter()
                 .map(|payment| {
                     payment.to_address.parse::<Address>().map_err(|_| {
@@ -696,20 +724,8 @@ pub async fn create_evm_transfer_transaction(
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let fee_address =
-                Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&chain_type])
-                    .unwrap();
-
-            let mut amounts: Vec<U256> =
+            let amounts: Vec<U256> =
                 payments.iter().map(|payment| payment.lot.amount).collect();
-
-            // Determine recipients and amounts based on whether we have payment validation
-            if let Some(validation) = &mm_payment_validation {
-                recipients.push(fee_address);
-                amounts.push(validation.aggregated_fee);
-            }
-
-
 
             // Create payment executions for transferring tokens
             let token_contract =

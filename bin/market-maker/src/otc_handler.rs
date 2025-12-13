@@ -3,6 +3,7 @@ use crate::db::{Deposit, DepositRepository, DepositStore, PaymentRepository, Quo
 use crate::liquidity_lock::{LiquidityLockManager, LockedLiquidity};
 use crate::payment_manager::PaymentManager;
 use crate::websocket_client::MessageHandler;
+use crate::fee_settlement::{FeeStandingStatus, StandingRequestRegistry};
 use otc_protocols::mm::{MMRequest, MMResponse, NetworkBatch, ProtocolMessage};
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -14,6 +15,7 @@ pub struct OTCMessageHandler {
     payment_manager: Arc<PaymentManager>,
     payment_repository: Arc<PaymentRepository>,
     liquidity_lock_manager: Arc<LiquidityLockManager>,
+    standing_requests: StandingRequestRegistry,
 }
 
 impl OTCMessageHandler {
@@ -23,6 +25,7 @@ impl OTCMessageHandler {
         payment_manager: Arc<PaymentManager>,
         payment_repository: Arc<PaymentRepository>,
         liquidity_lock_manager: Arc<LiquidityLockManager>,
+        standing_requests: StandingRequestRegistry,
     ) -> Self {
         Self {
             quote_repository,
@@ -30,6 +33,7 @@ impl OTCMessageHandler {
             payment_manager,
             payment_repository,
             liquidity_lock_manager,
+            standing_requests,
         }
     }
 
@@ -76,6 +80,61 @@ impl OTCMessageHandler {
                     sequence: msg.sequence + 1, 
                     payload: response,
                 })
+            }
+            MMRequest::FeeStandingStatusResponse {
+                request_id,
+                debt_sats,
+                over_threshold_since,
+                threshold_sats,
+                window_secs,
+                ..
+            } => {
+                self.standing_requests.fulfill(
+                    *request_id,
+                    FeeStandingStatus {
+                        debt_sats: *debt_sats,
+                        over_threshold_since: *over_threshold_since,
+                        threshold_sats: *threshold_sats,
+                        window_secs: *window_secs,
+                    },
+                );
+                None
+            }
+            MMRequest::FeeSettlementAck {
+                request_id,
+                tx_hash,
+                accepted,
+                rejection_reason,
+                ..
+            } => {
+                info!(
+                    request_id = %request_id,
+                    tx_hash = %tx_hash,
+                    accepted = %accepted,
+                    "Received fee settlement ack from otc-server"
+                );
+
+                let now = utc::now();
+                let res = self
+                    .payment_repository
+                    .mark_fee_settlement_ack(
+                        tx_hash,
+                        *accepted,
+                        rejection_reason.as_deref(),
+                        now,
+                    )
+                    .await;
+
+                if let Err(e) = res {
+                    error!(
+                        request_id = %request_id,
+                        tx_hash = %tx_hash,
+                        error = %e,
+                        "Failed to record fee settlement ack"
+                    );
+                }
+
+                None
             }
             MMRequest::LatestDepositVaultTimestamp {
                 request_id,
