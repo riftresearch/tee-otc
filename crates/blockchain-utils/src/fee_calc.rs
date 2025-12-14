@@ -1,4 +1,7 @@
-use otc_models::{Lot, RealizedSwap, SwapRates, MIN_PROTOCOL_FEE_SATS};
+use otc_models::{compute_protocol_fee, inverse_compute_input, Lot, RealizedSwap, SwapRates};
+
+#[cfg(test)]
+use otc_models::{compute_fees, SwapMode};
 
 pub const PROTOCOL_FEE_BPS: u64 = 10;
 
@@ -9,31 +12,16 @@ pub fn compute_realized_swap(input: u64, rates: &SwapRates) -> Option<RealizedSw
     RealizedSwap::compute(input, rates)
 }
 
-/// Compute the protocol fee for a given amount in sats.
-/// Returns at least MIN_PROTOCOL_FEE_SATS.
+/// Compute the protocol fee for a given amount in sats using ceiling division.
 pub fn compute_protocol_fee_sats(sats: u64) -> u64 {
-    let fee = sats.saturating_mul(PROTOCOL_FEE_BPS) / 10_000;
-    if fee < MIN_PROTOCOL_FEE_SATS {
-        MIN_PROTOCOL_FEE_SATS
-    } else {
-        fee
-    }
+    compute_protocol_fee(sats, PROTOCOL_FEE_BPS)
 }
 
 /// Given an amount after protocol fee deduction, compute what the original amount was.
 pub fn inverse_compute_protocol_fee(g: u64) -> u64 {
-    let threshold = MIN_PROTOCOL_FEE_SATS
-        .saturating_mul(10_000)
-        .saturating_div(PROTOCOL_FEE_BPS);
-
-    let max_g_for_min_fee = threshold.saturating_sub(MIN_PROTOCOL_FEE_SATS);
-
-    if g < max_g_for_min_fee {
-        g.saturating_add(MIN_PROTOCOL_FEE_SATS)
-    } else {
-        g.saturating_mul(10_000)
-            .saturating_div(10_000 - PROTOCOL_FEE_BPS)
-    }
+    // Create rates with only protocol fee to use the consolidated inverse function
+    let rates = SwapRates::new(0, PROTOCOL_FEE_BPS, 0);
+    inverse_compute_input(g, &rates)
 }
 
 pub trait FeeCalcFromLot {
@@ -42,7 +30,9 @@ pub trait FeeCalcFromLot {
 
 impl FeeCalcFromLot for Lot {
     fn compute_protocol_fee(&self) -> u64 {
-        inverse_compute_protocol_fee(self.amount.to::<u64>()) - self.amount.to::<u64>()
+        let amount = self.amount.to::<u64>();
+        let original = inverse_compute_protocol_fee(amount);
+        original.saturating_sub(amount)
     }
 }
 
@@ -62,7 +52,13 @@ mod tests {
             println!("fee_sats: {fee_sats}");
             println!("amount_after_fee: {amount_after_fee}");
             println!("amount_before_fee: {amount_before_fee}");
-            assert_eq!(amount_sats, amount_before_fee, "Fee computation is correct");
+            // With ceiling-based fees, the inverse should give us at least the original
+            assert!(
+                amount_before_fee >= amount_sats,
+                "Inverse should recover at least original: {} >= {}",
+                amount_before_fee,
+                amount_sats
+            );
         }
     }
 
@@ -81,10 +77,22 @@ mod tests {
     #[test]
     fn test_compute_realized_swap_rejects_dust_output() {
         let rates = SwapRates::new(13, 10, 1000); // 0.13% liquidity, 0.10% protocol, 1000 sats network
-        
+
         // Very small input that would result in dust output
-        let tiny_input = 1_500u64; // After fees, this would be below MIN_VIABLE_OUTPUT_SATS
+        let tiny_input = 1_500u64;
         let realized = compute_realized_swap(tiny_input, &rates);
         assert!(realized.is_none(), "Should reject inputs that result in dust output");
+    }
+
+    #[test]
+    fn test_compute_fees_directly() {
+        let rates = SwapRates::new(13, 10, 1000);
+        let input = 1_000_000u64;
+
+        let breakdown = compute_fees(SwapMode::ExactInput(input), &rates).unwrap();
+        assert_eq!(breakdown.liquidity_fee, 1300);
+        assert_eq!(breakdown.protocol_fee, 1000);
+        assert_eq!(breakdown.network_fee, 1000);
+        assert_eq!(breakdown.output, 996_700);
     }
 }

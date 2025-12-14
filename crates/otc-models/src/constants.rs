@@ -3,10 +3,6 @@ use std::sync::LazyLock;
 
 use crate::{ChainType, TokenIdentifier};
 
-/// Minimum protocol fee in satoshis. Protocol fees below this are rounded up to this value
-/// to ensure the fee output is always above Bitcoin's dust limit.
-pub const MIN_PROTOCOL_FEE_SATS: u64 = 300;
-
 /// Minimum viable output in satoshis. Swaps that would result in an output below this
 /// threshold are rejected to prevent dust outputs and uneconomical swaps.
 /// Set to 546 sats (Bitcoin's standard dust limit for P2PKH outputs).

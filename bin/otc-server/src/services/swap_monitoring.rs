@@ -319,10 +319,10 @@ impl SwapMonitoringService {
         let quote = &swap.quote;
 
         // Get the chain operations for the user's deposit chain (from_currency = user sends)
-        let chain_ops = self.chain_registry.get(&quote.from_currency.chain).ok_or(
+        let chain_ops = self.chain_registry.get(&quote.from.currency.chain).ok_or(
             MonitoringError::ChainOperation {
                 source: otc_chains::Error::ChainNotSupported {
-                    chain: format!("{:?}", quote.from_currency.chain),
+                    chain: format!("{:?}", quote.from.currency.chain),
                 },
                 loc: location!(),
             },
@@ -336,14 +336,14 @@ impl SwapMonitoringService {
 
         // Check for deposit from the user's wallet (any amount)
         let deposit_info = chain_ops
-            .search_for_transfer(&user_wallet.address, &quote.from_currency, None)
+            .search_for_transfer(&user_wallet.address, &quote.from.currency, None)
             .await
             .context(ChainOperationSnafu)?;
 
         if let Some(deposit) = deposit_info {
             debug!(
                 "User deposit detected for swap {}: {} on chain {:?}, amount: {}",
-                swap.id, deposit.tx_hash, quote.from_currency.chain, deposit.amount
+                swap.id, deposit.tx_hash, quote.from.currency.chain, deposit.amount
             );
 
             if let Some(existing_hash) = existent_tx_hash {
@@ -428,10 +428,10 @@ impl SwapMonitoringService {
                 })?;
 
         // Get the chain operations for the user's deposit chain
-        let chain_ops = self.chain_registry.get(&quote.from_currency.chain).ok_or(
+        let chain_ops = self.chain_registry.get(&quote.from.currency.chain).ok_or(
             MonitoringError::ChainOperation {
                 source: otc_chains::Error::ChainNotSupported {
-                    chain: format!("{:?}", quote.from_currency.chain),
+                    chain: format!("{:?}", quote.from.currency.chain),
                 },
                 loc: location!(),
             },
@@ -491,7 +491,7 @@ impl SwapMonitoringService {
                     let mm_nonce = swap.mm_nonce;
                     // Build the expected lot from realized amounts
                     let expected_lot = Lot {
-                        currency: swap.quote.to_currency.clone(),
+                        currency: swap.quote.to.currency.clone(),
                         amount: realized.mm_output,
                     };
 
@@ -515,7 +515,7 @@ impl SwapMonitoringService {
             TxStatus::NotFound => {
                 debug!(
                     "User deposit tx {} for swap {} not found on chain {:?}",
-                    user_deposit.tx_hash, swap.id, quote.from_currency.chain
+                    user_deposit.tx_hash, swap.id, quote.from.currency.chain
                 );
                 // If it's not found, it's possible the user deposit was replaced with a different tx, 
                 // so we need to check for a new deposit
@@ -548,7 +548,7 @@ impl SwapMonitoringService {
             return Ok(());
         }
 
-        let dest_currency = swaps[0].quote.to_currency.clone();
+        let dest_currency = swaps[0].quote.to.currency.clone();
 
         if self
             .db
@@ -577,7 +577,7 @@ impl SwapMonitoringService {
                 });
             }
             // validate the destination currency is the same for all swaps
-            if swap.quote.to_currency != dest_currency {
+            if swap.quote.to.currency != dest_currency {
                 return Err(MonitoringError::InvalidMarketMakerBatch {
                     context: format!(
                         "Destination currency mismatch processing swap id {}",
@@ -695,7 +695,7 @@ impl SwapMonitoringService {
 
         // All swaps in a batch share the same destination chain/currency, use the first one
         let first_swap = &swaps[0];
-        let deposit_chain = &first_swap.quote.to_currency.chain;
+        let deposit_chain = &first_swap.quote.to.currency.chain;
 
         // Get the chain operations for the MM's deposit chain
         let chain_ops =
@@ -798,10 +798,10 @@ impl SwapMonitoringService {
                         // Get chain ops for the user's deposit chain (from currency)
                         let user_chain_ops = self
                             .chain_registry
-                            .get(&swap.quote.from_currency.chain)
+                            .get(&swap.quote.from.currency.chain)
                             .ok_or(MonitoringError::ChainOperation {
                                 source: otc_chains::Error::ChainNotSupported {
-                                    chain: format!("{:?}", swap.quote.from_currency.chain),
+                                    chain: format!("{:?}", swap.quote.from.currency.chain),
                                 },
                                 loc: location!(),
                             })?;
@@ -822,7 +822,7 @@ impl SwapMonitoringService {
                         
                         // Build the actual deposit lot from user_deposit_status.amount
                         let actual_deposit_lot = Lot {
-                            currency: swap.quote.from_currency.clone(),
+                            currency: swap.quote.from.currency.clone(),
                             amount: swap.user_deposit_status.as_ref().expect("user deposit status should be some").amount,
                         };
 

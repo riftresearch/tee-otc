@@ -9,19 +9,22 @@ use alloy::eips::BlockNumberOrTag;
 use alloy::providers::DynProvider;
 use alloy::{primitives::U256, providers::Provider};
 use blockchain_utils::MempoolEsploraFeeExt;
-use otc_models::{constants, ChainType, Quote, QuoteRequest, SwapRates, TokenIdentifier, MIN_PROTOCOL_FEE_SATS};
+use otc_models::{
+    compute_fees, compute_max_input_for_output, compute_min_viable_input, constants, ChainType,
+    Fees, Lot, Quote, QuoteRequest, SwapRates, TokenIdentifier,
+};
+#[cfg(test)]
+use otc_models::MIN_VIABLE_OUTPUT_SATS;
 use otc_protocols::rfq::RFQResult;
 use snafu::{Location, Snafu};
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 use uuid::Uuid;
 
 const QUOTE_EXPIRATION_TIME: Duration = Duration::from_secs(60 * 5);
 const FEE_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
 
-/// P2PKH is the MOST expensive address to send BTC to, dust limit wise, so we use this as our minimum
-const MIN_DUST_SATS: u64 = 546;
 
 
 /// Protocol fee in basis points (0.10%)
@@ -217,8 +220,8 @@ impl WrappedBitcoinQuoter {
         }
     }
 
-    /// Compute a rate-based quote for the given currency pair.
-    /// The quote specifies rates and min/max bounds instead of fixed amounts.
+    /// Compute an exact quote for the given currency pair and swap mode.
+    /// The quote contains precise input/output amounts and fee breakdown.
     pub async fn compute_quote(
         &self,
         market_maker_id: Uuid,
@@ -229,7 +232,16 @@ impl WrappedBitcoinQuoter {
             return Ok(RFQResult::Unsupported(error_message));
         }
 
-        let quote_id = Uuid::new_v4();
+        // Validate we have a wallet for the destination chain
+        if !self.wallet_registry.is_registered(quote_request.to.chain) {
+            warn!(
+                "Cannot fill quote: no wallet configured for chain {:?}",
+                quote_request.to.chain
+            );
+            return Ok(RFQResult::MakerUnavailable(
+                "No wallet configured for chain".to_string(),
+            ));
+        }
 
         // Get network fee for the destination chain (where MM sends funds)
         let network_fee_sats = match self.fee_map.read().await.get(&quote_request.to.chain).cloned()
@@ -245,8 +257,17 @@ impl WrappedBitcoinQuoter {
         // Build the rates
         let rates = SwapRates::new(self.trade_spread_bps, PROTOCOL_FEE_BPS, network_fee_sats);
 
+        // Compute fee breakdown based on the requested mode
+        let breakdown = match compute_fees(quote_request.mode, &rates) {
+            Some(b) => b,
+            None => {
+                return Ok(RFQResult::InvalidRequest(
+                    "Amount produces dust output".to_string(),
+                ))
+            }
+        };
+
         // Get max liquidity from cache for this pair (with balance strategy applied)
-        // This is consistent with what the liquidity endpoint reports
         let max_output = self
             .liquidity_cache
             .get_max_output_for_pair(&quote_request.from, &quote_request.to)
@@ -259,52 +280,46 @@ impl WrappedBitcoinQuoter {
             ));
         }
 
-        // Calculate max_input from max_output by reversing the fee calculation
-        // max_output = (input * (1 - liquidity_bps/10000) - network_fee) * (1 - protocol_bps/10000)
-        // Solving for input: input = (max_output / (1 - protocol_bps/10000) + network_fee) / (1 - liquidity_bps/10000)
-        let max_input = reverse_compute_max_input(max_output.to::<u64>(), &rates);
-
-        // Compute minimum input that produces viable output after all fees
+        // Validate against liquidity bounds
+        let max_input = compute_max_input_for_output(max_output.to::<u64>(), &rates);
         let min_input = compute_min_viable_input(&rates);
 
-        if max_input <= min_input {
-            return Ok(RFQResult::MakerUnavailable(
-                "Insufficient liquidity for viable quote range".to_string(),
-            ));
+        if breakdown.input < min_input {
+            return Ok(RFQResult::InvalidRequest(format!(
+                "Input {} below minimum viable input {}",
+                breakdown.input, min_input
+            )));
         }
 
-        // If the user's input_hint exceeds our max_input, we can't fulfill the request
-        if let Some(input_hint) = quote_request.input_hint {
-            if input_hint > U256::from(max_input) {
-                return Ok(RFQResult::MakerUnavailable(format!(
-                    "Insufficient balance: requested {} but max available is {}",
-                    input_hint, max_input
-                )));
-            }
+        if breakdown.input > max_input {
+            return Ok(RFQResult::MakerUnavailable(format!(
+                "Insufficient liquidity: requires {} but max available is {}",
+                breakdown.input, max_input
+            )));
         }
 
         let quote = Quote {
-            id: quote_id,
+            id: Uuid::new_v4(),
             market_maker_id,
-            from_currency: quote_request.from.clone(),
-            to_currency: quote_request.to.clone(),
+            from: Lot {
+                currency: quote_request.from.clone(),
+                amount: U256::from(breakdown.input),
+            },
+            to: Lot {
+                currency: quote_request.to.clone(),
+                amount: U256::from(breakdown.output),
+            },
             rates,
+            fees: Fees {
+                liquidity_fee: U256::from(breakdown.liquidity_fee),
+                protocol_fee: U256::from(breakdown.protocol_fee),
+                network_fee: U256::from(breakdown.network_fee),
+            },
             min_input: U256::from(min_input),
             max_input: U256::from(max_input),
             expires_at: utc::now() + QUOTE_EXPIRATION_TIME,
             created_at: utc::now(),
         };
-
-        // Validate we have a wallet for the destination chain
-        if !self.wallet_registry.is_registered(quote.to_currency.chain) {
-            warn!(
-                "Cannot fill quote {}: no wallet configured for chain {:?}",
-                quote.id, quote.to_currency.chain
-            );
-            return Ok(RFQResult::MakerUnavailable(
-                "No wallet configured for chain".to_string(),
-            ));
-        }
 
         Ok(RFQResult::Success(quote))
     }
@@ -348,62 +363,6 @@ impl WrappedBitcoinQuoter {
 
         None
     }
-}
-
-/// Compute the minimum input that produces at least dust output after all fees.
-///
-/// This accounts for the minimum protocol fee from `rates.min_protocol_fee_sats` which ensures
-/// the fee output is always above Bitcoin's dust limit.
-fn compute_min_viable_input(rates: &SwapRates) -> u64 {
-    const BPS_DENOM: u64 = 10_000;
-
-    // We need both:
-    // 1. mm_output >= MIN_DUST_SATS (user payment must be above dust)
-    // 2. protocol_fee >= rates.min_protocol_fee_sats (fee payment must be above dust)
-    //
-    // Since protocol_fee = max(computed_fee, min_protocol_fee_sats), and
-    // mm_output = after_network - protocol_fee, we need:
-    // after_network >= min_protocol_fee_sats + MIN_DUST_SATS
-    //
-    // This is the simpler case that applies for small inputs where the minimum fee kicks in.
-    // For larger inputs where the percentage-based fee exceeds min_protocol_fee_sats,
-    // the percentage-based formula would give a lower min_input, so this is conservative.
-
-    let after_liq_bps = BPS_DENOM - rates.liquidity_fee_bps;
-
-    // Minimum after_network needed to satisfy both dust constraints
-    let min_after_network = rates.min_protocol_fee_sats + MIN_DUST_SATS;
-
-    // Amount needed before network fee
-    let before_network = min_after_network + rates.network_fee_sats;
-
-    // Amount needed before liquidity fee (the input)
-    let input = (before_network * BPS_DENOM).div_ceil(after_liq_bps);
-
-    input
-}
-
-/// Reverse compute max input from max output using the rates.
-fn reverse_compute_max_input(max_output: u64, rates: &SwapRates) -> u64 {
-    const BPS_DENOM: u64 = 10_000;
-
-    if max_output == 0 {
-        return 0;
-    }
-
-    let after_proto_bps = BPS_DENOM - rates.protocol_fee_bps;
-    let after_liq_bps = BPS_DENOM - rates.liquidity_fee_bps;
-
-    // Reverse: output = (input * after_liq_bps / BPS_DENOM - network_fee) * after_proto_bps / BPS_DENOM
-    // => output * BPS_DENOM / after_proto_bps = input * after_liq_bps / BPS_DENOM - network_fee
-    // => output * BPS_DENOM / after_proto_bps + network_fee = input * after_liq_bps / BPS_DENOM
-    // => (output * BPS_DENOM / after_proto_bps + network_fee) * BPS_DENOM / after_liq_bps = input
-
-    let before_proto = (max_output * BPS_DENOM).div_ceil(after_proto_bps);
-    let before_network = before_proto + rates.network_fee_sats;
-    let input = (before_network * BPS_DENOM).div_ceil(after_liq_bps);
-
-    input
 }
 
 // NOTICE: We want the following methods to include the cost for the market maker to send
@@ -487,31 +446,33 @@ mod tests {
         let rates = SwapRates::new(TRADE_SPREAD_BPS, PROTOCOL_FEE_BPS, network_fee);
         let min_input = compute_min_viable_input(&rates);
 
-        // Verify that min_input produces at least MIN_DUST_SATS output
+        // Verify that min_input produces at least MIN_VIABLE_OUTPUT_SATS output
         let realized = RealizedSwap::compute(min_input, &rates)
             .expect("min_input should produce valid output");
         assert!(
-            realized.mm_output >= U256::from(MIN_DUST_SATS),
+            realized.mm_output >= U256::from(MIN_VIABLE_OUTPUT_SATS),
             "Min input {} should produce at least {} output, got {}",
             min_input,
-            MIN_DUST_SATS,
+            MIN_VIABLE_OUTPUT_SATS,
             realized.mm_output
         );
 
         // Verify that inputs below min_input produce None (below MIN_VIABLE_OUTPUT_SATS)
-        // or produce output below MIN_DUST_SATS
-        if min_input > 3 {
-            let realized_below = RealizedSwap::compute(min_input - 3, &rates);
+        // or produce output at most MIN_VIABLE_OUTPUT_SATS - 1
+        // Use a sufficient margin to ensure we actually drop below
+        let margin = 10u64;
+        if min_input > margin {
+            let realized_below = RealizedSwap::compute(min_input - margin, &rates);
             match realized_below {
                 None => {
                     // Good - the input was rejected as it would produce dust
                 }
                 Some(r) => {
                     assert!(
-                        r.mm_output < U256::from(MIN_DUST_SATS),
+                        r.mm_output < U256::from(MIN_VIABLE_OUTPUT_SATS),
                         "Input {} should produce less than {} output, got {}",
-                        min_input - 3,
-                        MIN_DUST_SATS,
+                        min_input - margin,
+                        MIN_VIABLE_OUTPUT_SATS,
                         r.mm_output
                     );
                 }
@@ -520,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn test_reverse_compute_max_input() {
+    fn test_compute_max_input_for_output() {
         let network_fee =
             calculate_fees_in_sats_for_market_maker_to_send_btc_and_receive_cbbtc_vault(
                 SATS_PER_VBYTE,
@@ -532,18 +493,16 @@ mod tests {
         let rates = SwapRates::new(TRADE_SPREAD_BPS, PROTOCOL_FEE_BPS, network_fee);
         let max_output = 1_000_000u64; // 1M sats available
 
-        let max_input = reverse_compute_max_input(max_output, &rates);
+        let max_input = compute_max_input_for_output(max_output, &rates);
 
-        // Verify that max_input produces approximately max_output
+        // Verify that max_input produces at most max_output
         let realized = RealizedSwap::compute(max_input, &rates)
             .expect("max_input derived from 1M sats should produce valid output");
 
-        // The output should be close to max_output (within rounding)
-        // Since we use div_ceil in the reverse calculation, the actual output
-        // should be >= max_output
+        // The output should be <= max_output
         assert!(
-            realized.mm_output >= U256::from(max_output),
-            "Max input {} should produce at least {} output, got {}",
+            realized.mm_output <= U256::from(max_output),
+            "Max input {} should produce at most {} output, got {}",
             max_input,
             max_output,
             realized.mm_output

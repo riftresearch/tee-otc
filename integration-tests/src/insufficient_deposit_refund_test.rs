@@ -7,7 +7,7 @@ use bitcoincore_rpc_async::RpcApi;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, wallet::Wallet};
 use otc_chains::traits::Payment;
-use otc_models::{ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::{
     swaps::RefundSwapResponse,
@@ -161,7 +161,7 @@ async fn test_insufficient_bitcoin_deposit_refund(
 
     // Request a quote
     let quote_request = QuoteRequest {
-        input_hint: Some(U256::from(10_000_000)), // 0.1 BTC
+        mode: SwapMode::ExactInput(10_000_000), // 0.1 BTC
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -478,7 +478,7 @@ async fn test_insufficient_evm_deposit_refund(
 
     // Request a quote where user deposits cbBTC on Ethereum
     let quote_request = QuoteRequest {
-        input_hint: Some(one_cbbtc),
+        mode: SwapMode::ExactInput(one_cbbtc.to::<u64>()),
         from: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),

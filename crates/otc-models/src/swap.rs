@@ -1,4 +1,4 @@
-use crate::{constants::MIN_VIABLE_OUTPUT_SATS, Quote, SwapRates, SwapStatus};
+use crate::{Quote, SwapMode, SwapRates, SwapStatus, fees::compute_fees};
 use alloy::primitives::U256;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -57,40 +57,20 @@ pub struct RealizedSwap {
 
 impl RealizedSwap {
     /// Compute realized swap amounts from an input and rates.
-    /// Order of fee deduction: liquidity_fee -> network_fee -> protocol_fee
     ///
-    /// Returns `None` if the resulting output would be below `MIN_VIABLE_OUTPUT_SATS`,
-    /// which prevents dust outputs and uneconomical swaps.
+    /// Fees are additive: both bps fees are computed on the gross input, then network fee is subtracted.
+    /// All percentage-based fees use ceiling division (round up).
     ///
-    /// The protocol fee is always at least `rates.min_protocol_fee_sats` to ensure
-    /// the fee output is above Bitcoin's dust limit.
+    /// Returns `None` if the resulting output would be below `MIN_VIABLE_OUTPUT_SATS`.
     pub fn compute(input: u64, rates: &SwapRates) -> Option<Self> {
-        const BPS_DENOM: u64 = 10_000;
-
-        // 1. Deduct liquidity fee (MM spread)
-        let liquidity_fee = input.saturating_mul(rates.liquidity_fee_bps) / BPS_DENOM;
-        let after_liquidity = input.saturating_sub(liquidity_fee);
-
-        // 2. Deduct fixed network fee
-        let network_fee = rates.network_fee_sats;
-        let after_network = after_liquidity.saturating_sub(network_fee);
-
-        // 3. Deduct protocol fee (with minimum to avoid dust outputs)
-        let computed_fee = after_network.saturating_mul(rates.protocol_fee_bps) / BPS_DENOM;
-        let protocol_fee = computed_fee.max(rates.min_protocol_fee_sats);
-        let mm_output = after_network.saturating_sub(protocol_fee);
-
-        // Reject if output would be below minimum viable threshold (dust prevention)
-        if mm_output < MIN_VIABLE_OUTPUT_SATS {
-            return None;
-        }
+        let breakdown = compute_fees(SwapMode::ExactInput(input), rates)?;
 
         Some(Self {
-            user_input: U256::from(input),
-            mm_output: U256::from(mm_output),
-            protocol_fee: U256::from(protocol_fee),
-            liquidity_fee: U256::from(liquidity_fee),
-            network_fee: U256::from(network_fee),
+            user_input: U256::from(breakdown.input),
+            mm_output: U256::from(breakdown.output),
+            protocol_fee: U256::from(breakdown.protocol_fee),
+            liquidity_fee: U256::from(breakdown.liquidity_fee),
+            network_fee: U256::from(breakdown.network_fee),
         })
     }
 }
@@ -202,7 +182,7 @@ pub fn can_be_refunded_soon(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ChainType, Currency, Quote, SwapRates, TokenIdentifier};
+    use crate::{ChainType, Currency, Fees, Lot, Quote, SwapRates, TokenIdentifier};
     use alloy::primitives::U256;
     use chrono::Duration;
 
@@ -210,17 +190,28 @@ mod tests {
         Quote {
             id: uuid::Uuid::new_v4(),
             market_maker_id: uuid::Uuid::new_v4(),
-            from_currency: Currency {
-                chain: ChainType::Bitcoin,
-                token: TokenIdentifier::Native,
-                decimals: 8,
+            from: Lot {
+                currency: Currency {
+                    chain: ChainType::Bitcoin,
+                    token: TokenIdentifier::Native,
+                    decimals: 8,
+                },
+                amount: U256::from(1_000_000u64),
             },
-            to_currency: Currency {
-                chain: ChainType::Ethereum,
-                token: TokenIdentifier::Native,
-                decimals: 8,
+            to: Lot {
+                currency: Currency {
+                    chain: ChainType::Ethereum,
+                    token: TokenIdentifier::Native,
+                    decimals: 8,
+                },
+                amount: U256::from(996_700u64),
             },
             rates: SwapRates::new(13, 10, 1000),
+            fees: Fees {
+                liquidity_fee: U256::from(1300u64),
+                protocol_fee: U256::from(1000u64),
+                network_fee: U256::from(1000u64),
+            },
             min_input: U256::from(10_000u64),
             max_input: U256::from(100_000_000u64),
             expires_at: utc::now() + Duration::hours(1),
@@ -408,18 +399,18 @@ mod tests {
 
         let realized = RealizedSwap::compute(input, &rates).expect("should produce valid output");
 
-        // liquidity_fee = 1_000_000 * 13 / 10000 = 1300
+        // Additive fees: both bps fees computed on gross input
+        // liquidity_fee = ceil(1_000_000 * 13 / 10000) = 1300
         assert_eq!(realized.liquidity_fee, U256::from(1300u64));
 
-        // after_liquidity = 1_000_000 - 1300 = 998_700
-        // after_network = 998_700 - 1000 = 997_700
+        // protocol_fee = ceil(1_000_000 * 10 / 10000) = 1000
+        assert_eq!(realized.protocol_fee, U256::from(1000u64));
+
+        // network_fee = 1000
         assert_eq!(realized.network_fee, U256::from(1000u64));
 
-        // protocol_fee = 997_700 * 10 / 10000 = 997
-        assert_eq!(realized.protocol_fee, U256::from(997u64));
-
-        // mm_output = 997_700 - 997 = 996_703
-        assert_eq!(realized.mm_output, U256::from(996_703u64));
+        // mm_output = 1_000_000 - 1300 - 1000 - 1000 = 996_700
+        assert_eq!(realized.mm_output, U256::from(996_700u64));
 
         assert_eq!(realized.user_input, U256::from(input));
     }
@@ -431,7 +422,7 @@ mod tests {
         let rates = SwapRates::new(13, 10, 1000); // 0.13% liquidity, 0.10% protocol, 1000 sats network
         
         // Input that would result in output below MIN_VIABLE_OUTPUT_SATS
-        // With network_fee=1000 and min_protocol_fee=300, we need at least ~1846 sats to get 546 output
+        // With network_fee=1000 and ceiling-based fees, small inputs produce dust outputs
         let tiny_input = 1_500u64;
         assert!(
             RealizedSwap::compute(tiny_input, &rates).is_none(),
@@ -439,7 +430,7 @@ mod tests {
         );
 
         // Verify boundary: find an input that just barely produces viable output
-        let viable_input = 2_000u64;
+        let viable_input = 1_600u64;
         let realized = RealizedSwap::compute(viable_input, &rates);
         if let Some(r) = realized {
             assert!(

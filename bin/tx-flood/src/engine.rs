@@ -2,7 +2,9 @@ use std::{error::Error as StdError, sync::Arc, time::Instant};
 
 use alloy::primitives::U256;
 use anyhow::{anyhow, Context, Result};
-use otc_models::{ChainType, Currency, Lot, Quote, QuoteRequest, TokenIdentifier};
+use otc_models::{
+    ChainType, Currency, Lot, Quote, QuoteRequest, SwapMode as OtcSwapMode, TokenIdentifier,
+};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::swaps::{CreateSwapRequest, CreateSwapResponse, SwapResponse};
 use rand::Rng;
@@ -199,7 +201,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
     let quote_request = QuoteRequest {
         from: from_currency,
         to: to_currency,
-        input_hint: Some(amount),
+        mode: OtcSwapMode::ExactInput(amount.to::<u64>()),
     };
 
     send_update(
@@ -292,8 +294,9 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
 
     let deposit_lot = lot_from_response(&swap_response, amount).with_context(|| {
         format!(
-            "invalid deposit lot: amount={}, min_input={}, max_input={}, chain={}, token={}",
+            "invalid deposit lot: amount={}, quoted_input={}, min={}, max={}, chain={}, token={}",
             amount,
+            swap_response.quoted_input,
             swap_response.min_input,
             swap_response.max_input,
             swap_response.deposit_chain,

@@ -20,7 +20,7 @@ use market_maker::bitcoin_wallet::BitcoinWallet;
 use market_maker::run_market_maker;
 use market_maker::wallet::Wallet;
 use otc_chains::traits::Payment;
-use otc_models::{ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::{CreateSwapRequest, CreateSwapResponse};
 use otc_server::server::run_server;
@@ -57,7 +57,7 @@ async fn execute_btc_to_eth_swap(
     input_sats: u64,
 ) -> SwapInfo {
     let quote_request = QuoteRequest {
-        input_hint: Some(U256::from(input_sats)),
+        mode: SwapMode::ExactInput(input_sats),
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -155,7 +155,7 @@ async fn execute_eth_to_btc_swap(
     input_sats: u64,
 ) -> SwapInfo {
     let quote_request = QuoteRequest {
-        input_hint: Some(U256::from(input_sats)),
+        mode: SwapMode::ExactInput(input_sats),
         from: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(cbbtc_address.to_string()),

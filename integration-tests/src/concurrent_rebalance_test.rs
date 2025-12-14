@@ -2,7 +2,7 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy::{primitives::U256, providers::ext::AnvilApi};
 use devnet::{MultichainAccount, RiftDevnet, WithdrawalProcessingMode};
 use market_maker::{run_market_maker, wallet::Wallet, MarketMakerArgs};
-use otc_models::{ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::{CreateSwapRequest, CreateSwapResponse};
 use reqwest::StatusCode;
@@ -51,7 +51,7 @@ async fn execute_user_swap(
 
     // Request a quote
     let quote_request = QuoteRequest {
-        input_hint: Some(U256::from(SWAP_AMOUNT_SATS)),
+        mode: SwapMode::ExactInput(SWAP_AMOUNT_SATS),
         from: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(cbbtc_address.clone()),

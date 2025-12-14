@@ -5,7 +5,7 @@ use market_maker::run_market_maker;
 use market_maker::{bitcoin_wallet::BitcoinWallet, wallet::Wallet, MarketMakerArgs};
 use mock_instant::global::MockClock;
 use otc_chains::traits::Payment;
-use otc_models::{ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::{
     api::{CreateSwapRequest, CreateSwapResponse},
@@ -162,7 +162,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
     let swap_amount = U256::from(1_000_000); // 0.01 BTC in sats (small amount)
 
     let quote_request = QuoteRequest {
-        input_hint: Some(swap_amount),
+        mode: SwapMode::ExactInput(swap_amount.to::<u64>()),
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -317,7 +317,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
     // This should fail or return reduced quote
     info!("=== Step 5: Testing quote request respects locked liquidity ===");
     let large_quote_request = QuoteRequest {
-        input_hint: Some(max_amount_after_lock + U256::from(1)), // Try to exceed available
+        mode: SwapMode::ExactInput((max_amount_after_lock + U256::from(1)).to::<u64>()), // Try to exceed available
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,

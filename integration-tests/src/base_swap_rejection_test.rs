@@ -2,7 +2,7 @@ use alloy::primitives::U256;
 use bitcoincore_rpc_async::RpcApi;
 use devnet::{bitcoin_devnet::MiningMode, MultichainAccount, RiftDevnet};
 use market_maker::run_market_maker;
-use otc_models::{ChainType, Currency, QuoteRequest, TokenIdentifier};
+use otc_models::{SwapMode, ChainType, Currency, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::server::run_server;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
@@ -132,7 +132,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
     // Test 1: Request a quote for Base -> Bitcoin swap (should fail)
     info!("Test 1: Requesting Base -> Bitcoin quote (should be rejected)");
     let base_to_btc_quote_request = QuoteRequest {
-        input_hint: Some(U256::from(10_000_000)), // 0.1 cbBTC on Base
+        mode: SwapMode::ExactInput(10_000_000), // 0.1 cbBTC on Base
         from: Currency {
             chain: ChainType::Base,
             token: TokenIdentifier::Address(devnet.base.cbbtc_contract.address().to_string()),
@@ -189,7 +189,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
     // Test 2: Request a quote for Bitcoin -> Base swap (should also fail)
     info!("Test 2: Requesting Bitcoin -> Base quote (should be rejected)");
     let btc_to_base_quote_request = QuoteRequest {
-        input_hint: Some(U256::from(10_000_000)), // 0.1 BTC
+        mode: SwapMode::ExactInput(10_000_000), // 0.1 BTC
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -242,7 +242,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
     // Test 3: Verify that Ethereum <> Bitcoin swaps still work
     info!("Test 3: Requesting Bitcoin -> Ethereum quote (should succeed)");
     let btc_to_eth_quote_request = QuoteRequest {
-        input_hint: Some(U256::from(10_000_000)), // 0.1 BTC
+        mode: SwapMode::ExactInput(10_000_000), // 0.1 BTC
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,

@@ -151,9 +151,10 @@ impl SwapRepository {
                 s.created_at, s.updated_at,
                 -- Quote fields
                 q.id as quote_id,
-                q.from_chain, q.from_token, q.from_decimals,
-                q.to_chain, q.to_token, q.to_decimals,
+                q.from_chain, q.from_token, q.from_decimals, q.from_amount,
+                q.to_chain, q.to_token, q.to_decimals, q.to_amount,
                 q.liquidity_fee_bps, q.protocol_fee_bps, q.network_fee_sats,
+                q.fee_liquidity, q.fee_protocol, q.fee_network,
                 q.min_input, q.max_input,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
@@ -190,9 +191,10 @@ impl SwapRepository {
                 s.created_at, s.updated_at,
                 -- Quote fields
                 q.id as quote_id,
-                q.from_chain, q.from_token, q.from_decimals,
-                q.to_chain, q.to_token, q.to_decimals,
+                q.from_chain, q.from_token, q.from_decimals, q.from_amount,
+                q.to_chain, q.to_token, q.to_decimals, q.to_amount,
                 q.liquidity_fee_bps, q.protocol_fee_bps, q.network_fee_sats,
+                q.fee_liquidity, q.fee_protocol, q.fee_network,
                 q.min_input, q.max_input,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
@@ -368,9 +370,10 @@ impl SwapRepository {
                 s.created_at, s.updated_at,
                 -- Quote fields
                 q.id as quote_id,
-                q.from_chain, q.from_token, q.from_decimals,
-                q.to_chain, q.to_token, q.to_decimals,
+                q.from_chain, q.from_token, q.from_decimals, q.from_amount,
+                q.to_chain, q.to_token, q.to_decimals, q.to_amount,
                 q.liquidity_fee_bps, q.protocol_fee_bps, q.network_fee_sats,
+                q.fee_liquidity, q.fee_protocol, q.fee_network,
                 q.min_input, q.max_input,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
@@ -741,9 +744,10 @@ impl SwapRepository {
                 s.created_at, s.updated_at,
                 -- Quote fields
                 q.id as quote_id,
-                q.from_chain, q.from_token, q.from_decimals,
-                q.to_chain, q.to_token, q.to_decimals,
+                q.from_chain, q.from_token, q.from_decimals, q.from_amount,
+                q.to_chain, q.to_token, q.to_decimals, q.to_amount,
                 q.liquidity_fee_bps, q.protocol_fee_bps, q.network_fee_sats,
+                q.fee_liquidity, q.fee_protocol, q.fee_network,
                 q.min_input, q.max_input,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
@@ -1231,8 +1235,8 @@ mod tests {
     use alloy::primitives::U256;
     use chrono::Duration;
     use otc_models::{
-        ChainType, Currency, LatestRefund, MMDepositStatus, Metadata, Quote, SettlementStatus,
-        Swap, SwapRates, SwapStatus, TokenIdentifier, UserDepositStatus,
+        ChainType, Currency, Fees, LatestRefund, Lot, MMDepositStatus, Metadata, Quote,
+        SettlementStatus, Swap, SwapRates, SwapStatus, TokenIdentifier, UserDepositStatus,
     };
     use uuid::Uuid;
 
@@ -1240,17 +1244,28 @@ mod tests {
         Quote {
             id: Uuid::new_v4(),
             market_maker_id: Uuid::new_v4(),
-            from_currency: Currency {
-                chain: ChainType::Bitcoin,
-                token: TokenIdentifier::Native,
-                decimals: 8,
+            from: Lot {
+                currency: Currency {
+                    chain: ChainType::Bitcoin,
+                    token: TokenIdentifier::Native,
+                    decimals: 8,
+                },
+                amount: U256::from(1_000_000u64),
             },
-            to_currency: Currency {
-                chain: ChainType::Ethereum,
-                token: TokenIdentifier::Native,
-                decimals: 18,
+            to: Lot {
+                currency: Currency {
+                    chain: ChainType::Ethereum,
+                    token: TokenIdentifier::Native,
+                    decimals: 18,
+                },
+                amount: U256::from(996_700u64),
             },
             rates: SwapRates::new(13, 10, 1000),
+            fees: Fees {
+                liquidity_fee: U256::from(1300u64),
+                protocol_fee: U256::from(1000u64),
+                network_fee: U256::from(1000u64),
+            },
             min_input: U256::from(10_000u64),
             max_input: U256::from(100_000_000u64),
             expires_at: utc::now() + Duration::hours(1),

@@ -59,7 +59,7 @@ impl From<&Swap> for MarketMakerQueuedPayment {
             swap_id: swap.id,
             quote_id: swap.quote.id,
             lot: Lot {
-                currency: swap.quote.to_currency.clone(),
+                currency: swap.quote.to.currency.clone(),
                 amount: realized.mm_output,
             },
             destination_address: swap.user_destination_address.clone(),

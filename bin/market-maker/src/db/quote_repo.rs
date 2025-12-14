@@ -1,6 +1,6 @@
 use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
-use otc_models::{ChainType, Currency, Quote, SwapRates, TokenIdentifier};
+use otc_models::{ChainType, Currency, Fees, Lot, Quote, SwapRates, TokenIdentifier};
 use serde_json;
 use snafu::prelude::*;
 use sqlx::{postgres::PgRow, PgPool, Row};
@@ -48,12 +48,15 @@ impl QuoteRepository {
 
     pub async fn store_quote(&self, quote: &Quote) -> QuoteRepositoryResult<()> {
         let (from_chain, from_token, from_decimals) =
-            self.serialize_currency(&quote.from_currency)?;
-        let (to_chain, to_token, to_decimals) = self.serialize_currency(&quote.to_currency)?;
+            self.serialize_currency(&quote.from.currency)?;
+        let (to_chain, to_token, to_decimals) = self.serialize_currency(&quote.to.currency)?;
 
+        let from_amount = quote.from.amount.to_string();
+        let to_amount = quote.to.amount.to_string();
         let min_input = quote.min_input.to_string();
         let max_input = quote.max_input.to_string();
         let rates = serde_json::to_value(&quote.rates).context(InvalidRatesSnafu)?;
+        let fees = serde_json::to_value(&quote.fees).context(InvalidRatesSnafu)?;
 
         sqlx::query(
             r#"
@@ -63,16 +66,19 @@ impl QuoteRepository {
                 from_chain,
                 from_token,
                 from_decimals,
+                from_amount,
                 to_chain,
                 to_token,
                 to_decimals,
+                to_amount,
                 min_input,
                 max_input,
                 rates,
+                fees,
                 expires_at,
                 created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
             ON CONFLICT (id) DO NOTHING
             "#,
         )
@@ -81,12 +87,15 @@ impl QuoteRepository {
         .bind(from_chain)
         .bind(from_token)
         .bind(from_decimals)
+        .bind(from_amount)
         .bind(to_chain)
         .bind(to_token)
         .bind(to_decimals)
+        .bind(to_amount)
         .bind(min_input)
         .bind(max_input)
         .bind(rates)
+        .bind(fees)
         .bind(quote.expires_at)
         .bind(quote.created_at)
         .execute(&self.pool)
@@ -105,12 +114,15 @@ impl QuoteRepository {
                 from_chain,
                 from_token,
                 from_decimals,
+                from_amount,
                 to_chain,
                 to_token,
                 to_decimals,
+                to_amount,
                 min_input,
                 max_input,
                 rates,
+                fees,
                 expires_at,
                 created_at
             FROM mm_quotes
@@ -136,12 +148,15 @@ impl QuoteRepository {
                 from_chain,
                 from_token,
                 from_decimals,
+                from_amount,
                 to_chain,
                 to_token,
                 to_decimals,
+                to_amount,
                 min_input,
                 max_input,
                 rates,
+                fees,
                 expires_at,
                 created_at
             FROM mm_quotes
@@ -255,13 +270,15 @@ impl QuoteRepository {
         let from_chain: String = row.get("from_chain");
         let from_token: serde_json::Value = row.get("from_token");
         let from_decimals: i16 = row.get("from_decimals");
+        let from_amount_str: String = row.get("from_amount");
 
         let to_chain: String = row.get("to_chain");
         let to_token: serde_json::Value = row.get("to_token");
         let to_decimals: i16 = row.get("to_decimals");
+        let to_amount_str: String = row.get("to_amount");
 
-        let min_input: String = row.get("min_input");
-        let max_input: String = row.get("max_input");
+        let min_input_str: String = row.get("min_input");
+        let max_input_str: String = row.get("max_input");
 
         let expires_at: DateTime<Utc> = row.get("expires_at");
         let created_at: DateTime<Utc> = row.get("created_at");
@@ -269,27 +286,49 @@ impl QuoteRepository {
         let from_currency = self.deserialize_currency(&from_chain, from_token, from_decimals)?;
         let to_currency = self.deserialize_currency(&to_chain, to_token, to_decimals)?;
 
-        let min_input = U256::from_str_radix(&min_input, 10).map_err(|_| {
+        let from_amount = U256::from_str_radix(&from_amount_str, 10).map_err(|_| {
             QuoteRepositoryError::InvalidU256 {
-                value: min_input.clone(),
+                value: from_amount_str.clone(),
             }
         })?;
 
-        let max_input = U256::from_str_radix(&max_input, 10).map_err(|_| {
+        let to_amount = U256::from_str_radix(&to_amount_str, 10).map_err(|_| {
             QuoteRepositoryError::InvalidU256 {
-                value: max_input.clone(),
+                value: to_amount_str.clone(),
+            }
+        })?;
+
+        let min_input = U256::from_str_radix(&min_input_str, 10).map_err(|_| {
+            QuoteRepositoryError::InvalidU256 {
+                value: min_input_str.clone(),
+            }
+        })?;
+
+        let max_input = U256::from_str_radix(&max_input_str, 10).map_err(|_| {
+            QuoteRepositoryError::InvalidU256 {
+                value: max_input_str.clone(),
             }
         })?;
 
         let rates_json: serde_json::Value = row.try_get("rates").context(DatabaseSnafu)?;
         let rates: SwapRates = serde_json::from_value(rates_json).context(InvalidRatesSnafu)?;
 
+        let fees_json: serde_json::Value = row.try_get("fees").context(DatabaseSnafu)?;
+        let fees: Fees = serde_json::from_value(fees_json).context(InvalidRatesSnafu)?;
+
         Ok(Quote {
             id,
             market_maker_id,
-            from_currency,
-            to_currency,
+            from: Lot {
+                currency: from_currency,
+                amount: from_amount,
+            },
+            to: Lot {
+                currency: to_currency,
+                amount: to_amount,
+            },
             rates,
+            fees,
             min_input,
             max_input,
             expires_at,

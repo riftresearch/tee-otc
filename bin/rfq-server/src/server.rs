@@ -431,7 +431,7 @@ async fn request_quotes(
     info!(
         from_chain = ?request.from.chain,
         to_chain = ?request.to.chain,
-        input_hint = ?request.input_hint,
+        mode = ?request.mode,
         "Received quote request"
     );
 

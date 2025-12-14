@@ -11,22 +11,29 @@ CREATE TABLE IF NOT EXISTS public.mm_quotes (
     -- The market maker that created the quote
     market_maker_id UUID NOT NULL,
     
-    -- From currency details (what user sends)
+    -- From lot (what user sends: currency + exact quoted amount)
     from_chain VARCHAR(50) NOT NULL,
     from_token JSONB NOT NULL,
     from_decimals SMALLINT NOT NULL,
+    from_amount TEXT NOT NULL,
     
-    -- To currency details (what user receives)
+    -- To lot (what user receives: currency + exact quoted amount)
     to_chain VARCHAR(50) NOT NULL,
     to_token JSONB NOT NULL,
     to_decimals SMALLINT NOT NULL,
+    to_amount TEXT NOT NULL,
 
     -- Input bounds (U256 stored as string)
+    -- User can deposit any amount within these bounds
     min_input TEXT NOT NULL,
     max_input TEXT NOT NULL,
 
     -- Rate parameters (SwapRates as JSONB)
+    -- Used to compute realized amounts if deposit differs from quoted amount
     rates JSONB NOT NULL,
+
+    -- Fee breakdown for the exact quoted amount (as JSONB)
+    fees JSONB NOT NULL,
 
     -- Timestamps
     expires_at TIMESTAMPTZ NOT NULL,

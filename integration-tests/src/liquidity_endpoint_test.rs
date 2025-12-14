@@ -1,7 +1,7 @@
 use alloy::primitives::U256;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::run_market_maker;
-use otc_models::{ChainType, Currency, QuoteRequest, TokenIdentifier};
+use otc_models::{SwapMode, ChainType, Currency, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::time::Duration;
@@ -174,7 +174,7 @@ async fn test_liquidity_endpoint_returns_data(
     // Note: max_amount is conservative, so we add a significant margin to ensure it exceeds capacity
     let over_limit_amount = btc_to_cbbtc.max_amount + btc_to_cbbtc.max_amount / U256::from(100); // +1%
     let quote_request = QuoteRequest {
-        input_hint: Some(over_limit_amount),
+        mode: SwapMode::ExactInput(over_limit_amount.to::<u64>()),
         from: btc_to_cbbtc.from.clone(),
         to: btc_to_cbbtc.to.clone(),
     };
@@ -220,7 +220,7 @@ async fn test_liquidity_endpoint_returns_data(
     // Note: max_amount is conservative, so we add a significant margin to ensure it exceeds capacity
     let over_limit_amount = cbbtc_to_btc.max_amount + cbbtc_to_btc.max_amount / U256::from(100); // +1%
     let quote_request = QuoteRequest {
-        input_hint: Some(over_limit_amount),
+        mode: SwapMode::ExactInput(over_limit_amount.to::<u64>()),
         from: cbbtc_to_btc.from.clone(),
         to: cbbtc_to_btc.to.clone(),
     };
@@ -265,7 +265,7 @@ async fn test_liquidity_endpoint_returns_data(
     // Using ExactOutput to directly specify the OUTPUT amount the MM must provide
     let exact_amount = btc_to_cbbtc.max_amount;
     let quote_request = QuoteRequest {
-        input_hint: Some(exact_amount),
+        mode: SwapMode::ExactInput(exact_amount.to::<u64>()),
         from: btc_to_cbbtc.from.clone(),
         to: btc_to_cbbtc.to.clone(),
     };
@@ -313,7 +313,7 @@ async fn test_liquidity_endpoint_returns_data(
     // Using ExactOutput to directly specify the OUTPUT amount the MM must provide
     let exact_amount = cbbtc_to_btc.max_amount;
     let quote_request = QuoteRequest {
-        input_hint: Some(exact_amount),
+        mode: SwapMode::ExactInput(exact_amount.to::<u64>()),
         from: cbbtc_to_btc.from.clone(),
         to: cbbtc_to_btc.to.clone(),
     };

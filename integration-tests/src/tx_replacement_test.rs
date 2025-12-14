@@ -12,7 +12,7 @@ use market_maker::{
     bitcoin_wallet::BitcoinWallet, evm_wallet::EVMWallet, run_market_maker, wallet::Wallet,
 };
 use otc_chains::traits::Payment;
-use otc_models::{ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::{
     api::{CreateSwapRequest, CreateSwapResponse},
@@ -189,7 +189,7 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
 
     // Request a quote
     let quote_request = QuoteRequest {
-        input_hint: Some(U256::from(10_000_000)), // 0.1 BTC
+        mode: SwapMode::ExactInput(10_000_000), // 0.1 BTC
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,

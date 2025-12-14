@@ -263,8 +263,8 @@ impl OTCMessageHandler {
                 match self.quote_repository.get_quote(*quote_id).await {
                     Ok(quote) => {
                         let locked = LockedLiquidity {
-                            from: quote.from_currency.clone(),
-                            to: quote.to_currency.clone(),
+                            from: quote.from.currency.clone(),
+                            to: quote.to.currency.clone(),
                             amount: *deposit_amount,
                             created_at: utc::now(),
                         };

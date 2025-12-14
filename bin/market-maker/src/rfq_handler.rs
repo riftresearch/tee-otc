@@ -45,8 +45,8 @@ impl RFQMessageHandler {
             } => {
                 let start = Instant::now();
                 info!(
-                    "Received RFQ quote request: request_id={}, from_chain={:?}, to_chain={:?}, input_hint={:?}",
-                    request_id, request.from.chain, request.to.chain, request.input_hint
+                    "Received RFQ quote request: request_id={}, from_chain={:?}, to_chain={:?}, mode={:?}",
+                    request_id, request.from.chain, request.to.chain, request.mode
                 );
 
                 let quote = self
@@ -82,7 +82,7 @@ impl RFQMessageHandler {
                 if let Some(quote) = quote {
                     info!(
                         "Generated quote: id={}, from_chain={:?}, to_chain={:?}, rates={:?}, min_input={}, max_input={}",
-                        quote.id, quote.from_currency.chain, quote.to_currency.chain, quote.rates, quote.min_input, quote.max_input
+                        quote.id, quote.from.currency.chain, quote.to.currency.chain, quote.rates, quote.min_input, quote.max_input
                     );
                     if let Err(e) = self.quote_repository.store_quote(&quote).await {
                         error!("Failed to store quote {}: {}", quote.id, e);

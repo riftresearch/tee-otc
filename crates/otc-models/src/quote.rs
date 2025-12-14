@@ -1,4 +1,4 @@
-use crate::{ChainType, SwapRates};
+use crate::{ChainType, SwapMode, SwapRates};
 use alloy::primitives::{keccak256, U256};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, Serializer};
@@ -27,9 +27,21 @@ pub struct Lot {
     pub amount: U256,
 }
 
-/// Rate-based quote that defines the terms for a swap.
-/// Instead of fixed input/output amounts, this quote specifies rates
-/// that will be applied to any deposit within the min/max bounds.
+/// Fee amounts for a realized swap.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Fees {
+    pub liquidity_fee: U256,
+    pub protocol_fee: U256,
+    pub network_fee: U256,
+}
+
+/// A quote that defines the terms for a swap.
+///
+/// Contains:
+/// - Exact quoted amounts (`from`/`to` lots) for the requested input/output
+/// - Valid deposit bounds (`min_input`/`max_input`) - user can deposit any amount within
+/// - Rate parameters (`rates`) to compute realized amounts for any deposit
+/// - Fee breakdown (`fees`) for the exact quoted amount
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quote {
     pub id: Uuid,
@@ -37,19 +49,23 @@ pub struct Quote {
     /// The market maker that created the quote
     pub market_maker_id: Uuid,
 
-    /// The currency the user will send
-    pub from_currency: Currency,
+    /// What the user sends (currency + exact quoted amount)
+    pub from: Lot,
 
-    /// The currency the user will receive
-    pub to_currency: Currency,
+    /// What the user receives (currency + exact quoted amount)
+    pub to: Lot,
 
-    /// Rate parameters for computing fees
+    /// Rate parameters used for computation
+    /// (used to compute realized amounts if user deposits a different amount)
     pub rates: SwapRates,
 
-    /// Minimum input amount allowed (in from_currency smallest unit)
+    /// Fee breakdown for the exact quoted amount
+    pub fees: Fees,
+
+    /// Minimum input amount allowed (in from currency smallest unit)
     pub min_input: U256,
 
-    /// Maximum input amount allowed (in from_currency smallest unit)
+    /// Maximum input amount allowed (in from currency smallest unit)
     pub max_input: U256,
 
     /// The expiration time of the quote
@@ -61,8 +77,8 @@ pub struct Quote {
 pub struct QuoteRequest {
     pub from: Currency,
     pub to: Currency,
-    /// Optional hint for preferred input amount (used for liquidity checks)
-    pub input_hint: Option<U256>,
+    /// Swap mode: ExactInput or ExactOutput with the specified amount
+    pub mode: SwapMode,
 }
 
 /// Serialize an f64 as its JSON number, but if it is NaN or ±Inf, serialize as `null`.

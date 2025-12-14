@@ -1,8 +1,5 @@
-use std::str::FromStr;
-
-use alloy::primitives::Address;
 use chrono::{DateTime, Utc};
-use otc_models::{Quote, Swap, SwapStatus};
+use otc_models::{Fees, Lot, Quote, Swap, SwapStatus};
 use sqlx::postgres::PgRow;
 use sqlx::Row;
 use uuid::Uuid;
@@ -21,18 +18,36 @@ pub trait FromRow<'r>: Sized {
 impl<'r> FromRow<'r> for Quote {
     fn from_row(row: &'r PgRow) -> OtcServerResult<Self> {
         let id: Uuid = row.try_get("id")?;
+        
+        // From lot
         let from_chain: String = row.try_get("from_chain")?;
         let from_token: serde_json::Value = row.try_get("from_token")?;
         let from_decimals: i16 = row.try_get("from_decimals")?;
+        let from_amount_str: String = row.try_get("from_amount")?;
+        let from_amount = u256_from_db(&from_amount_str)?;
+        
+        // To lot
         let to_chain: String = row.try_get("to_chain")?;
         let to_token: serde_json::Value = row.try_get("to_token")?;
         let to_decimals: i16 = row.try_get("to_decimals")?;
+        let to_amount_str: String = row.try_get("to_amount")?;
+        let to_amount = u256_from_db(&to_amount_str)?;
 
         // Rate parameters
         let liquidity_fee_bps: i64 = row.try_get("liquidity_fee_bps")?;
         let protocol_fee_bps: i64 = row.try_get("protocol_fee_bps")?;
         let network_fee_sats: i64 = row.try_get("network_fee_sats")?;
         let rates = swap_rates_from_db(liquidity_fee_bps, protocol_fee_bps, network_fee_sats);
+
+        // Fee breakdown
+        let fee_liquidity_str: String = row.try_get("fee_liquidity")?;
+        let fee_protocol_str: String = row.try_get("fee_protocol")?;
+        let fee_network_str: String = row.try_get("fee_network")?;
+        let fees = Fees {
+            liquidity_fee: u256_from_db(&fee_liquidity_str)?,
+            protocol_fee: u256_from_db(&fee_protocol_str)?,
+            network_fee: u256_from_db(&fee_network_str)?,
+        };
 
         // Input bounds
         let min_input_str: String = row.try_get("min_input")?;
@@ -50,9 +65,16 @@ impl<'r> FromRow<'r> for Quote {
         Ok(Quote {
             id,
             market_maker_id,
-            from_currency,
-            to_currency,
+            from: Lot {
+                currency: from_currency,
+                amount: from_amount,
+            },
+            to: Lot {
+                currency: to_currency,
+                amount: to_amount,
+            },
             rates,
+            fees,
             min_input,
             max_input,
             expires_at,
@@ -90,18 +112,36 @@ impl<'r> FromRow<'r> for Swap {
 
         // Get the embedded quote fields
         let quote_id: Uuid = row.try_get("quote_id")?;
+        
+        // From lot
         let from_chain: String = row.try_get("from_chain")?;
         let from_token: serde_json::Value = row.try_get("from_token")?;
         let from_decimals: i16 = row.try_get("from_decimals")?;
+        let from_amount_str: String = row.try_get("from_amount")?;
+        let from_amount = u256_from_db(&from_amount_str)?;
+        
+        // To lot
         let to_chain: String = row.try_get("to_chain")?;
         let to_token: serde_json::Value = row.try_get("to_token")?;
         let to_decimals: i16 = row.try_get("to_decimals")?;
+        let to_amount_str: String = row.try_get("to_amount")?;
+        let to_amount = u256_from_db(&to_amount_str)?;
 
         // Rate parameters from quote
         let liquidity_fee_bps: i64 = row.try_get("liquidity_fee_bps")?;
         let protocol_fee_bps: i64 = row.try_get("protocol_fee_bps")?;
         let network_fee_sats: i64 = row.try_get("network_fee_sats")?;
         let rates = swap_rates_from_db(liquidity_fee_bps, protocol_fee_bps, network_fee_sats);
+
+        // Fee breakdown from quote
+        let fee_liquidity_str: String = row.try_get("fee_liquidity")?;
+        let fee_protocol_str: String = row.try_get("fee_protocol")?;
+        let fee_network_str: String = row.try_get("fee_network")?;
+        let fees = Fees {
+            liquidity_fee: u256_from_db(&fee_liquidity_str)?,
+            protocol_fee: u256_from_db(&fee_protocol_str)?,
+            network_fee: u256_from_db(&fee_network_str)?,
+        };
 
         // Input bounds from quote
         let min_input_str: String = row.try_get("min_input")?;
@@ -119,9 +159,16 @@ impl<'r> FromRow<'r> for Swap {
         let quote = Quote {
             id: quote_id,
             market_maker_id: quote_market_maker_id,
-            from_currency,
-            to_currency,
+            from: Lot {
+                currency: from_currency,
+                amount: from_amount,
+            },
+            to: Lot {
+                currency: to_currency,
+                amount: to_amount,
+            },
             rates,
+            fees,
             min_input,
             max_input,
             expires_at,

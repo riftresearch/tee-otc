@@ -12,7 +12,7 @@ use bitcoincore_rpc_async::RpcApi;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::evm_wallet::transaction_broadcaster::EVMTransactionBroadcaster;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, wallet::Wallet};
-use otc_models::{ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::{
     swaps::RefundSwapResponse,
@@ -163,7 +163,7 @@ async fn test_refund_from_bitcoin_user_deposit(
 
     // Request a quote from the RFQ server
     let quote_request = QuoteRequest {
-        input_hint: Some(U256::from(10_000_000)), // 0.1 BTC
+        mode: SwapMode::ExactInput(10_000_000), // 0.1 BTC
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -459,7 +459,7 @@ async fn test_refund_from_evm_user_deposit(
 
     // Request a quote where the user deposits cbBTC on Ethereum and receives BTC
     let quote_request = QuoteRequest {
-        input_hint: Some(deposit_amount), // in cbBTC base units (18 decimals)
+        mode: SwapMode::ExactInput(deposit_amount.to::<u64>()), // in cbBTC base units (18 decimals)
         from: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),

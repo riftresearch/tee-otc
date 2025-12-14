@@ -1,6 +1,6 @@
 use crate::mm_registry::RfqMMRegistry;
 use futures_util::future;
-use otc_models::{Quote, QuoteRequest};
+use otc_models::{Quote, QuoteRequest, SwapMode};
 use otc_protocols::rfq::{RFQResponse, RFQResult};
 use snafu::Snafu;
 use std::sync::Arc;
@@ -53,7 +53,7 @@ impl QuoteAggregator {
             request_id = %request_id,
             from_chain = ?request.from.chain,
             to_chain = ?request.to.chain,
-            input_hint = ?request.input_hint,
+            mode = ?request.mode,
             "Starting quote aggregation"
         );
 
@@ -94,15 +94,10 @@ impl QuoteAggregator {
             "Collected quotes from market makers"
         );
 
-        // Select the best quote (lowest total fees = liquidity_fee_bps + protocol_fee_bps)
-        // In a rate-based system, the best quote has the lowest fee rates
-        let best_success_quote = quotes
-            .iter()
-            .filter_map(|q| match q {
-                RFQResult::Success(quote) => Some(quote),
-                _ => None,
-            })
-            .min_by_key(|q| q.rates.liquidity_fee_bps + q.rates.protocol_fee_bps);
+        // Select the best quote based on mode:
+        // - ExactInput: user sends fixed amount, best = highest output
+        // - ExactOutput: user wants fixed output, best = lowest input
+        let best_success_quote = select_best_quote(&quotes, &request.mode);
 
         // Relevant fail quote - prioritize InvalidRequest over MakerUnavailable
         // Note: Unsupported responses are silently ignored as they're not actionable by the user
@@ -193,6 +188,28 @@ impl QuoteAggregator {
     }
 }
 
+/// Select the best quote based on the swap mode.
+///
+/// - ExactInput: User sends a fixed amount, best quote = highest output (to.amount)
+/// - ExactOutput: User wants a fixed output, best quote = lowest input (from.amount)
+fn select_best_quote<'a>(quotes: &'a [RFQResult<Quote>], mode: &SwapMode) -> Option<&'a Quote> {
+    let success_quotes = quotes.iter().filter_map(|q| match q {
+        RFQResult::Success(quote) => Some(quote),
+        _ => None,
+    });
+
+    match mode {
+        SwapMode::ExactInput(_) => {
+            // User sends fixed amount, best = highest output
+            success_quotes.max_by_key(|q| q.to.amount)
+        }
+        SwapMode::ExactOutput(_) => {
+            // User wants fixed output, best = lowest input
+            success_quotes.min_by_key(|q| q.from.amount)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,7 +232,7 @@ mod tests {
                 token: TokenIdentifier::Native,
                 decimals: 18,
             },
-            input_hint: None,
+            mode: SwapMode::ExactInput(100_000),
         };
 
         let result = aggregator.request_quotes(request).await;

@@ -1,6 +1,6 @@
 use alloy::primitives::U256;
 use market_maker::run_market_maker;
-use otc_models::{ChainType, Currency, QuoteRequest, TokenIdentifier};
+use otc_models::{SwapMode, ChainType, Currency, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use rfq_server::server::run_server as run_rfq_server;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
@@ -101,7 +101,7 @@ async fn test_rfq_market_maker_reconnection_and_detection(
 
     // Verify quote request works while connected
     let quote_request = QuoteRequest {
-        input_hint: Some(U256::from(50_000_000)), // 0.5 BTC in sats
+        mode: SwapMode::ExactInput(50_000_000), // 0.5 BTC in sats
         to: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),

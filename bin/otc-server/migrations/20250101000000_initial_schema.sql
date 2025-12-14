@@ -16,26 +16,34 @@ CREATE TYPE swap_status AS ENUM (
     'failed'
 );
 
--- Create quotes table with rate-based pricing
+-- Create quotes table with exact amounts AND bounds
 CREATE TABLE quotes (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
 
-    -- From currency details (what user sends)
+    -- From lot (what user sends: currency + exact quoted amount)
     from_chain VARCHAR(50) NOT NULL,
     from_token JSONB NOT NULL,
     from_decimals SMALLINT NOT NULL,
+    from_amount TEXT NOT NULL,
 
-    -- To currency details (what user receives)
+    -- To lot (what user receives: currency + exact quoted amount)
     to_chain VARCHAR(50) NOT NULL,
     to_token JSONB NOT NULL,
     to_decimals SMALLINT NOT NULL,
+    to_amount TEXT NOT NULL,
 
     -- Rate parameters (basis points for spreads, sats for network fee)
+    -- Used to compute realized amounts for deposits within bounds
     liquidity_fee_bps BIGINT NOT NULL,
     protocol_fee_bps BIGINT NOT NULL,
     network_fee_sats BIGINT NOT NULL,
 
-    -- Input bounds (U256 stored as string)
+    -- Fee breakdown for the exact quoted amount (U256 stored as string)
+    fee_liquidity TEXT NOT NULL,
+    fee_protocol TEXT NOT NULL,
+    fee_network TEXT NOT NULL,
+
+    -- Input bounds (user can deposit any amount within these bounds)
     min_input TEXT NOT NULL,
     max_input TEXT NOT NULL,
 
