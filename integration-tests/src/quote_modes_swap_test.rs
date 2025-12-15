@@ -39,7 +39,7 @@ async fn test_quote_modes_exact_output_min_max_deposits(
     let market_maker_account = MultichainAccount::new(1);
     let user_account = MultichainAccount::new(2);
 
-    let devnet = RiftDevnet::builder()
+    let mut devnet = RiftDevnet::builder()
         .using_token_indexer(connect_options.to_database_url())
         .using_esplora(true)
         .bitcoin_mining_mode(MiningMode::Interval(2))
@@ -370,7 +370,18 @@ async fn test_quote_modes_exact_output_min_max_deposits(
 
     info!("=== All 3 quote mode tests passed! ===");
 
-    drop(devnet);
+    // Abort the devnet's internal mining task before cleanup
+    devnet.join_set.abort_all();
+    
+    // Drop devnet in a blocking task with a timeout to avoid blocking the async runtime.
+    // The corepc-node bitcoind wrapper's Drop can hang waiting for the process to exit
+    // when using a persistent datadir, so we use a timeout to avoid test hangs.
+    let _ = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::task::spawn_blocking(move || drop(devnet)),
+    )
+    .await;
+
     tokio::join!(wallet_join_set.shutdown(), service_join_set.shutdown());
 }
 
