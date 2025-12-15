@@ -81,6 +81,7 @@ impl PaymentManager {
         wallet_manager: Arc<WalletManager>,
         payment_repository: Arc<PaymentRepository>,
         batch_configs: HashMap<ChainType, BatchConfig>,
+        balance_strategy: Arc<QuoteBalanceStrategy>,
         otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
         cancellation_token: CancellationToken,
         join_set: &mut JoinSet<crate::Result<()>>,
@@ -101,6 +102,7 @@ impl PaymentManager {
                     payment_repository.clone(),
                     bitcoin_rx,
                     config.clone(),
+                    balance_strategy.clone(),
                     otc_response_tx.clone(),
                     in_flight_payments.clone(),
                     cancellation_token.clone(),
@@ -118,6 +120,7 @@ impl PaymentManager {
                     payment_repository.clone(),
                     ethereum_rx,
                     config.clone(),
+                    balance_strategy.clone(),
                     otc_response_tx.clone(),
                     in_flight_payments.clone(),
                     cancellation_token.clone(),
@@ -135,6 +138,7 @@ impl PaymentManager {
                     payment_repository.clone(),
                     base_rx,
                     config.clone(),
+                    balance_strategy.clone(),
                     otc_response_tx.clone(),
                     in_flight_payments.clone(),
                     cancellation_token.clone(),
@@ -278,6 +282,7 @@ fn spawn_batch_processor(
     payment_recorder: Arc<dyn BatchPaymentRecorder>,
     mut rx: mpsc::UnboundedReceiver<MarketMakerQueuedPayment>,
     config: BatchConfig,
+    balance_strategy: Arc<QuoteBalanceStrategy>,
     otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
     in_flight_payments: Arc<DashMap<Uuid, ()>>,
     cancellation_token: CancellationToken,
@@ -294,9 +299,6 @@ fn spawn_batch_processor(
 
         // Payments that couldn't fit in previous batches due to balance constraints
         let mut retry_payments: Vec<MarketMakerQueuedPayment> = Vec::new();
-        
-        // Allow 10% margin for network fees (TODO: This is overkill and temporary)
-        let balance_strategy = QuoteBalanceStrategy::new(9000);
 
         loop {
             // Check for cancellation before processing
@@ -695,6 +697,7 @@ mod tests {
                 interval_secs: 1,
                 batch_size: 10,
             },
+            Arc::new(QuoteBalanceStrategy::new(10000)), // 100% for test (no balance constraints)
             otc_tx,
             in_flight.clone(),
             cancellation_token,

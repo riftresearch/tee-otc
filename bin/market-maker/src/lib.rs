@@ -588,6 +588,7 @@ pub async fn run_market_maker(
         wallet_manager.clone(),
         payment_repository.clone(),
         batch_configs,
+        balance_strategy.clone(),
         otc_response_tx,
         cancellation_token.clone(),
         &mut payment_manager_join_set,

@@ -43,6 +43,8 @@ use crate::utils::{
 struct SwapInfo {
     swap_id: Uuid,
     direction: String,
+    /// The actual deposit amount used (equals quote.from.amount for exact match)
+    deposited_amount: U256,
 }
 
 /// Execute a swap from Bitcoin to Ethereum and return swap info.
@@ -104,13 +106,12 @@ async fn execute_btc_to_eth_swap(
         status => panic!("Swap request failed with status {status}"),
     };
 
-    // Deposit the full intended amount to generate meaningful protocol fees
-    // The input_sats should be larger than min_input to ensure fees are collected
-    let deposit_amount = U256::from(input_sats);
+    // Deposit the exact quoted input to ensure from_quote uses quote's fees
+    let deposit_amount = response_json.quoted_input;
     assert!(
         deposit_amount >= response_json.min_input,
-        "Input {} must be >= min_input {}",
-        input_sats,
+        "Quoted input {} must be >= min_input {}",
+        deposit_amount,
         response_json.min_input
     );
 
@@ -133,13 +134,14 @@ async fn execute_btc_to_eth_swap(
         .unwrap();
 
     info!(
-        "Executed BTC -> ETH swap {} with {} sats (deposit: {})",
-        response_json.swap_id, input_sats, deposit_amount
+        "Executed BTC -> ETH swap {} with quoted_input {} sats",
+        response_json.swap_id, deposit_amount
     );
 
     SwapInfo {
         swap_id: response_json.swap_id,
         direction: "BTC -> ETH".to_string(),
+        deposited_amount: deposit_amount,
     }
 }
 
@@ -202,12 +204,12 @@ async fn execute_eth_to_btc_swap(
         status => panic!("Swap request failed with status {status}"),
     };
 
-    // Deposit the full intended amount to generate meaningful protocol fees
-    let deposit_amount = U256::from(input_sats);
+    // Deposit the exact quoted input to ensure from_quote uses quote's fees
+    let deposit_amount = response_json.quoted_input;
     assert!(
         deposit_amount >= response_json.min_input,
-        "Input {} must be >= min_input {}",
-        input_sats,
+        "Quoted input {} must be >= min_input {}",
+        deposit_amount,
         response_json.min_input
     );
 
@@ -230,13 +232,14 @@ async fn execute_eth_to_btc_swap(
         .unwrap();
 
     info!(
-        "Executed ETH -> BTC swap {} with {} sats (deposit: {})",
-        response_json.swap_id, input_sats, deposit_amount
+        "Executed ETH -> BTC swap {} with quoted_input {} sats",
+        response_json.swap_id, deposit_amount
     );
 
     SwapInfo {
         swap_id: response_json.swap_id,
         direction: "ETH -> BTC".to_string(),
+        deposited_amount: deposit_amount,
     }
 }
 
@@ -536,34 +539,32 @@ async fn test_fee_settlement_with_ethereum_swaps(
             received, fee_balance, initial_fee_balance
         );
 
-        // We expect fees close to 0.1% (10 bps) of total swap volume
-        // Total swap volume: 50M + 40M + 30M = 120M sats
-        // Expected protocol fee at 10 bps: 120M * 0.001 = 120,000 sats
-        // Allow 10% tolerance for network fee deductions and rounding
+        // Fees should be exactly computable from actual deposited amounts
+        // Protocol fee = ceil(deposited * 10 / 10000) for each swap
         if received > U256::ZERO {
             info!("Fee settlement detected! Total fees received: {} sats", received);
 
-            // Calculate expected fees based on total volume and protocol fee rate
-            let total_volume: u64 = 50_000_000 + 40_000_000 + 30_000_000; // 120M sats
-            let protocol_fee_bps: u64 = 10; // 0.1%
-            let expected_fees = total_volume * protocol_fee_bps / 10_000; // ~120,000 sats
-
-            // Allow 10% tolerance (fees are slightly reduced due to network fee deductions)
-            let min_expected = expected_fees * 90 / 100; // 90% of expected
-            let max_expected = expected_fees * 110 / 100; // 110% of expected
+            // Calculate exact expected fees from actual deposited amounts
+            // Protocol fee uses ceiling division: ceil(amount * bps / 10000)
+            let protocol_fee_bps: u64 = 10;
+            let mut expected_fees: u64 = 0;
+            for swap in &swaps {
+                let amount = swap.deposited_amount.to::<u64>();
+                let fee = amount.saturating_mul(protocol_fee_bps).div_ceil(10_000);
+                info!("Swap {}: deposited {} sats, protocol fee {} sats", swap.direction, amount, fee);
+                expected_fees += fee;
+            }
 
             let received_u64 = received.to::<u64>();
-            assert!(
-                received_u64 >= min_expected && received_u64 <= max_expected,
-                "Expected fees ~{} sats (within 10% tolerance: {}-{}), got {} sats",
-                expected_fees,
-                min_expected,
-                max_expected,
-                received_u64
+            assert_eq!(
+                received_u64, expected_fees,
+                "Expected exactly {} sats in protocol fees, got {} sats",
+                expected_fees, received_u64
             );
 
+            let total_volume: u64 = swaps.iter().map(|s| s.deposited_amount.to::<u64>()).sum();
             info!(
-                "Fee settlement verification passed! Received {} sats (~{:.2}% of {} sats volume)",
+                "Fee settlement verification passed! Received {} sats ({:.2}% of {} sats volume)",
                 received_u64,
                 (received_u64 as f64 / total_volume as f64) * 100.0,
                 total_volume

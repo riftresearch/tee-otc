@@ -1,4 +1,4 @@
-use crate::{Quote, SwapMode, SwapRates, SwapStatus, fees::compute_fees};
+use crate::{fees::compute_fees, Quote, SwapMode, SwapRates, SwapStatus};
 use alloy::primitives::U256;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -56,12 +56,45 @@ pub struct RealizedSwap {
 }
 
 impl RealizedSwap {
-    /// Compute realized swap amounts from an input and rates.
+    /// Compute realized swap amounts from a quote and actual deposit.
+    ///
+    /// If the user deposits exactly the quoted input amount (`quote.from.amount`),
+    /// uses the quote's pre-computed fees. This guarantees:
+    /// - ExactOutput quotes deliver exactly the quoted output
+    /// - ExactInput quotes deliver exactly the quoted output
+    ///
+    /// If the user deposits a different amount (within min/max bounds),
+    /// recomputes fees using ExactInput mode with proportional output.
+    ///
+    /// Returns `None` if the resulting output would be below `MIN_VIABLE_OUTPUT_SATS`.
+    pub fn from_quote(quote: &Quote, input: u64) -> Option<Self> {
+        let input_u256 = U256::from(input);
+
+        if input_u256 == quote.from.amount {
+            // User deposited exactly the quoted input - use quote's pre-computed fees
+            // This guarantees exact output for ExactOutput quotes
+            Some(Self {
+                user_input: quote.from.amount,
+                mm_output: quote.to.amount,
+                protocol_fee: quote.fees.protocol_fee,
+                liquidity_fee: quote.fees.liquidity_fee,
+                network_fee: quote.fees.network_fee,
+            })
+        } else {
+            // User deposited a different amount - recompute with ExactInput
+            Self::compute(input, &quote.rates)
+        }
+    }
+
+    /// Compute realized swap amounts from an input and rates (always uses ExactInput mode).
     ///
     /// Fees are additive: both bps fees are computed on the gross input, then network fee is subtracted.
     /// All percentage-based fees use ceiling division (round up).
     ///
     /// Returns `None` if the resulting output would be below `MIN_VIABLE_OUTPUT_SATS`.
+    ///
+    /// Note: Prefer `from_quote` when you have access to the original quote,
+    /// as it preserves ExactOutput guarantees.
     pub fn compute(input: u64, rates: &SwapRates) -> Option<Self> {
         let breakdown = compute_fees(SwapMode::ExactInput(input), rates)?;
 
@@ -418,9 +451,9 @@ mod tests {
     #[test]
     fn realized_swap_rejects_dust_output() {
         use crate::constants::MIN_VIABLE_OUTPUT_SATS;
-        
+
         let rates = SwapRates::new(13, 10, 1000); // 0.13% liquidity, 0.10% protocol, 1000 sats network
-        
+
         // Input that would result in output below MIN_VIABLE_OUTPUT_SATS
         // With network_fee=1000 and ceiling-based fees, small inputs produce dust outputs
         let tiny_input = 1_500u64;
@@ -436,9 +469,49 @@ mod tests {
             assert!(
                 r.mm_output >= U256::from(MIN_VIABLE_OUTPUT_SATS),
                 "Output {} should be at least {}",
-                r.mm_output, MIN_VIABLE_OUTPUT_SATS
+                r.mm_output,
+                MIN_VIABLE_OUTPUT_SATS
             );
         }
+    }
+
+    #[test]
+    fn realized_swap_from_quote_exact_input_matches() {
+        // When user deposits exactly the quoted input, should use quote's fees
+        let quote = make_test_quote();
+        let exact_input = quote.from.amount.to::<u64>();
+
+        let realized = RealizedSwap::from_quote(&quote, exact_input)
+            .expect("Exact input should produce valid output");
+
+        // Should use quote's pre-computed values exactly
+        assert_eq!(realized.user_input, quote.from.amount);
+        assert_eq!(realized.mm_output, quote.to.amount);
+        assert_eq!(realized.liquidity_fee, quote.fees.liquidity_fee);
+        assert_eq!(realized.protocol_fee, quote.fees.protocol_fee);
+        assert_eq!(realized.network_fee, quote.fees.network_fee);
+    }
+
+    #[test]
+    fn realized_swap_from_quote_different_input_recomputes() {
+        // When user deposits a different amount, should recompute with ExactInput
+        let quote = make_test_quote();
+        let different_input = quote.from.amount.to::<u64>() / 2; // Half the quoted amount
+
+        let realized = RealizedSwap::from_quote(&quote, different_input)
+            .expect("Half input should produce valid output");
+
+        // Should NOT use quote's values - should recompute
+        assert_eq!(realized.user_input, U256::from(different_input));
+        assert!(
+            realized.mm_output < quote.to.amount,
+            "Output should be less than quoted"
+        );
+
+        // Verify it matches what compute() would return
+        let direct = RealizedSwap::compute(different_input, &quote.rates)
+            .expect("Should produce valid output");
+        assert_eq!(realized, direct);
     }
 }
 
@@ -476,9 +549,9 @@ impl Swap {
                     .user_deposit_status
                     .as_ref()
                     .expect("User deposit must exist if we reached WaitingMMDepositInitiated");
-                let user_deposit_confirmed_at = user_deposit
-                    .confirmed_at
-                    .expect("User deposit must be confirmed if we are in WaitingMMDepositInitiated");
+                let user_deposit_confirmed_at = user_deposit.confirmed_at.expect(
+                    "User deposit must be confirmed if we are in WaitingMMDepositInitiated",
+                );
                 let now = utc::now();
                 let diff = now - user_deposit_confirmed_at;
                 if diff > MM_NEVER_DEPOSITS_TIMEOUT {

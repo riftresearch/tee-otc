@@ -373,8 +373,9 @@ impl SwapMonitoringService {
             }
 
             // Deposit is within bounds - compute realized amounts
+            // Uses from_quote to preserve ExactOutput guarantees when deposit matches quoted input
             // This can return None if the output would be below the minimum viable threshold (dust)
-            let realized = match RealizedSwap::compute(deposit.amount.to::<u64>(), &quote.rates) {
+            let realized = match RealizedSwap::from_quote(&quote, deposit.amount.to::<u64>()) {
                 Some(r) => r,
                 None => {
                     error!(
