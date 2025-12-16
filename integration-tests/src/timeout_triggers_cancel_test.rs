@@ -175,6 +175,7 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client

@@ -100,6 +100,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_request_url = format!("http://127.0.0.1:{rfq_port}/api/v2/quote");
@@ -184,6 +185,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_request_url = format!("http://127.0.0.1:{rfq_port}/api/v2/quote");
@@ -239,6 +241,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_request_url = format!("http://127.0.0.1:{rfq_port}/api/v2/quote");

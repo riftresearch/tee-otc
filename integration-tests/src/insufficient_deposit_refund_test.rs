@@ -172,6 +172,7 @@ async fn test_insufficient_bitcoin_deposit_refund(
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client
@@ -489,6 +490,7 @@ async fn test_insufficient_evm_deposit_refund(
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client

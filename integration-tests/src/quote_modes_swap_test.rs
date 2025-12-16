@@ -404,6 +404,7 @@ async fn request_quote(
             token: TokenIdentifier::Address(cbbtc_address.to_string()),
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let response = client

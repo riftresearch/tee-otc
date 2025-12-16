@@ -112,6 +112,7 @@ async fn test_rfq_market_maker_reconnection_and_detection(
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_request_url = format!("http://127.0.0.1:{rfq_port}/api/v2/quote");

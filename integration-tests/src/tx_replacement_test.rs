@@ -200,6 +200,7 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client

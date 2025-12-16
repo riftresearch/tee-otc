@@ -28,6 +28,9 @@ CREATE TABLE IF NOT EXISTS public.mm_quotes (
     min_input TEXT NOT NULL,
     max_input TEXT NOT NULL,
 
+    -- Optional affiliate identifier for custom protocol fee rates
+    affiliate TEXT,
+
     -- Rate parameters (SwapRates as JSONB)
     -- Used to compute realized amounts if deposit differs from quoted amount
     rates JSONB NOT NULL,

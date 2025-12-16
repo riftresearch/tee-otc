@@ -160,8 +160,6 @@ pub struct Swap {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Metadata {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub affiliate: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub start_asset: Option<String>,
 }
 
@@ -247,6 +245,7 @@ mod tests {
             },
             min_input: U256::from(10_000u64),
             max_input: U256::from(100_000_000u64),
+            affiliate: None,
             expires_at: utc::now() + Duration::hours(1),
             created_at: utc::now(),
         }

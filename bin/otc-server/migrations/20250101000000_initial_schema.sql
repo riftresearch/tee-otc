@@ -47,10 +47,16 @@ CREATE TABLE quotes (
     min_input TEXT NOT NULL,
     max_input TEXT NOT NULL,
 
+    -- Optional affiliate identifier for custom protocol fee rates
+    affiliate TEXT,
+
     market_maker_id UUID NOT NULL,
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL 
 );
+
+-- Index for querying quotes by affiliate
+CREATE INDEX idx_quotes_affiliate ON quotes (affiliate) WHERE affiliate IS NOT NULL;
 
 -- Create swaps table with enhanced state tracking
 CREATE TABLE swaps (

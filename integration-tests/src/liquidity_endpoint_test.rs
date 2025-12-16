@@ -177,6 +177,7 @@ async fn test_liquidity_endpoint_returns_data(
         mode: SwapMode::ExactInput(over_limit_amount.to::<u64>()),
         from: btc_to_cbbtc.from.clone(),
         to: btc_to_cbbtc.to.clone(),
+        affiliate: None,
     };
 
     info!(
@@ -223,6 +224,7 @@ async fn test_liquidity_endpoint_returns_data(
         mode: SwapMode::ExactInput(over_limit_amount.to::<u64>()),
         from: cbbtc_to_btc.from.clone(),
         to: cbbtc_to_btc.to.clone(),
+        affiliate: None,
     };
 
     info!(
@@ -268,6 +270,7 @@ async fn test_liquidity_endpoint_returns_data(
         mode: SwapMode::ExactInput(exact_amount.to::<u64>()),
         from: btc_to_cbbtc.from.clone(),
         to: btc_to_cbbtc.to.clone(),
+        affiliate: None,
     };
 
     info!(
@@ -316,6 +319,7 @@ async fn test_liquidity_endpoint_returns_data(
         mode: SwapMode::ExactInput(exact_amount.to::<u64>()),
         from: cbbtc_to_btc.from.clone(),
         to: cbbtc_to_btc.to.clone(),
+        affiliate: None,
     };
 
     info!(

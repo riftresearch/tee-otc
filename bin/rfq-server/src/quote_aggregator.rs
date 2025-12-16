@@ -233,6 +233,7 @@ mod tests {
                 decimals: 18,
             },
             mode: SwapMode::ExactInput(100_000),
+            affiliate: None,
         };
 
         let result = aggregator.request_quotes(request).await;

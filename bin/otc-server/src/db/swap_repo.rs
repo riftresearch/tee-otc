@@ -156,6 +156,7 @@ impl SwapRepository {
                 q.liquidity_fee_bps, q.protocol_fee_bps, q.network_fee_sats,
                 q.fee_liquidity, q.fee_protocol, q.fee_network,
                 q.min_input, q.max_input,
+                q.affiliate as quote_affiliate,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
@@ -196,6 +197,7 @@ impl SwapRepository {
                 q.liquidity_fee_bps, q.protocol_fee_bps, q.network_fee_sats,
                 q.fee_liquidity, q.fee_protocol, q.fee_network,
                 q.min_input, q.max_input,
+                q.affiliate as quote_affiliate,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
@@ -375,6 +377,7 @@ impl SwapRepository {
                 q.liquidity_fee_bps, q.protocol_fee_bps, q.network_fee_sats,
                 q.fee_liquidity, q.fee_protocol, q.fee_network,
                 q.min_input, q.max_input,
+                q.affiliate as quote_affiliate,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
@@ -749,6 +752,7 @@ impl SwapRepository {
                 q.liquidity_fee_bps, q.protocol_fee_bps, q.network_fee_sats,
                 q.fee_liquidity, q.fee_protocol, q.fee_network,
                 q.min_input, q.max_input,
+                q.affiliate as quote_affiliate,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
@@ -1268,6 +1272,7 @@ mod tests {
             },
             min_input: U256::from(10_000u64),
             max_input: U256::from(100_000_000u64),
+            affiliate: None,
             expires_at: utc::now() + Duration::hours(1),
             created_at: utc::now(),
         }
@@ -1284,7 +1289,6 @@ mod tests {
             market_maker_id: quote.market_maker_id,
             quote,
             metadata: Metadata {
-                affiliate: Some("affiliate_123".to_string()),
                 start_asset: Some("btc".to_string()),
             },
             realized: None,
@@ -1339,8 +1343,8 @@ mod tests {
             original_swap.deposit_vault_address
         );
         assert_eq!(
-            retrieved_swap.metadata.affiliate,
-            original_swap.metadata.affiliate
+            retrieved_swap.quote.affiliate,
+            original_swap.quote.affiliate
         );
         assert_eq!(
             retrieved_swap.metadata.start_asset,

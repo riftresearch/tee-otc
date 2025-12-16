@@ -1,10 +1,8 @@
 mod alloy_ext;
 mod bitcoin_wallet;
-mod fee_calc;
 mod transfer_auth_helper;
 pub use alloy_ext::*;
 pub use bitcoin_wallet::*;
-pub use fee_calc::*;
 pub use transfer_auth_helper::*;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 

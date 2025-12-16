@@ -44,6 +44,7 @@ async fn test_quote_storage_round_trip(
         },
         min_input: U256::from(10_000u64),
         max_input: U256::from(100_000_000u64),
+        affiliate: None,
         expires_at: utc::now() + Duration::minutes(10),
         created_at: utc::now(),
     };

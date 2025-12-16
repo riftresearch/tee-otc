@@ -73,12 +73,13 @@ impl QuoteRepository {
                 to_amount,
                 min_input,
                 max_input,
+                affiliate,
                 rates,
                 fees,
                 expires_at,
                 created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
             ON CONFLICT (id) DO NOTHING
             "#,
         )
@@ -94,6 +95,7 @@ impl QuoteRepository {
         .bind(to_amount)
         .bind(min_input)
         .bind(max_input)
+        .bind(&quote.affiliate)
         .bind(rates)
         .bind(fees)
         .bind(quote.expires_at)
@@ -121,6 +123,7 @@ impl QuoteRepository {
                 to_amount,
                 min_input,
                 max_input,
+                affiliate,
                 rates,
                 fees,
                 expires_at,
@@ -155,6 +158,7 @@ impl QuoteRepository {
                 to_amount,
                 min_input,
                 max_input,
+                affiliate,
                 rates,
                 fees,
                 expires_at,
@@ -310,6 +314,8 @@ impl QuoteRepository {
             }
         })?;
 
+        let affiliate: Option<String> = row.try_get("affiliate").context(DatabaseSnafu)?;
+
         let rates_json: serde_json::Value = row.try_get("rates").context(DatabaseSnafu)?;
         let rates: SwapRates = serde_json::from_value(rates_json).context(InvalidRatesSnafu)?;
 
@@ -331,6 +337,7 @@ impl QuoteRepository {
             fees,
             min_input,
             max_input,
+            affiliate,
             expires_at,
             created_at,
         })

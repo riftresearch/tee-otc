@@ -464,15 +464,6 @@ impl SwapManager {
     }
 
     fn validate_metadata(metadata: &Metadata) -> SwapResult<()> {
-        if let Some(value) = metadata.affiliate.as_ref() {
-            if value.chars().count() > 1000 {
-                return InvalidMetadataSnafu {
-                    reason: "affiliate must be 1000 characters or fewer".to_string(),
-                }
-                .fail();
-            }
-        }
-
         if let Some(value) = metadata.start_asset.as_ref() {
             if value.chars().count() > 1000 {
                 return InvalidMetadataSnafu {

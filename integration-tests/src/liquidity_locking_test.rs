@@ -173,6 +173,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client
@@ -328,6 +329,7 @@ async fn test_liquidity_locking_reduces_available_liquidity(
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let large_quote_response = client

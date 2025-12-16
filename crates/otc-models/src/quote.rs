@@ -68,6 +68,10 @@ pub struct Quote {
     /// Maximum input amount allowed (in from currency smallest unit)
     pub max_input: U256,
 
+    /// Optional affiliate identifier that determined the protocol fee rate
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affiliate: Option<String>,
+
     /// The expiration time of the quote
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
@@ -79,6 +83,9 @@ pub struct QuoteRequest {
     pub to: Currency,
     /// Swap mode: ExactInput or ExactOutput with the specified amount
     pub mode: SwapMode,
+    /// Optional affiliate identifier for custom protocol fee rates
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affiliate: Option<String>,
 }
 
 /// Serialize an f64 as its JSON number, but if it is NaN or ±Inf, serialize as `null`.

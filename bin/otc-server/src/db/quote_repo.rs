@@ -38,11 +38,12 @@ impl QuoteRepository {
                 liquidity_fee_bps, protocol_fee_bps, network_fee_sats,
                 fee_liquidity, fee_protocol, fee_network,
                 min_input, max_input,
+                affiliate,
                 market_maker_id, 
                 expires_at, 
                 created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)
             "#,
         )
         .bind(quote.id)
@@ -62,6 +63,7 @@ impl QuoteRepository {
         .bind(fee_network)
         .bind(min_input)
         .bind(max_input)
+        .bind(&quote.affiliate)
         .bind(quote.market_maker_id)
         .bind(quote.expires_at)
         .bind(quote.created_at)
@@ -81,6 +83,7 @@ impl QuoteRepository {
                 liquidity_fee_bps, protocol_fee_bps, network_fee_sats,
                 fee_liquidity, fee_protocol, fee_network,
                 min_input, max_input,
+                affiliate,
                 market_maker_id,
                 expires_at,
                 created_at
@@ -110,6 +113,7 @@ impl QuoteRepository {
                 liquidity_fee_bps, protocol_fee_bps, network_fee_sats,
                 fee_liquidity, fee_protocol, fee_network,
                 min_input, max_input,
+                affiliate,
                 market_maker_id,
                 expires_at,
                 created_at
@@ -144,6 +148,7 @@ impl QuoteRepository {
                 liquidity_fee_bps, protocol_fee_bps, network_fee_sats,
                 fee_liquidity, fee_protocol, fee_network,
                 min_input, max_input,
+                affiliate,
                 market_maker_id,
                 expires_at,
                 created_at
@@ -220,6 +225,7 @@ mod tests {
             },
             min_input: U256::from(10_000u64),
             max_input: U256::from(100_000_000u64),
+            affiliate: None,
             expires_at,
             created_at: utc::now(),
         }

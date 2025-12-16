@@ -168,6 +168,7 @@ async fn test_swap_from_bitcoin_to_ethereum(
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client
@@ -373,6 +374,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client
@@ -602,6 +604,7 @@ async fn test_swap_from_ethereum_to_bitcoin(
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client

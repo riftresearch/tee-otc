@@ -55,6 +55,9 @@ impl<'r> FromRow<'r> for Quote {
         let min_input = u256_from_db(&min_input_str)?;
         let max_input = u256_from_db(&max_input_str)?;
 
+        // Affiliate
+        let affiliate: Option<String> = row.try_get("affiliate")?;
+
         let market_maker_id: Uuid = row.try_get("market_maker_id")?;
         let expires_at: DateTime<Utc> = row.try_get("expires_at")?;
         let created_at: DateTime<Utc> = row.try_get("created_at")?;
@@ -77,6 +80,7 @@ impl<'r> FromRow<'r> for Quote {
             fees,
             min_input,
             max_input,
+            affiliate,
             expires_at,
             created_at,
         })
@@ -149,6 +153,9 @@ impl<'r> FromRow<'r> for Swap {
         let min_input = u256_from_db(&min_input_str)?;
         let max_input = u256_from_db(&max_input_str)?;
 
+        // Affiliate from quote
+        let quote_affiliate: Option<String> = row.try_get("quote_affiliate")?;
+
         let quote_market_maker_id: Uuid = row.try_get("quote_market_maker_id")?;
         let expires_at: DateTime<Utc> = row.try_get("expires_at")?;
         let quote_created_at: DateTime<Utc> = row.try_get("quote_created_at")?;
@@ -171,6 +178,7 @@ impl<'r> FromRow<'r> for Swap {
             fees,
             min_input,
             max_input,
+            affiliate: quote_affiliate,
             expires_at,
             created_at: quote_created_at,
         };

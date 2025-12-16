@@ -70,6 +70,7 @@ async fn execute_btc_to_eth_swap(
             token: TokenIdentifier::Address(cbbtc_address.to_string()),
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client
@@ -168,6 +169,7 @@ async fn execute_eth_to_btc_swap(
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client

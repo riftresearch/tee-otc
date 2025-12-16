@@ -202,6 +202,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
         from: from_currency,
         to: to_currency,
         mode: OtcSwapMode::ExactInput(amount.to::<u64>()),
+        affiliate: None,
     };
 
     send_update(

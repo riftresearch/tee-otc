@@ -62,6 +62,7 @@ async fn execute_user_swap(
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = match client

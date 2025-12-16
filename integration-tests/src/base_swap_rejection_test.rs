@@ -143,6 +143,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client
@@ -200,6 +201,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
             token: TokenIdentifier::Address(devnet.base.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client
@@ -253,6 +255,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client

@@ -25,10 +25,44 @@ use uuid::Uuid;
 const QUOTE_EXPIRATION_TIME: Duration = Duration::from_secs(60 * 5);
 const FEE_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
 
+/// Default protocol fee in basis points (0.10%) when no affiliate is specified
+/// or the affiliate is not in the fee map.
+pub const DEFAULT_PROTOCOL_FEE_BPS: u64 = 10;
 
+/// Affiliate-specific protocol fee configuration.
+/// Maps affiliate identifiers to their protocol fee in basis points.
+#[derive(Debug, Clone)]
+pub struct AffiliateFeeConfig {
+    fees: HashMap<String, u64>,
+    default_bps: u64,
+}
 
-/// Protocol fee in basis points (0.10%)
-const PROTOCOL_FEE_BPS: u64 = 10;
+impl Default for AffiliateFeeConfig {
+    fn default() -> Self {
+        Self::new(DEFAULT_PROTOCOL_FEE_BPS)
+    }
+}
+
+impl AffiliateFeeConfig {
+    /// Creates a new config with the given default fee.
+    #[must_use]
+    pub fn new(default_bps: u64) -> Self {
+        Self {
+            fees: [("coinbase".to_string(), 4)].into_iter().collect(),
+            default_bps,
+        }
+    }
+
+    /// Gets the protocol fee for the given affiliate, or the default if not found.
+    #[must_use]
+    pub fn get_fee_bps(&self, affiliate: Option<&str>) -> u64 {
+        affiliate
+            .and_then(|a| self.fees.get(a))
+            .copied()
+            .unwrap_or(self.default_bps)
+    }
+}
+
 
 #[derive(Debug, Snafu)]
 pub enum WrappedBitcoinQuoterError {
@@ -62,6 +96,7 @@ pub struct WrappedBitcoinQuoter {
     fee_map: Arc<RwLock<HashMap<ChainType, u64>>>,
     liquidity_cache: Arc<LiquidityCache>,
     configured_evm_chain: ChainType,
+    affiliate_fee_config: AffiliateFeeConfig,
 }
 
 impl WrappedBitcoinQuoter {
@@ -74,6 +109,7 @@ impl WrappedBitcoinQuoter {
         trade_spread_bps: u64,
         fee_safety_multiplier: f64,
         configured_evm_chain: ChainType,
+        affiliate_fee_config: AffiliateFeeConfig,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Self {
         let fee_map = Arc::new(RwLock::new(HashMap::new()));
@@ -99,6 +135,7 @@ impl WrappedBitcoinQuoter {
             fee_map,
             liquidity_cache,
             configured_evm_chain,
+            affiliate_fee_config,
         }
     }
 
@@ -232,6 +269,15 @@ impl WrappedBitcoinQuoter {
             return Ok(RFQResult::Unsupported(error_message));
         }
 
+        // Validate affiliate string length
+        if let Some(ref affiliate) = quote_request.affiliate {
+            if affiliate.chars().count() > 100 {
+                return Ok(RFQResult::InvalidRequest(
+                    "Affiliate must be 100 characters or fewer".to_string(),
+                ));
+            }
+        }
+
         // Validate we have a wallet for the destination chain
         if !self.wallet_registry.is_registered(quote_request.to.chain) {
             warn!(
@@ -254,8 +300,13 @@ impl WrappedBitcoinQuoter {
             }
         };
 
+        // Get the protocol fee based on affiliate
+        let protocol_fee_bps = self
+            .affiliate_fee_config
+            .get_fee_bps(quote_request.affiliate.as_deref());
+
         // Build the rates
-        let rates = SwapRates::new(self.trade_spread_bps, PROTOCOL_FEE_BPS, network_fee_sats);
+        let rates = SwapRates::new(self.trade_spread_bps, protocol_fee_bps, network_fee_sats);
 
         // Compute fee breakdown based on the requested mode
         let breakdown = match compute_fees(quote_request.mode, &rates) {
@@ -317,6 +368,7 @@ impl WrappedBitcoinQuoter {
             },
             min_input: U256::from(min_input),
             max_input: U256::from(max_input),
+            affiliate: quote_request.affiliate.clone(),
             expires_at: utc::now() + QUOTE_EXPIRATION_TIME,
             created_at: utc::now(),
         };
@@ -443,7 +495,7 @@ mod tests {
                 ETH_PER_BTC_PRICE,
             );
 
-        let rates = SwapRates::new(TRADE_SPREAD_BPS, PROTOCOL_FEE_BPS, network_fee);
+        let rates = SwapRates::new(TRADE_SPREAD_BPS, DEFAULT_PROTOCOL_FEE_BPS, network_fee);
         let min_input = compute_min_viable_input(&rates);
 
         // Verify that min_input produces at least MIN_VIABLE_OUTPUT_SATS output
@@ -490,7 +542,7 @@ mod tests {
                 ETH_PER_BTC_PRICE,
             );
 
-        let rates = SwapRates::new(TRADE_SPREAD_BPS, PROTOCOL_FEE_BPS, network_fee);
+        let rates = SwapRates::new(TRADE_SPREAD_BPS, DEFAULT_PROTOCOL_FEE_BPS, network_fee);
         let max_output = 1_000_000u64; // 1M sats available
 
         let max_input = compute_max_input_for_output(max_output, &rates);
@@ -519,7 +571,7 @@ mod tests {
                 ETH_PER_BTC_PRICE,
             );
 
-        let rates = SwapRates::new(TRADE_SPREAD_BPS, PROTOCOL_FEE_BPS, network_fee);
+        let rates = SwapRates::new(TRADE_SPREAD_BPS, DEFAULT_PROTOCOL_FEE_BPS, network_fee);
 
         // Test various input amounts (all large enough to produce valid outputs)
         let test_inputs = [10_000u64, 100_000, 1_000_000, 10_000_000, 100_000_000];
