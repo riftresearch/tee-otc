@@ -97,7 +97,6 @@ services:
         condition: service_healthy
     ports:
       - "8081:8081"
-      - "6669:6669"
     environment:
       ENABLE_TOKIO_CONSOLE_SUBSCRIBER: ${ENABLE_TOKIO_CONSOLE_SUBSCRIBER}
       RUST_LOG: ${RUST_LOG} 
