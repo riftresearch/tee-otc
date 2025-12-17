@@ -5,10 +5,10 @@ use market_maker::run_market_maker;
 use market_maker::{bitcoin_wallet::BitcoinWallet, wallet::Wallet, MarketMakerArgs};
 use mock_instant::global::MockClock;
 use otc_chains::traits::Payment;
-use otc_models::{SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{Swap, SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::{
-    api::{CreateSwapRequest, CreateSwapResponse},
+    api::CreateSwapRequest,
     server::run_server,
     OtcServerArgs,
 };
@@ -212,8 +212,8 @@ async fn test_liquidity_locking_reduces_available_liquidity(
         .unwrap();
 
     assert_eq!(swap_response.status(), 200);
-    let swap_response: CreateSwapResponse = swap_response.json().await.unwrap();
-    let swap_id = swap_response.swap_id;
+    let swap: Swap = swap_response.json().await.unwrap();
+    let swap_id = swap.id;
     info!("Created swap: {}", swap_id);
 
     // Step 3: Send user deposit (this triggers UserDeposited message and locks liquidity)
@@ -236,14 +236,10 @@ async fn test_liquidity_locking_reduces_available_liquidity(
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals: swap_response.decimals,
-                    },
-                    amount: swap_response.min_input,
+                    currency: swap.quote.from.currency.clone(),
+                    amount: swap.quote.min_input,
                 },
-                to_address: swap_response.deposit_address,
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )

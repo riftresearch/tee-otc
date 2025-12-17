@@ -16,12 +16,8 @@ use blockchain_utils::{create_websocket_wallet_provider, init_logger};
 use ctor::ctor;
 use devnet::MultichainAccount;
 use market_maker::{evm_wallet::EVMWallet, MarketMakerArgs};
-use otc_server::{
-    api::{
-        SwapResponse,
-    },
-    OtcServerArgs,
-};
+use otc_models::Swap;
+use otc_server::OtcServerArgs;
 use rfq_server::RfqServerArgs;
 use sqlx::{postgres::PgConnectOptions, Connection, PgConnection};
 use tokio::{net::TcpListener, task::JoinSet};
@@ -89,7 +85,7 @@ pub async fn wait_for_swap_status(
     otc_port: u16,
     swap_id: Uuid,
     expected_status: &str,
-) -> SwapResponse {
+) -> Swap {
     let timeout = Duration::from_secs(crate::utils::INTEGRATION_TEST_TIMEOUT_SECS);
     let start = Instant::now();
     let poll_interval = Duration::from_millis(500);
@@ -97,15 +93,16 @@ pub async fn wait_for_swap_status(
 
     loop {
         let response = client.get(&url).send().await.unwrap();
-        let response_json: SwapResponse = response.json().await.unwrap();
+        let swap: Swap = response.json().await.unwrap();
+        let status_str = format!("{:?}", swap.status);
 
-        if response_json.status == expected_status {
-            return response_json;
+        if status_str == expected_status {
+            return swap;
         }
 
         if start.elapsed() > timeout {
             panic!(
-                "Timeout waiting for swap {swap_id} status to become {expected_status}, last response: {response_json:#?}"
+                "Timeout waiting for swap {swap_id} status to become {expected_status}, last response: {swap:#?}"
             );
         }
 
@@ -179,19 +176,19 @@ pub async fn wait_for_swap_to_be_settled(otc_port: u16, swap_id: Uuid) {
             .send()
             .await
             .unwrap();
-        let response_json: SwapResponse = response.json().await.unwrap();
+        let swap: Swap = response.json().await.unwrap();
         if last_log_time.elapsed() > log_interval {
-            info!("Response from swap status endpoint: {:#?}", response_json);
+            info!("Response from swap status endpoint: {:#?}", swap);
             last_log_time = std::time::Instant::now();
         }
         if start_time.elapsed() > timeout {
             info!(
                 "Final response from swap status endpoint: {:#?}",
-                response_json
+                swap
             );
             panic!("Timeout waiting for swap to be settled");
         }
-        if response_json.status == "Settled" {
+        if swap.status == otc_models::SwapStatus::Settled {
             break;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;

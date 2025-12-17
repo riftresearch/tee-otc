@@ -12,12 +12,9 @@ use bitcoincore_rpc_async::RpcApi;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::evm_wallet::transaction_broadcaster::EVMTransactionBroadcaster;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, wallet::Wallet};
-use otc_models::{SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{Swap, SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
-use otc_server::api::{
-    swaps::RefundSwapResponse,
-    CreateSwapRequest, CreateSwapResponse, SwapResponse,
-};
+use otc_server::api::{swaps::RefundSwapResponse, CreateSwapRequest};
 use reqwest::StatusCode;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::collections::HashMap;
@@ -216,10 +213,10 @@ async fn test_refund_from_bitcoin_user_deposit(
         .unwrap();
 
     let response_status = response.status();
-    let response_json = match response_status {
+    let swap = match response_status {
         StatusCode::OK => {
-            let response_json: CreateSwapResponse = response.json().await.unwrap();
-            response_json
+            let swap: Swap = response.json().await.unwrap();
+            swap
         }
         _ => {
             let response_text = response.text().await;
@@ -238,14 +235,10 @@ async fn test_refund_from_bitcoin_user_deposit(
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals: response_json.decimals,
-                    },
-                    amount: response_json.min_input,
+                    currency: swap.quote.from.currency.clone(),
+                    amount: swap.quote.min_input,
                 },
-                to_address: response_json.deposit_address,
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )
@@ -269,16 +262,16 @@ async fn test_refund_from_bitcoin_user_deposit(
 
     // verify the swap state is WaitingMMDepositInitiated
     loop {
-        let swap = client
+        let swap_status = client
             .get(format!(
                 "http://localhost:{otc_port}/api/v2/swap/{}",
-                response_json.swap_id
+                swap.id
             ))
             .send()
             .await
             .unwrap();
-        let swap: SwapResponse = swap.json().await.unwrap();
-        if swap.status == "WaitingMMDepositInitiated" {
+        let swap_status: Swap = swap_status.json().await.unwrap();
+        if swap_status.status == otc_models::SwapStatus::WaitingMMDepositInitiated {
             break;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -288,14 +281,14 @@ async fn test_refund_from_bitcoin_user_deposit(
     let refund_response = client
         .post(format!(
             "http://localhost:{otc_port}/api/v2/swap/{}/refund",
-            response_json.swap_id
+            swap.id
         ))
         .send()
         .await
         .unwrap();
 
     let response_status = refund_response.status();
-    let response_json = match response_status {
+    let refund_result = match response_status {
         StatusCode::OK => refund_response.json::<RefundSwapResponse>().await.unwrap(),
         _ => {
             let response_text = refund_response.text().await;
@@ -320,7 +313,7 @@ async fn test_refund_from_bitcoin_user_deposit(
     devnet
         .bitcoin
         .rpc_client
-        .send_raw_transaction(response_json.tx_data)
+        .send_raw_transaction(refund_result.tx_data)
         .await
         .unwrap();
     devnet.bitcoin.mine_blocks(6).await.unwrap();
@@ -508,8 +501,8 @@ async fn test_refund_from_evm_user_deposit(
         .unwrap();
 
     let response_status = response.status();
-    let response_json = match response_status {
-        StatusCode::OK => response.json::<CreateSwapResponse>().await.unwrap(),
+    let swap = match response_status {
+        StatusCode::OK => response.json::<Swap>().await.unwrap(),
         _ => {
             let response_text = response.text().await;
             panic!(
@@ -546,11 +539,8 @@ async fn test_refund_from_evm_user_deposit(
     // Transfer exactly the expected amount to the deposit address
     user_token_contract
         .transfer(
-            response_json
-                .deposit_address
-                .parse()
-                .expect("valid deposit address"),
-            response_json.min_input,
+            swap.deposit_vault_address.parse().expect("valid deposit address"),
+            swap.quote.min_input,
         )
         .send()
         .await
@@ -561,16 +551,16 @@ async fn test_refund_from_evm_user_deposit(
 
     // Wait until swap reaches WaitingMMDepositInitiated after detecting the user deposit
     loop {
-        let swap = client
+        let swap_status = client
             .get(format!(
                 "http://localhost:{otc_port}/api/v2/swap/{}",
-                response_json.swap_id
+                swap.id
             ))
             .send()
             .await
             .unwrap();
-        let swap: SwapResponse = swap.json().await.unwrap();
-        if swap.status == "WaitingMMDepositInitiated" {
+        let swap_status: Swap = swap_status.json().await.unwrap();
+        if swap_status.status == otc_models::SwapStatus::WaitingMMDepositInitiated {
             break;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -581,7 +571,7 @@ async fn test_refund_from_evm_user_deposit(
     let refund_response = client
         .post(format!(
             "http://localhost:{otc_port}/api/v2/swap/{}/refund",
-            response_json.swap_id
+            swap.id
         ))
         .send()
         .await

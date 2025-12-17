@@ -1,7 +1,6 @@
 use crate::{
     api::swaps::{
-        BlockHashResponse, CreateSwapRequest, CreateSwapResponse,
-        RefundSwapResponse, SwapResponse,
+        BlockHashResponse, CreateSwapRequest, RefundSwapResponse,
     },
     config::Settings,
     db::{
@@ -624,7 +623,7 @@ async fn get_suspended_market_makers(
 async fn create_swap(
     State(state): State<AppState>,
     Json(request): Json<CreateSwapRequest>,
-) -> Result<Json<CreateSwapResponse>, crate::error::OtcServerError> {
+) -> Result<Json<otc_models::Swap>, crate::error::OtcServerError> {
     // Address screening (only if configured). Block if either address is High/Severe risk.
     if let Some(screener) = &state.address_screener {
         let to_check: Vec<String> = vec![
@@ -661,7 +660,7 @@ async fn create_swap(
 async fn get_swap(
     State(state): State<AppState>,
     Path(swap_id): Path<Uuid>,
-) -> Result<Json<SwapResponse>, crate::error::OtcServerError> {
+) -> Result<Json<otc_models::Swap>, crate::error::OtcServerError> {
     state
         .swap_manager
         .get_swap(swap_id)

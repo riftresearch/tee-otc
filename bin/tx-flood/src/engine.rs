@@ -6,7 +6,8 @@ use otc_models::{
     ChainType, Currency, Lot, Quote, QuoteRequest, SwapMode as OtcSwapMode, TokenIdentifier,
 };
 use otc_protocols::rfq::RFQResult;
-use otc_server::api::swaps::{CreateSwapRequest, CreateSwapResponse, SwapResponse};
+use otc_models::Swap;
+use otc_server::api::swaps::CreateSwapRequest;
 use rand::Rng;
 use reqwest::{Client, Url};
 use rfq_server::server::QuoteResponse;
@@ -282,7 +283,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
         }
     };
 
-    let swap_id = swap_response.swap_id;
+    let swap_id = swap_response.id;
     send_update(
         &update_tx,
         SwapUpdate::with_amount_and_chain(
@@ -293,22 +294,22 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
         ),
     );
 
-    let deposit_lot = lot_from_response(&swap_response, amount).with_context(|| {
+    let deposit_lot = lot_from_swap(&swap_response, amount).with_context(|| {
         format!(
-            "invalid deposit lot: amount={}, quoted_input={}, min={}, max={}, chain={}, token={}",
+            "invalid deposit lot: amount={}, quoted_input={}, min={}, max={}, chain={:?}, token={:?}",
             amount,
-            swap_response.quoted_input,
-            swap_response.min_input,
-            swap_response.max_input,
-            swap_response.deposit_chain,
-            swap_response.token
+            swap_response.quote.from.amount,
+            swap_response.quote.min_input,
+            swap_response.quote.max_input,
+            swap_response.quote.from.currency.chain,
+            swap_response.quote.from.currency.token
         )
     })?;
 
     let (tx_hash, sender_address) = if let Some(ref coordinator) = batch_coordinator {
         // Use batch coordinator
         match coordinator
-            .submit_payment(index, &deposit_lot, &swap_response.deposit_address)
+            .submit_payment(index, &deposit_lot, &swap_response.deposit_vault_address)
             .await
         {
             Ok(result) => result,
@@ -329,7 +330,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
     } else {
         // Direct wallet payment (non-batching mode)
         match wallets
-            .create_payment(index, &deposit_lot, &swap_response.deposit_address)
+            .create_payment(index, &deposit_lot, &swap_response.deposit_vault_address)
             .await
         {
             Ok(result) => result,
@@ -463,7 +464,7 @@ async fn create_swap(
     client: &Client,
     url: &Url,
     request: &CreateSwapRequest,
-) -> Result<CreateSwapResponse> {
+) -> Result<Swap> {
     tracing::info!(request = ?request, "creating swap");
     let response = client
         .post(url.clone())
@@ -504,9 +505,9 @@ async fn create_swap(
         .context("failed to parse swap creation response")
 }
 
-fn lot_from_response(response: &CreateSwapResponse, deposit_amount: U256) -> Result<Lot> {
-    let chain = parse_chain_type(&response.deposit_chain)?;
-    let token = parse_token_identifier(&response.token);
+fn lot_from_swap(swap: &Swap, deposit_amount: U256) -> Result<Lot> {
+    let chain = swap.quote.from.currency.chain;
+    let token = swap.quote.from.currency.token.clone();
 
     if (chain == ChainType::Ethereum || chain == ChainType::Base) && matches!(token, TokenIdentifier::Native) {
         return Err(anyhow!(
@@ -515,38 +516,17 @@ fn lot_from_response(response: &CreateSwapResponse, deposit_amount: U256) -> Res
     }
 
     // Validate the deposit amount is within bounds
-    if deposit_amount < response.min_input || deposit_amount > response.max_input {
+    if deposit_amount < swap.quote.min_input || deposit_amount > swap.quote.max_input {
         return Err(anyhow!(
             "deposit amount {} is outside allowed range [{}, {}]",
-            deposit_amount, response.min_input, response.max_input
+            deposit_amount, swap.quote.min_input, swap.quote.max_input
         ));
     }
 
     Ok(Lot {
-        currency: Currency {
-            chain,
-            token,
-            decimals: response.decimals,
-        },
+        currency: swap.quote.from.currency.clone(),
         amount: deposit_amount,
     })
-}
-
-fn parse_chain_type(value: &str) -> Result<ChainType> {
-    match value.to_ascii_lowercase().as_str() {
-        "bitcoin" => Ok(ChainType::Bitcoin),
-        "ethereum" => Ok(ChainType::Ethereum),
-        "base" => Ok(ChainType::Base),
-        _ => Err(anyhow!("unsupported chain type in response: {}", value)),
-    }
-}
-
-fn parse_token_identifier(token: &str) -> TokenIdentifier {
-    if token.eq_ignore_ascii_case("native") {
-        TokenIdentifier::Native
-    } else {
-        TokenIdentifier::Address(token.to_string())
-    }
 }
 
 async fn poll_swap_status(
@@ -578,26 +558,27 @@ async fn poll_swap_status(
             .error_for_status()
             .with_context(|| format!("swap status request failed for {}", swap_id))?;
 
-        let body: SwapResponse = response
+        let swap: Swap = response
             .json()
             .await
             .context("failed to parse swap status response")?;
 
-        if last_status.as_deref() != Some(body.status.as_str()) {
-            last_status = Some(body.status.clone());
+        let status_str = format!("{:?}", swap.status);
+        if last_status.as_deref() != Some(&status_str) {
+            last_status = Some(status_str.clone());
             send_update(
                 update_tx,
                 SwapUpdate::new(
                     index,
                     SwapStage::StatusUpdated {
                         swap_id,
-                        status: body.status.clone(),
+                        status: status_str.clone(),
                     },
                 ),
             );
         }
 
-        if body.status == "Settled" {
+        if swap.status == otc_models::SwapStatus::Settled {
             return Ok(());
         }
 

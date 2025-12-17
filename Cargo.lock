@@ -5355,6 +5355,7 @@ dependencies = [
  "alloy 1.0.30",
  "argon2",
  "chrono",
+ "hex",
  "secrecy",
  "serde",
  "serde_json",

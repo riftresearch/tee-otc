@@ -1,4 +1,4 @@
-use crate::{ChainType, SwapMode, SwapRates};
+use crate::{serde_utils::u256_decimal, ChainType, SwapMode, SwapRates};
 use alloy::primitives::{keccak256, U256};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, Serializer};
@@ -24,14 +24,18 @@ pub struct Currency {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Lot {
     pub currency: Currency,
+    #[serde(with = "u256_decimal")]
     pub amount: U256,
 }
 
 /// Fee amounts for a realized swap.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Fees {
+    #[serde(with = "u256_decimal")]
     pub liquidity_fee: U256,
+    #[serde(with = "u256_decimal")]
     pub protocol_fee: U256,
+    #[serde(with = "u256_decimal")]
     pub network_fee: U256,
 }
 
@@ -63,9 +67,11 @@ pub struct Quote {
     pub fees: Fees,
 
     /// Minimum input amount allowed (in from currency smallest unit)
+    #[serde(with = "u256_decimal")]
     pub min_input: U256,
 
     /// Maximum input amount allowed (in from currency smallest unit)
+    #[serde(with = "u256_decimal")]
     pub max_input: U256,
 
     /// Optional affiliate identifier that determined the protocol fee rate

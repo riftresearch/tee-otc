@@ -12,10 +12,10 @@ use market_maker::{
     bitcoin_wallet::BitcoinWallet, evm_wallet::EVMWallet, run_market_maker, wallet::Wallet,
 };
 use otc_chains::traits::Payment;
-use otc_models::{SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{Swap, SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::{
-    api::{CreateSwapRequest, CreateSwapResponse},
+    api::CreateSwapRequest,
     server::run_server,
 };
 use reqwest::StatusCode;
@@ -234,13 +234,9 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
         .unwrap();
 
     assert_eq!(swap_response.status(), StatusCode::OK);
-    let CreateSwapResponse {
-        swap_id,
-        deposit_address,
-        min_input,
-        decimals,
-        ..
-    } = swap_response.json().await.unwrap();
+    let swap: Swap = swap_response.json().await.unwrap();
+    let swap_id = swap.id;
+    let deposit_address = swap.deposit_vault_address.clone();
 
     info!(
         "Created swap {} with deposit address {}",
@@ -252,12 +248,8 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals,
-                    },
-                    amount: min_input,
+                    currency: swap.quote.from.currency.clone(),
+                    amount: swap.quote.min_input,
                 },
                 to_address: deposit_address.clone(),
             }],
@@ -284,10 +276,10 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
         .send()
         .await
         .unwrap();
-    let swap: otc_server::api::SwapResponse = swap_response.json().await.unwrap();
+    let swap_status: Swap = swap_response.json().await.unwrap();
     assert_eq!(
-        swap.user_deposit.deposit_tx.as_ref().unwrap(),
-        &first_tx_hash,
+        swap_status.user_deposit_status.as_ref().unwrap().tx_hash,
+        first_tx_hash,
         "Swap should be tracking the first transaction"
     );
 
@@ -298,12 +290,8 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals,
-                    },
-                    amount: min_input,
+                    currency: swap.quote.from.currency.clone(),
+                    amount: swap.quote.min_input,
                 },
                 to_address: deposit_address.clone(),
             }],
@@ -339,14 +327,14 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
         .send()
         .await
         .unwrap();
-    let swap: otc_server::api::SwapResponse = swap_response.json().await.unwrap();
+    let swap_final: Swap = swap_response.json().await.unwrap();
 
-    info!("Swap user deposit: {:?}", swap.user_deposit);
+    info!("Swap user deposit: {:?}", swap_final.user_deposit_status);
 
     // The swap should now be tracking the second transaction (which is confirmed)
     assert_eq!(
-        swap.user_deposit.deposit_tx.as_ref().unwrap(),
-        &second_tx_hash,
+        swap_final.user_deposit_status.as_ref().unwrap().tx_hash,
+        second_tx_hash,
         "Swap should now be tracking the second (confirmed) transaction"
     );
 

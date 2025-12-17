@@ -1,7 +1,4 @@
-use crate::api::swaps::{
-    CreateSwapRequest, CreateSwapResponse, DepositInfoResponse, 
-    RefundSwapResponse, SwapResponse,
-};
+use crate::api::swaps::{CreateSwapRequest, RefundSwapResponse};
 use crate::config::Settings;
 use crate::db::Database;
 use crate::error::OtcServerError;
@@ -10,7 +7,7 @@ use alloy::hex::FromHexError;
 use alloy::primitives::U256;
 use blockchain_utils::MempoolEsploraFeeExt;
 use otc_chains::ChainRegistry;
-use otc_models::{ChainType, LatestRefund, Metadata, Swap, SwapStatus, TokenIdentifier};
+use otc_models::{ChainType, LatestRefund, Metadata, Swap, SwapStatus};
 use snafu::prelude::*;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -199,8 +196,8 @@ impl SwapManager {
     /// 3. Ask the market maker if they'll fill the quote (TODO)
     /// 4. Generate salts for deterministic wallet derivation
     /// 5. Create the swap record in the database
-    /// 6. Return the deposit details to the user
-    pub async fn create_swap(&self, request: CreateSwapRequest) -> SwapResult<CreateSwapResponse> {
+    /// 6. Return the swap directly
+    pub async fn create_swap(&self, request: CreateSwapRequest) -> SwapResult<Swap> {
         let CreateSwapRequest {
             quote,
             user_destination_address,
@@ -364,103 +361,12 @@ impl SwapManager {
 
         info!("Created swap {} for quote {}", swap_id, quote.id);
 
-        // 7. Derive user deposit address for response
-        let user_chain = self.chain_registry.get(&quote.from.currency.chain).ok_or(
-            SwapError::ChainNotSupported {
-                chain: quote.from.currency.chain,
-            },
-        )?;
-
-        let user_wallet = user_chain
-            .derive_wallet(&self.settings.master_key_bytes(), &deposit_vault_salt)
-            .map_err(|e| SwapError::WalletDerivation { source: e })?;
-
-        // 8. Return response
-        Ok(CreateSwapResponse {
-            swap_id,
-            deposit_address: user_wallet.address.clone(),
-            deposit_chain: format!("{:?}", quote.from.currency.chain),
-            quoted_input: quote.from.amount,
-            min_input: quote.min_input,
-            max_input: quote.max_input,
-            decimals: quote.from.currency.decimals,
-            token: match &quote.from.currency.token {
-                TokenIdentifier::Native => "Native".to_string(),
-                TokenIdentifier::Address(addr) => addr.clone(),
-            },
-            expires_at: quote.expires_at,
-            status: "waiting_user_deposit".to_string(),
-        })
+        Ok(swap)
     }
 
-    /// Get swap details by ID with derived wallet addresses
-    pub async fn get_swap(&self, swap_id: Uuid) -> SwapResult<SwapResponse> {
-        // Get swap from database
-        let swap = self.db.swaps().get(swap_id).await.context(DatabaseSnafu)?;
-
-        // Derive wallet addresses
-        let master_key = self.settings.master_key_bytes();
-
-        let user_chain = self
-            .chain_registry
-            .get(&swap.quote.from.currency.chain)
-            .ok_or(SwapError::ChainNotSupported {
-                chain: swap.quote.from.currency.chain,
-            })?;
-
-        let user_wallet = user_chain
-            .derive_wallet(&master_key, &swap.deposit_vault_salt)
-            .map_err(|e| SwapError::WalletDerivation { source: e })?;
-
-        // Build response
-        // For rate-based system: min/max bounds for user deposit, realized amounts for expected output
-        let expected_mm_output = swap.realized.as_ref().map(|r| r.mm_output);
-        
-        Ok(SwapResponse {
-            id: swap.id,
-            quote_id: swap.quote.id,
-            status: format!("{:?}", swap.status),
-            created_at: swap.created_at,
-            updated_at: swap.updated_at,
-            user_deposit: DepositInfoResponse {
-                address: user_wallet.address.clone(),
-                chain: format!("{:?}", swap.quote.from.currency.chain),
-                quoted_input: Some(swap.quote.from.amount),
-                min_input: Some(swap.quote.min_input),
-                max_input: Some(swap.quote.max_input),
-                expected_output: None,
-                decimals: swap.quote.from.currency.decimals,
-                token: match &swap.quote.from.currency.token {
-                    TokenIdentifier::Native => "Native".to_string(),
-                    TokenIdentifier::Address(addr) => addr.clone(),
-                },
-                deposit_tx: swap.user_deposit_status.as_ref().map(|d| d.tx_hash.clone()),
-                deposit_amount: swap.user_deposit_status.as_ref().map(|d| d.amount),
-                deposit_detected_at: swap
-                    .user_deposit_status
-                    .as_ref()
-                    .map(|d| d.deposit_detected_at),
-            },
-            mm_deposit: DepositInfoResponse {
-                address: swap.user_destination_address.clone(),
-                chain: format!("{:?}", swap.quote.to.currency.chain),
-                quoted_input: None,
-                min_input: None,
-                max_input: None,
-                expected_output: expected_mm_output,
-                decimals: swap.quote.to.currency.decimals,
-                token: match &swap.quote.to.currency.token {
-                    TokenIdentifier::Native => "Native".to_string(),
-                    TokenIdentifier::Address(addr) => addr.clone(),
-                },
-                deposit_tx: swap.mm_deposit_status.as_ref().map(|d| d.tx_hash.clone()),
-                deposit_amount: swap.mm_deposit_status.as_ref().map(|d| d.amount),
-                deposit_detected_at: swap
-                    .mm_deposit_status
-                    .as_ref()
-                    .map(|d| d.deposit_detected_at),
-            },
-        })
+    /// Get swap details by ID
+    pub async fn get_swap(&self, swap_id: Uuid) -> SwapResult<Swap> {
+        self.db.swaps().get(swap_id).await.context(DatabaseSnafu)
     }
 
     fn validate_metadata(metadata: &Metadata) -> SwapResult<()> {

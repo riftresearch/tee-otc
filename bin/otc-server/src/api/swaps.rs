@@ -1,5 +1,3 @@
-use alloy::primitives::U256;
-use chrono::{DateTime, Utc};
 use otc_models::{ChainType, Metadata, Quote, RefundSwapReason};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -37,82 +35,4 @@ pub struct CreateSwapRequest {
     /// Optional metadata describing the swap source
     #[serde(default)]
     pub metadata: Option<Metadata>,
-}
-
-/// Response after successfully creating a swap
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CreateSwapResponse {
-    /// The newly created swap ID
-    pub swap_id: Uuid,
-
-    /// Deposit address for the user to send funds to
-    pub deposit_address: String,
-
-    /// Chain type for the deposit (Bitcoin/Ethereum)
-    pub deposit_chain: String,
-
-    /// Exact quoted input amount (if user deposits this, they get exact quoted output)
-    pub quoted_input: U256,
-
-    /// Minimum deposit amount allowed
-    pub min_input: U256,
-
-    /// Maximum deposit amount allowed
-    pub max_input: U256,
-
-    /// Number of decimals for the amount
-    pub decimals: u8,
-
-    /// Token type (Native or token address)
-    pub token: String,
-
-    /// When the swap expires (based on quote expiry)
-    pub expires_at: DateTime<Utc>,
-
-    /// Current swap status
-    pub status: String,
-}
-
-/// Response for GET /swaps/:id
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SwapResponse {
-    pub id: Uuid,
-    pub quote_id: Uuid,
-    pub status: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-
-    /// User's deposit information
-    pub user_deposit: DepositInfoResponse,
-
-    /// Market maker's deposit information  
-    pub mm_deposit: DepositInfoResponse,
-}
-
-/// Deposit information for swaps.
-/// For user deposits: shows quoted input and bounds.
-/// For MM deposits: shows expected output computed from realized swap.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DepositInfoResponse {
-    pub address: String,
-    pub chain: String,
-    /// Quoted input amount (for user deposits) - None for MM deposits
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub quoted_input: Option<U256>,
-    /// Minimum input (for user deposits) - None for MM deposits
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub min_input: Option<U256>,
-    /// Maximum input (for user deposits) - None for MM deposits
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub max_input: Option<U256>,
-    /// Expected output (for MM deposits, computed from realized swap) - None for user deposits
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub expected_output: Option<U256>,
-    pub decimals: u8,
-    pub token: String,
-
-    /// Actual deposit info if detected
-    pub deposit_tx: Option<String>,
-    pub deposit_amount: Option<U256>,
-    pub deposit_detected_at: Option<DateTime<Utc>>,
 }

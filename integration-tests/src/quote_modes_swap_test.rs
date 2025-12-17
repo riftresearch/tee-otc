@@ -8,9 +8,9 @@ use devnet::bitcoin_devnet::MiningMode;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::run_market_maker;
 use otc_chains::traits::Payment;
-use otc_models::{ChainType, Currency, Lot, Quote, QuoteRequest, SwapMode, TokenIdentifier};
+use otc_models::{Swap, SwapStatus, ChainType, Currency, Lot, Quote, QuoteRequest, SwapMode, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
-use otc_server::api::{CreateSwapRequest, CreateSwapResponse, SwapResponse};
+use otc_server::api::CreateSwapRequest;
 use reqwest::StatusCode;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::time::Duration;
@@ -201,19 +201,20 @@ async fn test_quote_modes_exact_output_min_max_deposits(
     )
     .await;
 
-    wait_for_swap_to_be_settled(otc_port, swap1.swap_id).await;
+    wait_for_swap_to_be_settled(otc_port, swap1.id).await;
 
     // Verify the swap settled with expected output
-    let swap1_status = get_swap_status(&client, otc_port, swap1.swap_id).await;
+    let swap1_status = get_swap_status(&client, otc_port, swap1.id).await;
     info!("Swap 1 (ExactOutput) settled: {:?}", swap1_status);
-    assert_eq!(swap1_status.status, "Settled");
+    assert_eq!(swap1_status.status, SwapStatus::Settled);
 
     // Verify the realized amounts from the API response
     // User's actual deposit amount
     let user_deposit_amount = swap1_status
-        .user_deposit
-        .deposit_amount
-        .expect("User deposit amount should be present for settled swap");
+        .user_deposit_status
+        .as_ref()
+        .expect("User deposit status should be present for settled swap")
+        .amount;
     assert_eq!(
         user_deposit_amount, exact_input,
         "User input should match deposited amount"
@@ -221,9 +222,10 @@ async fn test_quote_modes_exact_output_min_max_deposits(
 
     // MM's expected output (computed from realized swap)
     let mm_expected_output = swap1_status
-        .mm_deposit
-        .expected_output
-        .expect("MM expected output should be present for settled swap");
+        .realized
+        .as_ref()
+        .expect("Realized swap should be present for settled swap")
+        .mm_output;
     // With ExactOutput quote and exact input deposit, the output should be EXACTLY the quoted amount.
     // RealizedSwap::from_quote uses the quote's pre-computed fees when deposit matches quoted input.
     assert_eq!(
@@ -270,26 +272,28 @@ async fn test_quote_modes_exact_output_min_max_deposits(
     )
     .await;
 
-    wait_for_swap_to_be_settled(otc_port, swap2.swap_id).await;
+    wait_for_swap_to_be_settled(otc_port, swap2.id).await;
 
-    let swap2_status = get_swap_status(&client, otc_port, swap2.swap_id).await;
+    let swap2_status = get_swap_status(&client, otc_port, swap2.id).await;
     info!("Swap 2 (min_input) settled: {:?}", swap2_status);
-    assert_eq!(swap2_status.status, "Settled");
+    assert_eq!(swap2_status.status, SwapStatus::Settled);
 
     // Verify realized amounts use min_input
     let user_deposit_amount = swap2_status
-        .user_deposit
-        .deposit_amount
-        .expect("User deposit amount should be present for settled swap");
+        .user_deposit_status
+        .as_ref()
+        .expect("User deposit status should be present for settled swap")
+        .amount;
     assert_eq!(
         user_deposit_amount, min_input,
         "User input should match min_input deposit"
     );
 
     let mm_expected_output = swap2_status
-        .mm_deposit
-        .expected_output
-        .expect("MM expected output should be present for settled swap");
+        .realized
+        .as_ref()
+        .expect("Realized swap should be present for settled swap")
+        .mm_output;
     // Output should be proportionally less than quoted (since input is less)
     assert!(
         mm_expected_output < exact_input_quote.to.amount,
@@ -340,26 +344,28 @@ async fn test_quote_modes_exact_output_min_max_deposits(
     )
     .await;
 
-    wait_for_swap_to_be_settled(otc_port, swap3.swap_id).await;
+    wait_for_swap_to_be_settled(otc_port, swap3.id).await;
 
-    let swap3_status = get_swap_status(&client, otc_port, swap3.swap_id).await;
+    let swap3_status = get_swap_status(&client, otc_port, swap3.id).await;
     info!("Swap 3 (max_input) settled: {:?}", swap3_status);
-    assert_eq!(swap3_status.status, "Settled");
+    assert_eq!(swap3_status.status, SwapStatus::Settled);
 
     // Verify realized amounts use max_input
     let user_deposit_amount = swap3_status
-        .user_deposit
-        .deposit_amount
-        .expect("User deposit amount should be present for settled swap");
+        .user_deposit_status
+        .as_ref()
+        .expect("User deposit status should be present for settled swap")
+        .amount;
     assert_eq!(
         user_deposit_amount, max_input,
         "User input should match max_input deposit"
     );
 
     let mm_expected_output = swap3_status
-        .mm_deposit
-        .expected_output
-        .expect("MM expected output should be present for settled swap");
+        .realized
+        .as_ref()
+        .expect("Realized swap should be present for settled swap")
+        .mm_output;
     // Output should be proportionally more than quoted (since input is more)
     assert!(
         mm_expected_output > max_input_quote.to.amount,
@@ -432,7 +438,7 @@ async fn create_and_execute_swap(
     quote: Quote,
     deposit_amount: U256,
     user_account: &MultichainAccount,
-) -> CreateSwapResponse {
+) -> Swap {
     let swap_request = CreateSwapRequest {
         quote,
         user_destination_address: user_account.ethereum_address.to_string(),
@@ -448,7 +454,7 @@ async fn create_and_execute_swap(
         .unwrap();
 
     let response_status = response.status();
-    let swap_response: CreateSwapResponse = match response_status {
+    let swap: Swap = match response_status {
         StatusCode::OK => response.json().await.unwrap(),
         _ => {
             let text = response.text().await;
@@ -461,14 +467,10 @@ async fn create_and_execute_swap(
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals: swap_response.decimals,
-                    },
+                    currency: swap.quote.from.currency.clone(),
                     amount: deposit_amount,
                 },
-                to_address: swap_response.deposit_address.clone(),
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )
@@ -477,14 +479,14 @@ async fn create_and_execute_swap(
 
     info!(
         "Deposited {} sats to {} for swap {}",
-        deposit_amount, swap_response.deposit_address, swap_response.swap_id
+        deposit_amount, swap.deposit_vault_address, swap.id
     );
 
-    swap_response
+    swap
 }
 
 /// Helper: Get swap status
-async fn get_swap_status(client: &reqwest::Client, otc_port: u16, swap_id: Uuid) -> SwapResponse {
+async fn get_swap_status(client: &reqwest::Client, otc_port: u16, swap_id: Uuid) -> Swap {
     let response = client
         .get(format!("http://localhost:{otc_port}/api/v2/swap/{swap_id}"))
         .send()

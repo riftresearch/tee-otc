@@ -1,4 +1,8 @@
-use crate::{fees::compute_fees, Quote, SwapMode, SwapRates, SwapStatus};
+use crate::{
+    fees::compute_fees,
+    serde_utils::{option_u256_decimal, u256_decimal},
+    Quote, SwapMode, SwapRates, SwapStatus,
+};
 use alloy::primitives::U256;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -8,30 +12,6 @@ pub const MM_NEVER_DEPOSITS_TIMEOUT: Duration = Duration::minutes(60 * 24); // 2
 pub const MM_DEPOSIT_NEVER_CONFIRMED_TIMEOUT: Duration = Duration::minutes(60 * 24); // 24 hours
 pub const MM_DEPOSIT_RISK_WINDOW: Duration = Duration::minutes(10); // if one of the refund cases is within this window the market maker should consider this risky
 
-/// Custom serialization for U256 that outputs decimal strings instead of hex.
-/// This is needed for database compatibility where SQL expects numeric strings.
-mod u256_decimal {
-    use alloy::primitives::U256;
-    use serde::{self, Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S>(value: &U256, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&value.to_string())
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<U256, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let s = String::deserialize(deserializer)?;
-        // Try parsing as decimal first, then as hex
-        s.parse::<U256>()
-            .or_else(|_| U256::from_str_radix(s.trim_start_matches("0x"), 16))
-            .map_err(serde::de::Error::custom)
-    }
-}
 
 /// Computed amounts when user deposit is detected and validated.
 /// These represent the exact amounts for this specific swap based on the
@@ -121,11 +101,14 @@ pub struct Swap {
     /// None until a valid deposit is detected within quote bounds.
     pub realized: Option<RealizedSwap>,
 
-    // Salt for deterministic wallet generation when combined with the TEE master key
+    /// Salt for deterministic wallet generation when combined with the TEE master key
+    #[serde(with = "hex::serde")]
     pub deposit_vault_salt: [u8; 32],
-    pub deposit_vault_address: String, // cached for convenience, can be derived from the salt and master key
+    /// Cached deposit vault address (can be derived from the salt and master key)
+    pub deposit_vault_address: String,
 
-    // Nonce for the market maker to embed in their payment address
+    /// Nonce for the market maker to embed in their payment address
+    #[serde(with = "hex::serde")]
     pub mm_nonce: [u8; 16],
 
     // User's addresses
@@ -578,6 +561,7 @@ impl Swap {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserDepositStatus {
     pub tx_hash: String,
+    #[serde(with = "u256_decimal")]
     pub amount: U256,
     pub deposit_detected_at: DateTime<Utc>,
     pub confirmations: u64,
@@ -588,6 +572,7 @@ pub struct UserDepositStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MMDepositStatus {
     pub tx_hash: String,
+    #[serde(with = "u256_decimal")]
     pub amount: U256,
     pub deposit_detected_at: DateTime<Utc>,
     pub confirmations: u64,
@@ -600,6 +585,7 @@ pub struct SettlementStatus {
     pub broadcast_at: DateTime<Utc>,
     pub confirmations: u64,
     pub completed_at: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "option_u256_decimal")]
     pub fee: Option<U256>,
 }
 
@@ -612,6 +598,7 @@ pub struct LatestRefund {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransferInfo {
     pub tx_hash: String,
+    #[serde(with = "u256_decimal")]
     pub amount: U256,
     pub detected_at: DateTime<Utc>,
     pub confirmations: u64,

@@ -20,9 +20,9 @@ use market_maker::bitcoin_wallet::BitcoinWallet;
 use market_maker::run_market_maker;
 use market_maker::wallet::Wallet;
 use otc_chains::traits::Payment;
-use otc_models::{SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{Swap, SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
-use otc_server::api::{CreateSwapRequest, CreateSwapResponse};
+use otc_server::api::CreateSwapRequest;
 use otc_server::server::run_server;
 use reqwest::StatusCode;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
@@ -102,32 +102,28 @@ async fn execute_btc_to_eth_swap(
         .await
         .unwrap();
 
-    let response_json: CreateSwapResponse = match response.status() {
+    let swap: Swap = match response.status() {
         StatusCode::OK => response.json().await.unwrap(),
         status => panic!("Swap request failed with status {status}"),
     };
 
     // Deposit the exact quoted input to ensure from_quote uses quote's fees
-    let deposit_amount = response_json.quoted_input;
+    let deposit_amount = swap.quote.from.amount;
     assert!(
-        deposit_amount >= response_json.min_input,
+        deposit_amount >= swap.quote.min_input,
         "Quoted input {} must be >= min_input {}",
         deposit_amount,
-        response_json.min_input
+        swap.quote.min_input
     );
 
     user_bitcoin_wallet
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals: response_json.decimals,
-                    },
+                    currency: swap.quote.from.currency.clone(),
                     amount: deposit_amount,
                 },
-                to_address: response_json.deposit_address,
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )
@@ -136,11 +132,11 @@ async fn execute_btc_to_eth_swap(
 
     info!(
         "Executed BTC -> ETH swap {} with quoted_input {} sats",
-        response_json.swap_id, deposit_amount
+        swap.id, deposit_amount
     );
 
     SwapInfo {
-        swap_id: response_json.swap_id,
+        swap_id: swap.id,
         direction: "BTC -> ETH".to_string(),
         deposited_amount: deposit_amount,
     }
@@ -201,32 +197,28 @@ async fn execute_eth_to_btc_swap(
         .await
         .unwrap();
 
-    let response_json: CreateSwapResponse = match response.status() {
+    let swap: Swap = match response.status() {
         StatusCode::OK => response.json().await.unwrap(),
         status => panic!("Swap request failed with status {status}"),
     };
 
     // Deposit the exact quoted input to ensure from_quote uses quote's fees
-    let deposit_amount = response_json.quoted_input;
+    let deposit_amount = swap.quote.from.amount;
     assert!(
-        deposit_amount >= response_json.min_input,
+        deposit_amount >= swap.quote.min_input,
         "Quoted input {} must be >= min_input {}",
         deposit_amount,
-        response_json.min_input
+        swap.quote.min_input
     );
 
     user_eth_wallet
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Ethereum,
-                        token: TokenIdentifier::Address(cbbtc_address.to_string()),
-                        decimals: response_json.decimals,
-                    },
+                    currency: swap.quote.from.currency.clone(),
                     amount: deposit_amount,
                 },
-                to_address: response_json.deposit_address,
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )
@@ -235,11 +227,11 @@ async fn execute_eth_to_btc_swap(
 
     info!(
         "Executed ETH -> BTC swap {} with quoted_input {} sats",
-        response_json.swap_id, deposit_amount
+        swap.id, deposit_amount
     );
 
     SwapInfo {
-        swap_id: response_json.swap_id,
+        swap_id: swap.id,
         direction: "ETH -> BTC".to_string(),
         deposited_amount: deposit_amount,
     }

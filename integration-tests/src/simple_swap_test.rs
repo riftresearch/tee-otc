@@ -13,11 +13,10 @@ use market_maker::evm_wallet::EVMWallet;
 use market_maker::wallet::Wallet;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, MarketMakerArgs};
 use otc_chains::traits::Payment;
-use otc_models::{SwapMode, ChainType, Currency, Lot, Quote, QuoteRequest, TokenIdentifier};
+use otc_models::{Swap, SwapMode, ChainType, Currency, Lot, Quote, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
-use otc_server::api::SwapResponse;
 use otc_server::{
-    api::{CreateSwapRequest, CreateSwapResponse},
+    api::CreateSwapRequest,
     server::run_server,
     OtcServerArgs,
 };
@@ -210,10 +209,10 @@ async fn test_swap_from_bitcoin_to_ethereum(
         .unwrap();
 
     let response_status = response.status();
-    let response_json = match response_status {
+    let swap = match response_status {
         StatusCode::OK => {
-            let response_json: CreateSwapResponse = response.json().await.unwrap();
-            response_json
+            let swap: Swap = response.json().await.unwrap();
+            swap
         }
         _ => {
             let response_text = response.text().await;
@@ -227,20 +226,16 @@ async fn test_swap_from_bitcoin_to_ethereum(
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals: response_json.decimals,
-                    },
-                    amount: response_json.min_input,
+                    currency: swap.quote.from.currency.clone(),
+                    amount: swap.quote.min_input,
                 },
-                to_address: response_json.deposit_address,
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )
         .await
         .unwrap();
-    wait_for_swap_to_be_settled(otc_port, response_json.swap_id).await;
+    wait_for_swap_to_be_settled(otc_port, swap.id).await;
     drop(devnet);
     tokio::join!(wallet_join_set.shutdown(), service_join_set.shutdown());
 }
@@ -408,13 +403,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
         .unwrap();
 
     assert_eq!(swap_response.status(), StatusCode::OK);
-    let CreateSwapResponse {
-        swap_id,
-        deposit_address,
-        min_input,
-        decimals,
-        ..
-    } = swap_response.json().await.unwrap();
+    let swap: Swap = swap_response.json().await.unwrap();
 
     mm_task_id.abort();
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -430,14 +419,10 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals,
-                    },
-                    amount: min_input,
+                    currency: swap.quote.from.currency.clone(),
+                    amount: swap.quote.min_input,
                 },
-                to_address: deposit_address,
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )
@@ -448,7 +433,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
 
     devnet.bitcoin.mine_blocks(6).await.unwrap();
 
-    wait_for_swap_status(&client, otc_port, swap_id, "WaitingMMDepositInitiated").await;
+    wait_for_swap_status(&client, otc_port, swap.id, "WaitingMMDepositInitiated").await;
 
     let _mm_restart_task_id = service_join_set.spawn(async move {
         run_market_maker(mm_args_clone)
@@ -458,7 +443,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
 
     wait_for_market_maker_to_connect_to_rfq_server(rfq_port).await;
 
-    wait_for_swap_to_be_settled(otc_port, swap_id).await;
+    wait_for_swap_to_be_settled(otc_port, swap.id).await;
 
     drop(devnet);
     tokio::join!(wallet_join_set.shutdown(), service_join_set.shutdown());
@@ -646,10 +631,10 @@ async fn test_swap_from_ethereum_to_bitcoin(
         .unwrap();
 
     let response_status = response.status();
-    let response_json = match response_status {
+    let swap = match response_status {
         StatusCode::OK => {
-            let response_json: CreateSwapResponse = response.json().await.unwrap();
-            response_json
+            let swap: Swap = response.json().await.unwrap();
+            swap
         }
         _ => {
             let response_text = response.text().await;
@@ -668,11 +653,11 @@ async fn test_swap_from_ethereum_to_bitcoin(
                         token: TokenIdentifier::Address(
                             devnet.ethereum.cbbtc_contract.address().to_string(),
                         ),
-                        decimals: response_json.decimals,
+                        decimals: swap.quote.from.currency.decimals,
                     },
-                    amount: response_json.min_input,
+                    amount: swap.quote.min_input,
                 },
-                to_address: response_json.deposit_address,
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )
@@ -699,12 +684,12 @@ async fn test_swap_from_ethereum_to_bitcoin(
         .unwrap();
 
     info!("Tx status: {:#?}", get_tx_status);
-    wait_for_swap_to_be_settled(otc_port, response_json.swap_id).await;
+    wait_for_swap_to_be_settled(otc_port, swap.id).await;
 
     let database = Database::connect(&mm_db_url, 10, 2).await.unwrap();
     database
         .payments()
-        .has_payment_been_made(response_json.swap_id)
+        .has_payment_been_made(swap.id)
         .await
         .unwrap()
         .expect("Payment storage should have recorded the txid");

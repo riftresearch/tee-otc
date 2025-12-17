@@ -7,12 +7,9 @@ use bitcoincore_rpc_async::RpcApi;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, wallet::Wallet};
 use otc_chains::traits::Payment;
-use otc_models::{SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{Swap, SwapMode, SwapStatus, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
-use otc_server::api::{
-    swaps::RefundSwapResponse,
-    CreateSwapRequest, CreateSwapResponse, SwapResponse,
-};
+use otc_server::api::{swaps::RefundSwapResponse, CreateSwapRequest};
 use reqwest::StatusCode;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::collections::HashMap;
@@ -206,8 +203,8 @@ async fn test_insufficient_bitcoin_deposit_refund(
         .await
         .unwrap();
 
-    let response_json = match response.status() {
-        StatusCode::OK => response.json::<CreateSwapResponse>().await.unwrap(),
+    let created_swap = match response.status() {
+        StatusCode::OK => response.json::<Swap>().await.unwrap(),
         status => {
             let text = response.text().await;
             panic!("Swap request failed: {status:#?} {text:#?}");
@@ -215,25 +212,21 @@ async fn test_insufficient_bitcoin_deposit_refund(
     };
 
     // Send INSUFFICIENT funds (expected_amount - 1 satoshi)
-    let insufficient_amount = response_json.min_input - U256::from(1);
+    let insufficient_amount = created_swap.quote.min_input - U256::from(1);
 
     info!(
         "Sending insufficient amount: {} (expected: {})",
-        insufficient_amount, response_json.min_input
+        insufficient_amount, created_swap.quote.min_input
     );
 
     let tx_hash = user_bitcoin_wallet
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals: response_json.decimals,
-                    },
+                    currency: created_swap.quote.from.currency.clone(),
                     amount: insufficient_amount,
                 },
-                to_address: response_json.deposit_address.clone(),
+                to_address: created_swap.deposit_vault_address.clone(),
             }],
             None,
         )
@@ -253,18 +246,18 @@ async fn test_insufficient_bitcoin_deposit_refund(
     let swap = client
         .get(format!(
             "http://localhost:{otc_port}/api/v2/swap/{}",
-            response_json.swap_id
+            created_swap.id
         ))
         .send()
         .await
         .unwrap()
-        .json::<SwapResponse>()
+        .json::<Swap>()
         .await
         .unwrap();
 
-    info!("Swap status after insufficient deposit: {}", swap.status);
+    info!("Swap status after insufficient deposit: {:?}", swap.status);
     assert_eq!(
-        swap.status, "WaitingUserDepositInitiated",
+        swap.status, SwapStatus::WaitingUserDepositInitiated,
         "Swap should remain in WaitingUserDepositInitiated due to insufficient deposit"
     );
 
@@ -272,7 +265,7 @@ async fn test_insufficient_bitcoin_deposit_refund(
     let refund_response = client
         .post(format!(
             "http://localhost:{otc_port}/api/v2/swap/{}/refund",
-            response_json.swap_id
+            created_swap.id
         ))
         .send()
         .await
@@ -340,17 +333,17 @@ async fn test_insufficient_bitcoin_deposit_refund(
     let final_swap = client
         .get(format!(
             "http://localhost:{otc_port}/api/v2/swap/{}",
-            response_json.swap_id
+            created_swap.id
         ))
         .send()
         .await
         .unwrap()
-        .json::<SwapResponse>()
+        .json::<Swap>()
         .await
         .unwrap();
 
     assert_eq!(
-        final_swap.status, "RefundingUser",
+        final_swap.status, SwapStatus::RefundingUser,
         "Swap should be in RefundingUser status"
     );
 
@@ -524,8 +517,8 @@ async fn test_insufficient_evm_deposit_refund(
         .await
         .unwrap();
 
-    let response_json = match response.status() {
-        StatusCode::OK => response.json::<CreateSwapResponse>().await.unwrap(),
+    let created_swap = match response.status() {
+        StatusCode::OK => response.json::<Swap>().await.unwrap(),
         status => {
             let text = response.text().await;
             panic!("Swap request failed: {status:#?} {text:#?}");
@@ -533,11 +526,11 @@ async fn test_insufficient_evm_deposit_refund(
     };
 
     // Send INSUFFICIENT funds (expected_amount - 1 wei)
-    let insufficient_amount = response_json.min_input - U256::from(1);
+    let insufficient_amount = created_swap.quote.min_input - U256::from(1);
 
     info!(
         "Sending insufficient amount: {} (expected: {})",
-        insufficient_amount, response_json.min_input
+        insufficient_amount, created_swap.quote.min_input
     );
 
     // Setup user provider and token contract
@@ -560,10 +553,7 @@ async fn test_insufficient_evm_deposit_refund(
     // Transfer insufficient amount to deposit address
     user_token_contract
         .transfer(
-            response_json
-                .deposit_address
-                .parse()
-                .expect("valid deposit address"),
+            created_swap.deposit_vault_address.parse().expect("valid deposit address"),
             insufficient_amount,
         )
         .send()
@@ -582,18 +572,18 @@ async fn test_insufficient_evm_deposit_refund(
     let swap = client
         .get(format!(
             "http://localhost:{otc_port}/api/v2/swap/{}",
-            response_json.swap_id
+            created_swap.id
         ))
         .send()
         .await
         .unwrap()
-        .json::<SwapResponse>()
+        .json::<Swap>()
         .await
         .unwrap();
 
-    info!("Swap status after insufficient deposit: {}", swap.status);
+    info!("Swap status after insufficient deposit: {:?}", swap.status);
     assert_eq!(
-        swap.status, "WaitingUserDepositInitiated",
+        swap.status, SwapStatus::WaitingUserDepositInitiated,
         "Swap should remain in WaitingUserDepositInitiated due to insufficient deposit"
     );
 
@@ -601,7 +591,7 @@ async fn test_insufficient_evm_deposit_refund(
     let refund_response = client
         .post(format!(
             "http://localhost:{otc_port}/api/v2/swap/{}/refund",
-            response_json.swap_id
+            created_swap.id
         ))
         .send()
         .await
@@ -679,17 +669,17 @@ async fn test_insufficient_evm_deposit_refund(
     let final_swap = client
         .get(format!(
             "http://localhost:{otc_port}/api/v2/swap/{}",
-            response_json.swap_id
+            created_swap.id
         ))
         .send()
         .await
         .unwrap()
-        .json::<SwapResponse>()
+        .json::<Swap>()
         .await
         .unwrap();
 
     assert_eq!(
-        final_swap.status, "RefundingUser",
+        final_swap.status, SwapStatus::RefundingUser,
         "Swap should be in RefundingUser status"
     );
 

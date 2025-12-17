@@ -2,9 +2,9 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy::{primitives::U256, providers::ext::AnvilApi};
 use devnet::{MultichainAccount, RiftDevnet, WithdrawalProcessingMode};
 use market_maker::{run_market_maker, wallet::Wallet, MarketMakerArgs};
-use otc_models::{SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{Swap, SwapStatus, SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
-use otc_server::api::{CreateSwapRequest, CreateSwapResponse};
+use otc_server::api::CreateSwapRequest;
 use reqwest::StatusCode;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::sync::Arc;
@@ -161,13 +161,7 @@ async fn execute_user_swap(
         };
     }
 
-    let CreateSwapResponse {
-        swap_id,
-        deposit_address,
-        min_input,
-        decimals,
-        ..
-    } = match swap_response.json().await {
+    let swap: Swap = match swap_response.json().await {
         Ok(r) => r,
         Err(e) => {
             return SwapResult {
@@ -178,6 +172,7 @@ async fn execute_user_swap(
             };
         }
     };
+    let swap_id = swap.id;
 
     info!("User {} created swap {}", user_index, swap_id);
 
@@ -206,14 +201,10 @@ async fn execute_user_swap(
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Ethereum,
-                        token: TokenIdentifier::Address(cbbtc_address.clone()),
-                        decimals,
-                    },
-                    amount: min_input,
+                    currency: swap.quote.from.currency.clone(),
+                    amount: swap.quote.min_input,
                 },
-                to_address: deposit_address,
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )
@@ -276,7 +267,7 @@ async fn wait_for_swap_settlement(
             }
         };
 
-        let swap_status: otc_server::api::SwapResponse = match response.json().await {
+        let swap: Swap = match response.json().await {
             Ok(s) => s,
             Err(e) => {
                 warn!("Failed to parse swap status for user {}: {}", user_index, e);
@@ -285,7 +276,7 @@ async fn wait_for_swap_settlement(
             }
         };
 
-        if swap_status.status == "Settled" {
+        if swap.status == SwapStatus::Settled {
             info!(
                 "User {} swap {} settled after {:?}",
                 user_index,
@@ -295,10 +286,10 @@ async fn wait_for_swap_settlement(
             return true;
         }
 
-        if swap_status.status.contains("Failed") || swap_status.status.contains("Cancelled") {
+        if swap.status == SwapStatus::Failed {
             warn!(
-                "User {} swap {} ended in state: {}",
-                user_index, swap_id, swap_status.status
+                "User {} swap {} ended in state: {:?}",
+                user_index, swap_id, swap.status
             );
             return false;
         }

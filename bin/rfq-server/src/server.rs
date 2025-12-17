@@ -442,12 +442,6 @@ async fn request_quotes(
             addresses_to_check.push(v.to_string());
         }
         if let Some(v) = headers
-            .get("x-user-evm-account-address")
-            .and_then(|v| v.to_str().ok())
-        {
-            addresses_to_check.push(v.to_string());
-        }
-        if let Some(v) = headers
             .get("x-user-destination-address")
             .and_then(|v| v.to_str().ok())
         {
