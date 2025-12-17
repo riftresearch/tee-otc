@@ -17,7 +17,10 @@ use url::Url;
 use uuid::Uuid;
 
 /// Polling interval for the suspension watcher.
-const POLL_INTERVAL: Duration = Duration::from_secs(5 * 60); // 5 minutes
+///
+/// Must be short enough to avoid a race window where an MM falls out of good standing
+/// but the RFQ server still issues quotes before the cache is refreshed.
+const POLL_INTERVAL: Duration = Duration::from_secs(30);
 
 /// Response from the OTC server's suspended market makers endpoint.
 #[derive(Debug, Deserialize)]

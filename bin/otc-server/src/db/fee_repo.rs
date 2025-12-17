@@ -332,6 +332,10 @@ impl FeeRepository {
     ///
     /// A market maker is in bad standing if their debt exceeds the threshold
     /// and they have been over the threshold for longer than the grace window.
+    ///
+    /// This query must match the semantics of `is_good_standing`:
+    /// - debt > threshold AND over_threshold_since is NULL → bad (inconsistent state, fail closed)
+    /// - debt > threshold AND over_threshold_since < cutoff → bad (grace window expired)
     pub async fn list_bad_standing(&self, now: DateTime<Utc>) -> OtcServerResult<Vec<Uuid>> {
         let cutoff = now - GOOD_STANDING_WINDOW;
 
@@ -340,8 +344,7 @@ impl FeeRepository {
             SELECT market_maker_id
             FROM mm_fee_state
             WHERE debt_sats > $1
-              AND over_threshold_since IS NOT NULL
-              AND over_threshold_since < $2
+              AND (over_threshold_since IS NULL OR over_threshold_since < $2)
             "#,
         )
         .bind(GOOD_STANDING_THRESHOLD_SATS)
