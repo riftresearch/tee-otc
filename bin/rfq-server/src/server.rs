@@ -263,7 +263,7 @@ async fn metrics_handler(State(handle): State<Arc<PrometheusHandle>>) -> impl In
 
 async fn status_handler(State(state): State<AppState>) -> Json<Status> {
     Json(Status {
-        status: "online".to_string(),
+        status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         connected_market_makers: state.mm_registry.get_connected_market_makers(),
     })

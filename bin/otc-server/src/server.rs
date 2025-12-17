@@ -454,7 +454,7 @@ async fn metrics_handler(State(handle): State<Arc<PrometheusHandle>>) -> impl In
 
 async fn status_handler(State(state): State<AppState>) -> impl IntoResponse {
     Json(Status {
-        status: "online".to_string(),
+        status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         last_monitor_pass: state.swap_monitoring_service.last_monitor_pass(),
         connected_market_makers: state.mm_registry.get_connected_market_makers(),
