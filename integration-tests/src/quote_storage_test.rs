@@ -18,8 +18,8 @@ async fn test_quote_storage_round_trip(
     let storage = database.quotes();
 
     let original_quote = Quote {
-        id: Uuid::new_v4(),
-        market_maker_id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
+        market_maker_id: Uuid::now_v7(),
         from: Lot {
             currency: Currency {
                 chain: ChainType::Bitcoin,

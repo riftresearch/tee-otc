@@ -47,7 +47,7 @@ impl QuoteAggregator {
 
     /// Request quotes from all connected market makers and return the best one
     pub async fn request_quotes(&self, request: QuoteRequest) -> Result<QuoteRequestResult> {
-        let request_id = Uuid::new_v4();
+        let request_id = Uuid::now_v7();
 
         info!(
             request_id = %request_id,

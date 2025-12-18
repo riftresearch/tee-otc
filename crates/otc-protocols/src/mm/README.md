@@ -19,7 +19,7 @@ use otc_mm_protocol::{MMRequest, MMResponse, ProtocolMessage};
 
 // Create a quote validation request
 let request = MMRequest::ValidateQuote {
-    request_id: Uuid::new_v4(),
+    request_id: Uuid::now_v7(),
     quote_id: quote.id,
     user_id: user.id,
     timestamp: utc::now(),

@@ -1239,7 +1239,7 @@ impl MessageHandler for OTCMessageHandler {
 
 async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     // Generate unique connection ID to prevent race conditions
-    let connection_id = Uuid::new_v4();
+    let connection_id = Uuid::now_v7();
 
     // Create channel for registry to send messages to the connection
     let (tx, rx) = mpsc::channel::<Message>(100);

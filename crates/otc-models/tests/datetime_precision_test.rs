@@ -22,8 +22,8 @@ fn test_datetime_precision_affects_hash() {
 
     // Now create two identical quotes except for timestamp precision
     let quote1 = Quote {
-        id: Uuid::new_v4(),
-        market_maker_id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
+        market_maker_id: Uuid::now_v7(),
         from: Lot {
             currency: Currency {
                 chain: ChainType::Bitcoin,

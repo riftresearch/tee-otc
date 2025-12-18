@@ -1,9 +1,6 @@
 -- TEE-OTC Initial Database Schema
 -- This single migration creates the entire database schema from scratch
 
--- Enable UUID extension
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-
 -- Create swap status enum with all states
 CREATE TYPE swap_status AS ENUM (
     'waiting_user_deposit_initiated',
@@ -18,7 +15,7 @@ CREATE TYPE swap_status AS ENUM (
 
 -- Create quotes table with exact amounts AND bounds
 CREATE TABLE quotes (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY,
 
     -- From lot (what user sends: currency + exact quoted amount)
     from_chain VARCHAR(50) NOT NULL,
@@ -60,7 +57,7 @@ CREATE INDEX idx_quotes_affiliate ON quotes (affiliate) WHERE affiliate IS NOT N
 
 -- Create swaps table with enhanced state tracking
 CREATE TABLE swaps (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY,
     quote_id UUID NOT NULL REFERENCES quotes(id),
     market_maker_id UUID NOT NULL,
     metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -139,7 +136,7 @@ CREATE TRIGGER update_swaps_updated_at BEFORE UPDATE ON swaps
 
 -- Append-only ledger of debt changes (accruals and payments)
 CREATE TABLE mm_protocol_fee_ledger (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY,
     market_maker_id UUID NOT NULL,
     delta_sats BIGINT NOT NULL,
     kind TEXT NOT NULL,
@@ -165,7 +162,7 @@ CREATE INDEX mm_protocol_fee_ledger_mm_created_at
 
 -- Fee settlements (one per on-chain settlement tx), storing referenced batches directly (Option 1)
 CREATE TABLE mm_fee_settlements (
-    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    id UUID PRIMARY KEY,
     market_maker_id UUID NOT NULL,
     chain TEXT NOT NULL,
     tx_hash TEXT NOT NULL,

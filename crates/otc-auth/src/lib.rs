@@ -75,7 +75,7 @@ mod tests {
         let file_path = dir.path().join("whitelist.json");
 
         let api_keys = vec![PublicApiKeyRecord {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             tag: "test_mm".to_string(),
             hash: "$argon2id$v=19$m=19456,t=2,p=1$test_salt$test_hash".to_string(),
         }];
@@ -84,6 +84,6 @@ mod tests {
 
         let store = ApiKeyStore::new(api_keys.clone()).await.unwrap();
         assert!(store.exists(&api_keys[0].id));
-        assert!(!store.exists(&Uuid::new_v4()));
+        assert!(!store.exists(&Uuid::now_v7()));
     }
 }

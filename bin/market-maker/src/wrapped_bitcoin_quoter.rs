@@ -350,7 +350,7 @@ impl WrappedBitcoinQuoter {
         }
 
         let quote = Quote {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             market_maker_id,
             from: Lot {
                 currency: quote_request.from.clone(),

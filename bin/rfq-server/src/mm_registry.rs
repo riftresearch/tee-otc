@@ -132,7 +132,7 @@ impl RfqMMRegistry {
             let (response_tx, response_rx) = mpsc::channel::<RFQResponse>(1);
 
             // Store the response channel for this MM and request
-            let mm_request_id = Uuid::new_v4(); // Unique ID for this MM's request
+            let mm_request_id = Uuid::now_v7(); // Unique ID for this MM's request
             self.pending_requests.insert(mm_request_id, response_tx);
 
             let request = ProtocolMessage {
@@ -195,7 +195,7 @@ impl RfqMMRegistry {
             let (response_tx, response_rx) = mpsc::channel::<RFQResponse>(1);
 
             // Store the response channel for this MM and request
-            let mm_request_id = Uuid::new_v4(); // Unique ID for this MM's request
+            let mm_request_id = Uuid::now_v7(); // Unique ID for this MM's request
             self.pending_requests.insert(mm_request_id, response_tx);
 
             let request = ProtocolMessage {
@@ -312,8 +312,8 @@ mod tests {
     async fn test_register_unregister() {
         let registry = RfqMMRegistry::new(None);
         let (tx, _rx) = mpsc::channel(10);
-        let mm_id = Uuid::new_v4();
-        let conn_id = Uuid::new_v4();
+        let mm_id = Uuid::now_v7();
+        let conn_id = Uuid::now_v7();
 
         // Register a market maker
         registry.register(mm_id, conn_id, tx, "1.0.0".to_string());
@@ -329,17 +329,17 @@ mod tests {
     #[tokio::test]
     async fn test_unregister_race_condition() {
         let registry = RfqMMRegistry::new(None);
-        let mm_id = Uuid::new_v4();
+        let mm_id = Uuid::now_v7();
         
         // Connection A registers
         let (tx_a, _rx_a) = mpsc::channel(10);
-        let conn_id_a = Uuid::new_v4();
+        let conn_id_a = Uuid::now_v7();
         registry.register(mm_id, conn_id_a, tx_a, "1.0.0".to_string());
         assert!(registry.is_connected(mm_id));
         
         // Connection B registers (overwrites A)
         let (tx_b, _rx_b) = mpsc::channel(10);
-        let conn_id_b = Uuid::new_v4();
+        let conn_id_b = Uuid::now_v7();
         registry.register(mm_id, conn_id_b, tx_b, "1.0.0".to_string());
         assert!(registry.is_connected(mm_id));
         

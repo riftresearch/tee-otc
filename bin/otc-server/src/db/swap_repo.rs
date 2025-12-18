@@ -1246,8 +1246,8 @@ mod tests {
 
     fn create_test_quote() -> Quote {
         Quote {
-            id: Uuid::new_v4(),
-            market_maker_id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
+            market_maker_id: Uuid::now_v7(),
             from: Lot {
                 currency: Currency {
                     chain: ChainType::Bitcoin,
@@ -1285,7 +1285,7 @@ mod tests {
         getrandom::getrandom(&mut mm_nonce).unwrap();
 
         Swap {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             market_maker_id: quote.market_maker_id,
             quote,
             metadata: Metadata {

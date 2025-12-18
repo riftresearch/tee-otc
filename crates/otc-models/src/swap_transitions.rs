@@ -267,10 +267,10 @@ mod tests {
 
     fn create_test_swap() -> Swap {
         Swap {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             quote: Quote {
-                id: Uuid::new_v4(),
-                market_maker_id: Uuid::new_v4(),
+                id: Uuid::now_v7(),
+                market_maker_id: Uuid::now_v7(),
                 from: Lot {
                     currency: Currency {
                         chain: ChainType::Ethereum,
@@ -299,7 +299,7 @@ mod tests {
                 expires_at: utc::now() + Duration::hours(1),
                 created_at: utc::now(),
             },
-            market_maker_id: Uuid::new_v4(),
+            market_maker_id: Uuid::now_v7(),
             metadata: Metadata::default(),
             realized: None,
             deposit_vault_salt: [0u8; 32],

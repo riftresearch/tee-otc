@@ -313,7 +313,7 @@ impl SwapManager {
         }
 
         // 5. Generate random salts for wallet derivation
-        let swap_id = Uuid::new_v4();
+        let swap_id = Uuid::now_v7();
         let mut deposit_vault_salt = [0u8; 32];
         let mut mm_nonce = [0u8; 16]; // 128 bits of collision resistance against an existing tx w/ a given output address && amount
         getrandom::getrandom(&mut deposit_vault_salt).expect("Failed to generate random salt");

@@ -202,8 +202,8 @@ mod tests {
 
     fn make_test_quote() -> Quote {
         Quote {
-            id: uuid::Uuid::new_v4(),
-            market_maker_id: uuid::Uuid::new_v4(),
+            id: uuid::Uuid::now_v7(),
+            market_maker_id: uuid::Uuid::now_v7(),
             from: Lot {
                 currency: Currency {
                     chain: ChainType::Bitcoin,
@@ -236,8 +236,8 @@ mod tests {
 
     fn make_test_swap(status: SwapStatus) -> Swap {
         Swap {
-            id: uuid::Uuid::new_v4(),
-            market_maker_id: uuid::Uuid::new_v4(),
+            id: uuid::Uuid::now_v7(),
+            market_maker_id: uuid::Uuid::now_v7(),
             quote: make_test_quote(),
             metadata: Metadata::default(),
             realized: None,

@@ -197,7 +197,7 @@ mod tests {
 
     fn make_test_quote(mm_id: Uuid, expires_at: chrono::DateTime<chrono::Utc>) -> Quote {
         Quote {
-            id: Uuid::new_v4(),
+            id: Uuid::now_v7(),
             market_maker_id: mm_id,
             from: Lot {
                 currency: Currency {
@@ -237,7 +237,7 @@ mod tests {
         let db = Database::from_pool(pool.clone()).await.unwrap();
         let quote_repo = db.quotes();
 
-        let original_quote = make_test_quote(Uuid::new_v4(), utc::now() + Duration::minutes(10));
+        let original_quote = make_test_quote(Uuid::now_v7(), utc::now() + Duration::minutes(10));
 
         // Store the quote
         quote_repo.create(&original_quote).await.unwrap();
@@ -281,7 +281,7 @@ mod tests {
         let db = Database::from_pool(pool.clone()).await.unwrap();
         let quote_repo = db.quotes();
 
-        let mm_id = Uuid::new_v4();
+        let mm_id = Uuid::now_v7();
 
         // Create quotes - some expired, some active
         let expired_quote = make_test_quote(mm_id, utc::now() - Duration::hours(1));

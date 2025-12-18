@@ -513,7 +513,7 @@ async fn process_batch(
 
             // Send batch payment notification to OTC server
             let response = MMResponse::Batches {
-                request_id: Uuid::new_v4(),
+                request_id: Uuid::now_v7(),
                 batches: vec![NetworkBatch {
                     tx_hash: tx_hash.clone(),
                     swap_ids: swap_ids.clone(),
@@ -718,10 +718,10 @@ mod tests {
         let threshold = MM_NEVER_DEPOSITS_TIMEOUT - MM_DEPOSIT_RISK_WINDOW;
         let now = utc::now();
 
-        let eligible_swap = Uuid::new_v4();
+        let eligible_swap = Uuid::now_v7();
         let eligible_payment = MarketMakerQueuedPayment {
             swap_id: eligible_swap,
-            quote_id: Uuid::new_v4(),
+            quote_id: Uuid::now_v7(),
             lot: lot.clone(),
             destination_address: "dest_a".to_string(),
             mm_nonce: [1u8; 16],
@@ -729,10 +729,10 @@ mod tests {
             protocol_fee: U256::from(300),
         };
 
-        let ineligible_swap = Uuid::new_v4();
+        let ineligible_swap = Uuid::now_v7();
         let ineligible_payment = MarketMakerQueuedPayment {
             swap_id: ineligible_swap,
-            quote_id: Uuid::new_v4(),
+            quote_id: Uuid::now_v7(),
             lot,
             destination_address: "dest_b".to_string(),
             mm_nonce: [2u8; 16],

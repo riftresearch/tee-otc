@@ -49,7 +49,7 @@ impl LiquidityAggregator {
 
     /// Request liquidity information from all connected market makers
     pub async fn request_liquidity(&self) -> Result<LiquidityAggregatorResult> {
-        let request_id = Uuid::new_v4();
+        let request_id = Uuid::now_v7();
 
         info!(
             request_id = %request_id,

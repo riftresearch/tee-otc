@@ -275,7 +275,7 @@ pub fn build_bitcoin_wallet_descriptor(private_key: &bitcoin::PrivateKey) -> Str
 }
 
 pub fn build_tmp_bitcoin_wallet_db_file() -> String {
-    format!("/tmp/bitcoin_wallet_{}.db", uuid::Uuid::new_v4())
+    format!("/tmp/bitcoin_wallet_{}.db", uuid::Uuid::now_v7())
 }
 
 pub async fn build_mm_test_args(
@@ -406,7 +406,7 @@ pub async fn create_test_database(connect_options: &PgConnectOptions) -> sqlx::R
     let mut admin =
         PgConnection::connect_with(&connect_options.clone().database("postgres")).await?;
 
-    let db = format!("test_db_{}", Uuid::new_v4().simple());
+    let db = format!("test_db_{}", Uuid::now_v7().simple());
 
     sqlx::query(&format!("CREATE DATABASE {db}"))
         .execute(&mut admin)

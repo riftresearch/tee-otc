@@ -134,13 +134,13 @@ mod tests {
             suspended: suspended.clone(),
         };
 
-        let mm_id = Uuid::new_v4();
+        let mm_id = Uuid::now_v7();
         assert!(!watcher.is_suspended(mm_id).await);
     }
 
     #[tokio::test]
     async fn test_suspension_watcher_contains() {
-        let mm_id = Uuid::new_v4();
+        let mm_id = Uuid::now_v7();
         let mut set = HashSet::new();
         set.insert(mm_id);
 
@@ -150,7 +150,7 @@ mod tests {
         };
 
         assert!(watcher.is_suspended(mm_id).await);
-        assert!(!watcher.is_suspended(Uuid::new_v4()).await);
+        assert!(!watcher.is_suspended(Uuid::now_v7()).await);
     }
 }
 

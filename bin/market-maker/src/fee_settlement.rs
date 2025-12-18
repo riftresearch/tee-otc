@@ -84,7 +84,7 @@ pub fn spawn_fee_settlement_engine(
                             FeeSettlementRail::Evm => s.evm_chain.unwrap_or(evm_chain),
                         };
 
-                        let request_id = Uuid::new_v4();
+                        let request_id = Uuid::now_v7();
                         if let Err(e) = payment_repository
                             .mark_fee_settlement_submission_attempt(&s.txid, request_id, now)
                             .await
@@ -251,7 +251,7 @@ pub fn spawn_fee_settlement_engine(
             }
 
             // Notify otc-server (and record submission attempt for replay backoff).
-            let request_id = Uuid::new_v4();
+            let request_id = Uuid::now_v7();
             if let Err(e) = payment_repository
                 .mark_fee_settlement_submission_attempt(&tx_hash, request_id, now)
                 .await
@@ -322,7 +322,7 @@ async fn request_standing_inline(
     otc_handle: &crate::websocket_client::WebSocketHandle,
     registry: &StandingRequestRegistry,
 ) -> Result<FeeStandingStatus> {
-    let request_id = Uuid::new_v4();
+    let request_id = Uuid::now_v7();
     let (tx, rx) = oneshot::channel();
     registry.pending.insert(request_id, tx);
 
@@ -356,7 +356,7 @@ mod tests {
 
     #[test]
     fn settlement_digest_is_order_invariant() {
-        let mm_id = Uuid::new_v4();
+        let mm_id = Uuid::now_v7();
         let a = [1u8; 32];
         let b = [2u8; 32];
 

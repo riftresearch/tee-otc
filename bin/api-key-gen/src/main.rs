@@ -76,7 +76,7 @@ fn hash_api_key(api_key: &str) -> Result<String> {
 
 fn generate_command(tag: String) -> Result<()> {
     // Generate new API key
-    let id = Uuid::new_v4();
+    let id = Uuid::now_v7();
     let api_secret = generate_api_secret();
     let hash = hash_api_key(&api_secret)?;
 

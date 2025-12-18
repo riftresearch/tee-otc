@@ -285,7 +285,7 @@ mod tests {
     #[tokio::test]
     async fn test_lock_and_unlock() {
         let manager = LiquidityLockManager::with_ttl(DEFAULT_LOCK_TTL);
-        let swap_id = Uuid::new_v4();
+        let swap_id = Uuid::now_v7();
 
         let from = create_test_currency(ChainType::Bitcoin, TokenIdentifier::Native);
         let to = create_test_currency(ChainType::Ethereum, TokenIdentifier::Native);
@@ -324,7 +324,7 @@ mod tests {
 
         // Lock multiple swaps
         for i in 0..5 {
-            let swap_id = Uuid::new_v4();
+            let swap_id = Uuid::now_v7();
             let locked = LockedLiquidity {
                 from: from.clone(),
                 to: to.clone(),
@@ -356,8 +356,8 @@ mod tests {
             created_at: utc::now(),
         };
 
-        manager.lock(Uuid::new_v4(), btc_to_eth.clone()).await;
-        manager.lock(Uuid::new_v4(), eth_to_btc.clone()).await;
+        manager.lock(Uuid::now_v7(), btc_to_eth.clone()).await;
+        manager.lock(Uuid::now_v7(), eth_to_btc.clone()).await;
 
         // Query should only return matching pair
         let btc_eth_locked = manager.get_locked_amount(&btc_to_eth.from, &btc_to_eth.to).await;
@@ -370,7 +370,7 @@ mod tests {
     #[tokio::test]
     async fn test_ttl_expiration() {
         let manager = LiquidityLockManager::with_ttl(Duration::minutes(1));
-        let swap_id = Uuid::new_v4();
+        let swap_id = Uuid::now_v7();
         let from = create_test_currency(ChainType::Bitcoin, TokenIdentifier::Native);
         let to = create_test_currency(ChainType::Ethereum, TokenIdentifier::Native);
 
@@ -397,7 +397,7 @@ mod tests {
     #[tokio::test]
     async fn test_case_insensitive_address_matching() {
         let manager = LiquidityLockManager::with_ttl(DEFAULT_LOCK_TTL);
-        let swap_id = Uuid::new_v4();
+        let swap_id = Uuid::now_v7();
 
         // Lock with checksummed address (mixed case)
         let from = Currency {
