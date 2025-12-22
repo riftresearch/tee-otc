@@ -29,6 +29,7 @@ trait BatchPaymentRecorder: Send + Sync {
         txid: String,
         chain: ChainType,
         batch_nonce_digest: [u8; 32],
+        aggregated_fee_sats: u64,
     ) -> crate::db::PaymentRepositoryResult<()>;
 }
 
@@ -40,8 +41,17 @@ impl BatchPaymentRecorder for PaymentRepository {
         txid: String,
         chain: ChainType,
         batch_nonce_digest: [u8; 32],
+        aggregated_fee_sats: u64,
     ) -> crate::db::PaymentRepositoryResult<()> {
-        PaymentRepository::set_batch_payment(self, swap_ids, txid, chain, batch_nonce_digest).await
+        PaymentRepository::set_batch_payment(
+            self,
+            swap_ids,
+            txid,
+            chain,
+            batch_nonce_digest,
+            aggregated_fee_sats,
+        )
+        .await
     }
 }
 
@@ -71,6 +81,7 @@ impl PaymentManager {
         wallet_manager: Arc<WalletManager>,
         payment_repository: Arc<PaymentRepository>,
         batch_configs: HashMap<ChainType, BatchConfig>,
+        balance_strategy: Arc<QuoteBalanceStrategy>,
         otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
         cancellation_token: CancellationToken,
         join_set: &mut JoinSet<crate::Result<()>>,
@@ -91,6 +102,7 @@ impl PaymentManager {
                     payment_repository.clone(),
                     bitcoin_rx,
                     config.clone(),
+                    balance_strategy.clone(),
                     otc_response_tx.clone(),
                     in_flight_payments.clone(),
                     cancellation_token.clone(),
@@ -108,6 +120,7 @@ impl PaymentManager {
                     payment_repository.clone(),
                     ethereum_rx,
                     config.clone(),
+                    balance_strategy.clone(),
                     otc_response_tx.clone(),
                     in_flight_payments.clone(),
                     cancellation_token.clone(),
@@ -125,6 +138,7 @@ impl PaymentManager {
                     payment_repository.clone(),
                     base_rx,
                     config.clone(),
+                    balance_strategy.clone(),
                     otc_response_tx.clone(),
                     in_flight_payments.clone(),
                     cancellation_token.clone(),
@@ -153,6 +167,7 @@ impl PaymentManager {
         user_deposit_confirmed_at: DateTime<Utc>,
         mm_nonce: &[u8; 16],
         expected_lot: &Lot,
+        protocol_fee: U256,
     ) -> MMResponse {
         // Validate that we have a wallet for this chain
         let wallet = self.wallet_manager.get(expected_lot.currency.chain);
@@ -225,6 +240,7 @@ impl PaymentManager {
             destination_address: user_destination_address.to_string(),
             mm_nonce: *mm_nonce,
             user_deposit_confirmed_at: Some(user_deposit_confirmed_at),
+            protocol_fee,
         };
 
         // Send to appropriate chain's channel
@@ -266,6 +282,7 @@ fn spawn_batch_processor(
     payment_recorder: Arc<dyn BatchPaymentRecorder>,
     mut rx: mpsc::UnboundedReceiver<MarketMakerQueuedPayment>,
     config: BatchConfig,
+    balance_strategy: Arc<QuoteBalanceStrategy>,
     otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
     in_flight_payments: Arc<DashMap<Uuid, ()>>,
     cancellation_token: CancellationToken,
@@ -282,9 +299,6 @@ fn spawn_batch_processor(
 
         // Payments that couldn't fit in previous batches due to balance constraints
         let mut retry_payments: Vec<MarketMakerQueuedPayment> = Vec::new();
-        
-        // Allow 10% margin for network fees (TODO: This is overkill and temporary)
-        let balance_strategy = QuoteBalanceStrategy::new(9000);
 
         loop {
             // Check for cancellation before processing
@@ -458,6 +472,7 @@ async fn process_batch(
     };
 
     let batch_nonce_digest = payment_batch.payment_verification.batch_nonce_digest;
+    let aggregated_fee_sats = payment_batch.payment_verification.aggregated_fee.to::<u64>();
 
     // Execute the batch payment
     match wallet
@@ -476,7 +491,13 @@ async fn process_batch(
 
             // Store all payments with the same tx_hash
             if let Err(e) = payment_recorder
-                .record_batch_payment(swap_ids.clone(), tx_hash.clone(), chain_type, batch_nonce_digest)
+                .record_batch_payment(
+                    swap_ids.clone(),
+                    tx_hash.clone(),
+                    chain_type,
+                    batch_nonce_digest,
+                    aggregated_fee_sats,
+                )
                 .await
             {
                 error!(
@@ -492,7 +513,7 @@ async fn process_batch(
 
             // Send batch payment notification to OTC server
             let response = MMResponse::Batches {
-                request_id: Uuid::new_v4(),
+                request_id: Uuid::now_v7(),
                 batches: vec![NetworkBatch {
                     tx_hash: tx_hash.clone(),
                     swap_ids: swap_ids.clone(),
@@ -565,6 +586,7 @@ mod tests {
             _txid: String,
             _chain: ChainType,
             _batch_nonce_digest: [u8; 32],
+            _aggregated_fee_sats: u64,
         ) -> crate::db::PaymentRepositoryResult<()> {
             self.recorded.lock().unwrap().push(swap_ids);
             Ok(())
@@ -675,6 +697,7 @@ mod tests {
                 interval_secs: 1,
                 batch_size: 10,
             },
+            Arc::new(QuoteBalanceStrategy::new(10000)), // 100% for test (no balance constraints)
             otc_tx,
             in_flight.clone(),
             cancellation_token,
@@ -695,24 +718,26 @@ mod tests {
         let threshold = MM_NEVER_DEPOSITS_TIMEOUT - MM_DEPOSIT_RISK_WINDOW;
         let now = utc::now();
 
-        let eligible_swap = Uuid::new_v4();
+        let eligible_swap = Uuid::now_v7();
         let eligible_payment = MarketMakerQueuedPayment {
             swap_id: eligible_swap,
-            quote_id: Uuid::new_v4(),
+            quote_id: Uuid::now_v7(),
             lot: lot.clone(),
             destination_address: "dest_a".to_string(),
             mm_nonce: [1u8; 16],
             user_deposit_confirmed_at: Some(now - (threshold - ChronoDuration::seconds(5))),
+            protocol_fee: U256::from(300),
         };
 
-        let ineligible_swap = Uuid::new_v4();
+        let ineligible_swap = Uuid::now_v7();
         let ineligible_payment = MarketMakerQueuedPayment {
             swap_id: ineligible_swap,
-            quote_id: Uuid::new_v4(),
+            quote_id: Uuid::now_v7(),
             lot,
             destination_address: "dest_b".to_string(),
             mm_nonce: [2u8; 16],
             user_deposit_confirmed_at: Some(now - (threshold + ChronoDuration::seconds(5))),
+            protocol_fee: U256::from(300),
         };
 
         in_flight.insert(eligible_swap, ());

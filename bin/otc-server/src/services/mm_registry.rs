@@ -1,6 +1,8 @@
+use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use otc_models::Lot;
+use otc_models::ChainType;
 use otc_protocols::mm::{MMRequest, ProtocolMessage};
 use snafu::Snafu;
 use std::sync::Arc;
@@ -123,19 +125,21 @@ impl MMRegistry {
         market_maker_id: &Uuid,
         swap_id: &Uuid,
         quote_id: &Uuid,
-        user_deposit_address: &str,
+        deposit_vault_address: &str,
         user_tx_hash: &str,
+        deposit_amount: U256,
     ) {
         if let Some(conn) = self.connections.get(market_maker_id) {
             let request = ProtocolMessage {
                 version: conn.protocol_version.clone(),
                 sequence: 0,
                 payload: MMRequest::UserDeposited {
-                    request_id: Uuid::new_v4(),
+                    request_id: Uuid::now_v7(),
                     swap_id: *swap_id,
                     quote_id: *quote_id,
                     user_tx_hash: user_tx_hash.to_string(),
-                    deposit_address: user_deposit_address.to_string(),
+                    deposit_address: deposit_vault_address.to_string(),
+                    deposit_amount,
                     timestamp: utc::now(),
                 },
             };
@@ -167,7 +171,7 @@ impl MMRegistry {
             version: protocol_version,
             sequence: 0,
             payload: MMRequest::NewBatches {
-                request_id: Uuid::new_v4(),
+                request_id: Uuid::now_v7(),
                 newest_batch_timestamp,
             },
         };
@@ -201,7 +205,7 @@ impl MMRegistry {
             version: protocol_version,
             sequence: 0,
             payload: MMRequest::LatestDepositVaultTimestamp {
-                request_id: Uuid::new_v4(),
+                request_id: Uuid::now_v7(),
             },
         };
 
@@ -225,6 +229,7 @@ impl MMRegistry {
         user_destination_address: &str,
         mm_nonce: [u8; 16],
         expected_lot: &Lot,
+        protocol_fee: U256,
         user_deposit_confirmed_at: DateTime<Utc>,
     ) {
         if let Some(conn) = self.connections.get(market_maker_id) {
@@ -232,12 +237,13 @@ impl MMRegistry {
                 version: conn.protocol_version.clone(),
                 sequence: 0,
                 payload: MMRequest::UserDepositConfirmed {
-                    request_id: Uuid::new_v4(),
+                    request_id: Uuid::now_v7(),
                     swap_id: *swap_id,
                     quote_id: *quote_id,
                     user_destination_address: user_destination_address.to_string(),
                     mm_nonce,
                     expected_lot: expected_lot.clone(),
+                    protocol_fee,
                     user_deposit_confirmed_at,
                     timestamp: utc::now(),
                 },
@@ -275,7 +281,7 @@ impl MMRegistry {
                 version: conn.protocol_version.clone(),
                 sequence: 0,
                 payload: MMRequest::SwapComplete {
-                    request_id: Uuid::new_v4(),
+                    request_id: Uuid::now_v7(),
                     swap_id: *swap_id,
                     user_deposit_private_key: user_deposit_private_key.to_string(),
                     lot: lot.clone(),
@@ -287,6 +293,43 @@ impl MMRegistry {
             if let Err(e) = conn.sender.send(request).await {
                 error!(market_maker_id = %market_maker_id, error = %e, "Failed to send swap complete notification");
             }
+        }
+    }
+
+    pub async fn notify_fee_settlement_ack(
+        &self,
+        market_maker_id: &Uuid,
+        request_id: Uuid,
+        chain: ChainType,
+        tx_hash: &str,
+        accepted: bool,
+        rejection_reason: Option<String>,
+    ) {
+        if let Some(conn) = self.connections.get(market_maker_id) {
+            let request = ProtocolMessage {
+                version: conn.protocol_version.clone(),
+                sequence: 0,
+                payload: MMRequest::FeeSettlementAck {
+                    request_id,
+                    chain,
+                    tx_hash: tx_hash.to_string(),
+                    accepted,
+                    rejection_reason,
+                    timestamp: utc::now(),
+                },
+            };
+            if let Err(e) = conn.sender.send(request).await {
+                error!(
+                    market_maker_id = %market_maker_id,
+                    error = %e,
+                    "Failed to send fee settlement ack to market maker"
+                );
+            }
+        } else {
+            warn!(
+                market_maker_id = %market_maker_id,
+                "Cannot send fee settlement ack - market maker not connected"
+            );
         }
     }
 
@@ -321,7 +364,7 @@ impl MMRegistry {
             version: mm_connection.protocol_version.clone(),
             sequence: 0, // TODO: Implement sequence tracking
             payload: MMRequest::ValidateQuote {
-                request_id: Uuid::new_v4(),
+                request_id: Uuid::now_v7(),
                 quote_id: *quote_id,
                 quote_hash: *quote_hash,
                 user_destination_address: user_destination_address.to_string(),
@@ -389,8 +432,8 @@ mod tests {
     async fn test_register_unregister() {
         let registry = MMRegistry::new();
         let (tx, _rx) = mpsc::channel(10);
-        let mm_id = Uuid::new_v4();
-        let conn_id = Uuid::new_v4();
+        let mm_id = Uuid::now_v7();
+        let conn_id = Uuid::now_v7();
 
         // Register a market maker
         registry.register(mm_id, conn_id, tx, "1.0.0".to_string());
@@ -406,17 +449,17 @@ mod tests {
     #[tokio::test]
     async fn test_unregister_race_condition() {
         let registry = MMRegistry::new();
-        let mm_id = Uuid::new_v4();
+        let mm_id = Uuid::now_v7();
         
         // Connection A registers
         let (tx_a, _rx_a) = mpsc::channel(10);
-        let conn_id_a = Uuid::new_v4();
+        let conn_id_a = Uuid::now_v7();
         registry.register(mm_id, conn_id_a, tx_a, "1.0.0".to_string());
         assert!(registry.is_connected(mm_id));
         
         // Connection B registers (overwrites A)
         let (tx_b, _rx_b) = mpsc::channel(10);
-        let conn_id_b = Uuid::new_v4();
+        let conn_id_b = Uuid::now_v7();
         registry.register(mm_id, conn_id_b, tx_b, "1.0.0".to_string());
         assert!(registry.is_connected(mm_id));
         
@@ -433,12 +476,12 @@ mod tests {
     async fn test_validate_quote_not_connected() {
         let registry = MMRegistry::new();
         let (response_tx, response_rx) = oneshot::channel();
-        let unknown_mm_id = Uuid::new_v4();
+        let unknown_mm_id = Uuid::now_v7();
 
         let () = registry
             .validate_quote(
                 &unknown_mm_id,
-                &Uuid::new_v4(),
+                &Uuid::now_v7(),
                 &[0u8; 32],
                 "0x123",
                 response_tx,

@@ -21,7 +21,7 @@ const LIQUIDITY_COMPUTE_INTERVAL: Duration = Duration::from_secs(1);
 ///
 /// Ethereum addresses can be represented in different cases (checksummed, lowercase, uppercase),
 /// but they all represent the same address. This function normalizes to lowercase.
-fn normalize_token(token: &TokenIdentifier) -> TokenIdentifier {
+pub fn normalize_token(token: &TokenIdentifier) -> TokenIdentifier {
     match token {
         TokenIdentifier::Native => TokenIdentifier::Native,
         TokenIdentifier::Address(addr) => TokenIdentifier::Address(addr.to_lowercase()),
@@ -222,6 +222,19 @@ impl LiquidityCache {
         let available_balance = balance.total_balance.saturating_sub(locked_amount);
         
         Some(available_balance)
+    }
+
+    /// Get the maximum output amount for a trading pair after applying balance strategy.
+    ///
+    /// This is consistent with what the liquidity endpoint reports.
+    /// Returns `None` if the balance is not cached or not available.
+    pub async fn get_max_output_for_pair(
+        &self,
+        from: &Currency,
+        to: &Currency,
+    ) -> Option<U256> {
+        let available_balance = self.get_available_balance_for_pair(from, to).await?;
+        Some(self.balance_strategy.max_output_amount(available_balance))
     }
 
     /// Check if a quote can be filled for a trading pair.

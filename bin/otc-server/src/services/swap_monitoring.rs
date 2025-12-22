@@ -4,7 +4,7 @@ use crate::{config::Settings, services::mm_registry};
 use metrics::{gauge, histogram};
 use otc_chains::traits::{MarketMakerQueuedPayment, MarketMakerQueuedPaymentExt};
 use otc_chains::ChainRegistry;
-use otc_models::{MMDepositStatus, Swap, SwapStatus, TxStatus, UserDepositStatus};
+use otc_models::{Lot, MMDepositStatus, RealizedSwap, Swap, SwapStatus, TxStatus, UserDepositStatus};
 use snafu::{location, prelude::*, Location};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -68,6 +68,15 @@ pub enum MonitoringError {
     InvalidMarketMakerBatch {
         context: String,
         tx_hash: String,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
+    #[snafu(display("Deposit amount {amount} is outside quote bounds [{min}, {max}] at {loc}"))]
+    DepositOutOfBounds {
+        amount: alloy::primitives::U256,
+        min: alloy::primitives::U256,
+        max: alloy::primitives::U256,
         #[snafu(implicit)]
         loc: Location,
     },
@@ -309,7 +318,7 @@ impl SwapMonitoringService {
         // Get the quote to know what token/chain to check
         let quote = &swap.quote;
 
-        // Get the chain operations for the user's deposit chain (from = user sends)
+        // Get the chain operations for the user's deposit chain (from_currency = user sends)
         let chain_ops = self.chain_registry.get(&quote.from.currency.chain).ok_or(
             MonitoringError::ChainOperation {
                 source: otc_chains::Error::ChainNotSupported {
@@ -321,20 +330,20 @@ impl SwapMonitoringService {
 
         // Derive the user deposit address
         let user_wallet = chain_ops
-            .derive_wallet(&self.settings.master_key_bytes(), &swap.user_deposit_salt)
+            .derive_wallet(&self.settings.master_key_bytes(), &swap.deposit_vault_salt)
             .context(ChainOperationSnafu)?;
 
 
-        // Check for deposit from the user's wallet
+        // Check for deposit from the user's wallet (any amount)
         let deposit_info = chain_ops
-            .search_for_transfer(&user_wallet.address, &quote.from, None)
+            .search_for_transfer(&user_wallet.address, &quote.from.currency, None)
             .await
             .context(ChainOperationSnafu)?;
 
         if let Some(deposit) = deposit_info {
             debug!(
-                "User deposit detected for swap {}: {} on chain {:?}",
-                swap.id, deposit.tx_hash, quote.from.currency.chain
+                "User deposit detected for swap {}: {} on chain {:?}, amount: {}",
+                swap.id, deposit.tx_hash, quote.from.currency.chain, deposit.amount
             );
 
             if let Some(existing_hash) = existent_tx_hash {
@@ -344,7 +353,7 @@ impl SwapMonitoringService {
                 }
             }
 
-            // Update swap state
+            // Build user deposit status
             let user_deposit_status = UserDepositStatus {
                 tx_hash: deposit.tx_hash.clone(),
                 amount: deposit.amount,
@@ -354,9 +363,32 @@ impl SwapMonitoringService {
                 last_checked: utc::now(),
             };
 
+            // Validate deposit amount is within quote bounds
+            if !quote.is_valid_input(deposit.amount) {
+                warn!(
+                    "Deposit amount {} for swap {} is outside bounds [{}, {}]",
+                    deposit.amount, swap.id, quote.min_input, quote.max_input
+                );
+                return Ok(());
+            }
+
+            // Deposit is within bounds - compute realized amounts
+            // Uses from_quote to preserve ExactOutput guarantees when deposit matches quoted input
+            // This can return None if the output would be below the minimum viable threshold (dust)
+            let realized = match RealizedSwap::from_quote(&quote, deposit.amount.to::<u64>()) {
+                Some(r) => r,
+                None => {
+                    error!(
+                        "Deposit amount {} for swap {} would result in dust output (below minimum viable threshold)",
+                        deposit.amount, swap.id
+                    );
+                    return Ok(());
+                }
+            };
+
             self.db
                 .swaps()
-                .user_deposit_detected(swap.id, user_deposit_status)
+                .user_deposit_detected(swap.id, user_deposit_status, Some(realized))
                 .await
                 .context(DatabaseSnafu)?;
 
@@ -365,16 +397,18 @@ impl SwapMonitoringService {
             let market_maker_id = swap.market_maker_id;
             let swap_id = swap.id;
             let quote_id = swap.quote.id;
-            let user_deposit_address = swap.user_deposit_address.clone();
+            let deposit_vault_address = swap.deposit_vault_address.clone();
             let tx_hash = deposit.tx_hash.clone();
+            let deposit_amount = deposit.amount;
             tokio::spawn(async move {
                 let _ = mm_registry
                     .notify_user_deposit(
                         &market_maker_id,
                         &swap_id,
                         &quote_id,
-                        &user_deposit_address,
+                        &deposit_vault_address,
                         &tx_hash,
+                        deposit_amount,
                     )
                     .await;
             });
@@ -431,6 +465,16 @@ impl SwapMonitoringService {
                         swap.id
                     );
 
+                    // Ensure we have realized amounts computed
+                    let realized = swap.realized.as_ref().ok_or_else(|| {
+                        MonitoringError::DepositOutOfBounds {
+                            amount: user_deposit.amount,
+                            min: quote.min_input,
+                            max: quote.max_input,
+                            loc: location!(),
+                        }
+                    })?;
+
                     // Transition to waiting for MM deposit
                     let user_deposit_confirmed_at = self
                         .db
@@ -439,15 +483,20 @@ impl SwapMonitoringService {
                         .await
                         .context(DatabaseSnafu)?;
 
-                    // Notify MM to send their deposit
+                    // Notify MM to send their deposit with the computed output amount
                     let mm_registry = self.mm_registry.clone();
                     let market_maker_id = swap.market_maker_id;
                     let swap_id = swap.id;
                     let quote_id = swap.quote.id;
                     let user_destination_address = swap.user_destination_address.clone();
                     let mm_nonce = swap.mm_nonce;
-                    let expected_lot = swap.quote.to.clone();
+                    // Build the expected lot from realized amounts
+                    let expected_lot = Lot {
+                        currency: swap.quote.to.currency.clone(),
+                        amount: realized.mm_output,
+                    };
 
+                    let protocol_fee = realized.protocol_fee;
                     tokio::spawn(async move {
                         let _ = mm_registry
                             .notify_user_deposit_confirmed(
@@ -457,6 +506,7 @@ impl SwapMonitoringService {
                                 &user_destination_address,
                                 mm_nonce,
                                 &expected_lot,
+                                protocol_fee,
                                 user_deposit_confirmed_at,
                             )
                             .await;
@@ -549,6 +599,17 @@ impl SwapMonitoringService {
                     loc: location!(),
                 });
             }
+            // Ensure swap has realized amounts
+            if swap.realized.is_none() {
+                return Err(MonitoringError::InvalidMarketMakerBatch {
+                    context: format!(
+                        "Swap id {} does not have realized amounts computed",
+                        swap.id
+                    ),
+                    tx_hash: tx_hash.clone(),
+                    loc: location!(),
+                });
+            }
         }
 
         // Now create the MarketMakerBatch to cache the relevant data for this batch payment
@@ -584,11 +645,12 @@ impl SwapMonitoringService {
         let mm_deposit_status_map = swaps
             .iter()
             .map(|swap| {
+                let realized = swap.realized.as_ref().expect("realized must exist");
                 (
                     swap.id,
                     MMDepositStatus {
                         tx_hash: tx_hash.clone(),
-                        amount: swap.quote.to.amount, // Note: actual amount sent could be more than expected
+                        amount: realized.mm_output,
                         deposit_detected_at: utc::now(),
                         confirmations: 0,
                         last_checked: utc::now(),
@@ -696,9 +758,39 @@ impl SwapMonitoringService {
                     );
 
                     // Transition all swaps to settled state atomically
+                    let now = utc::now();
                     let swap_settlement_timestamp = self.db
                         .swaps()
                         .batch_mm_deposit_confirmed(&swap_ids)
+                        .await
+                        .context(DatabaseSnafu)?;
+
+                    // Mark batch confirmed and accrue protocol fee debt once (idempotent).
+                    self.db
+                        .batches()
+                        .mark_confirmed(deposit_chain, mm_tx_hash, now)
+                        .await
+                        .context(DatabaseSnafu)?;
+
+                    let market_maker_id = swaps[0].market_maker_id;
+                    let fee_sats: i64 = market_maker_batch
+                        .payment_verification
+                        .aggregated_fee
+                        .to::<u64>()
+                        .try_into()
+                        .map_err(|_| MonitoringError::InvalidMarketMakerBatch {
+                            context: "Aggregated fee does not fit into i64".to_string(),
+                            tx_hash: mm_tx_hash.clone(),
+                            loc: location!(),
+                        })?;
+                    self.db
+                        .fees()
+                        .accrue_batch_fee(
+                            market_maker_id,
+                            market_maker_batch.payment_verification.batch_nonce_digest,
+                            fee_sats,
+                            now,
+                        )
                         .await
                         .context(DatabaseSnafu)?;
 
@@ -718,7 +810,7 @@ impl SwapMonitoringService {
                         let user_wallet = user_chain_ops
                             .derive_wallet(
                                 &self.settings.master_key_bytes(),
-                                &swap.user_deposit_salt,
+                                &swap.deposit_vault_salt,
                             )
                             .context(ChainOperationSnafu)?;
 
@@ -728,11 +820,12 @@ impl SwapMonitoringService {
                         let private_key = user_wallet.private_key().to_string();
                         let user_deposit_tx_hash =
                             swap.user_deposit_status.as_ref().unwrap().tx_hash.clone();
-                        let mut actual_deposit_lot = swap.quote.from.clone();
-                        // Note: Instead of sending quote.to to the MM, we use swap.user_deposit_status.amount,
-                        // which stores the actual on-chain balance of the user's deposit vault, so the MM doesn't
-                        // have to query the on-chain balance for this private key.
-                        actual_deposit_lot.amount = swap.user_deposit_status.as_ref().expect("user deposit status should be some").amount;
+                        
+                        // Build the actual deposit lot from user_deposit_status.amount
+                        let actual_deposit_lot = Lot {
+                            currency: swap.quote.from.currency.clone(),
+                            amount: swap.user_deposit_status.as_ref().expect("user deposit status should be some").amount,
+                        };
 
                         tokio::spawn(async move {
                             let _ = mm_registry

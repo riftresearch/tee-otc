@@ -50,7 +50,7 @@ impl TokenIndexerInstance {
         };
 
         // uuid for the schema
-        let schema_uuid = Uuid::new_v4();
+        let schema_uuid = Uuid::now_v7();
         let mut cmd = Command::new("pnpm");
         cmd.args([
             "dev",

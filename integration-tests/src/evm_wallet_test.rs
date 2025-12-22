@@ -667,7 +667,7 @@ async fn test_evm_wallet_spend_from_deposit_storage(
     };
 
     deposit_repository
-        .store_deposit(&Deposit::new(deposit_private_key_hex, deposit_lot, "tx1"), utc::now(), Uuid::new_v4())
+        .store_deposit(&Deposit::new(deposit_private_key_hex, deposit_lot, "tx1"), utc::now(), Uuid::now_v7())
         .await
         .expect("store deposit in key storage");
 

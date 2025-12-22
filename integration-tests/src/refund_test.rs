@@ -1,9 +1,6 @@
-use crate::utils::RefundRequestSignature;
 use alloy::network::TransactionBuilder;
 use alloy::serde::storage::from_bytes_to_b256;
-use alloy::signers::k256::ecdsa::SigningKey;
 use alloy::signers::k256::Secp256k1;
-use alloy::signers::local::PrivateKeySigner;
 use mock_instant::global::MockClock;
 use otc_chains::traits::Payment;
 use std::time::Duration;
@@ -15,12 +12,9 @@ use bitcoincore_rpc_async::RpcApi;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::evm_wallet::transaction_broadcaster::EVMTransactionBroadcaster;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, wallet::Wallet};
-use otc_models::{ChainType, Currency, Lot, QuoteMode, QuoteRequest, TokenIdentifier};
+use otc_models::{Swap, SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
-use otc_server::api::{
-    swaps::{RefundPayload, RefundSwapRequest, RefundSwapResponse},
-    CreateSwapRequest, CreateSwapResponse, SwapResponse,
-};
+use otc_server::api::{swaps::RefundSwapResponse, CreateSwapRequest};
 use reqwest::StatusCode;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::collections::HashMap;
@@ -166,8 +160,7 @@ async fn test_refund_from_bitcoin_user_deposit(
 
     // Request a quote from the RFQ server
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: U256::from(10_000_000), // 0.1 BTC
+        mode: SwapMode::ExactInput(10_000_000), // 0.1 BTC
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -178,10 +171,11 @@ async fn test_refund_from_bitcoin_user_deposit(
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
@@ -207,22 +201,22 @@ async fn test_refund_from_bitcoin_user_deposit(
     let swap_request = CreateSwapRequest {
         quote: quote.clone(),
         user_destination_address: user_account.ethereum_address.to_string(),
-        user_evm_account_address: user_account.ethereum_address,
+        refund_address: user_account.bitcoin_wallet.address.to_string(),
         metadata: None,
     };
 
     let response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
         .unwrap();
 
     let response_status = response.status();
-    let response_json = match response_status {
+    let swap = match response_status {
         StatusCode::OK => {
-            let response_json: CreateSwapResponse = response.json().await.unwrap();
-            response_json
+            let swap: Swap = response.json().await.unwrap();
+            swap
         }
         _ => {
             let response_text = response.text().await;
@@ -241,14 +235,10 @@ async fn test_refund_from_bitcoin_user_deposit(
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals: response_json.decimals,
-                    },
-                    amount: response_json.expected_amount,
+                    currency: swap.quote.from.currency.clone(),
+                    amount: swap.quote.min_input,
                 },
-                to_address: response_json.deposit_address,
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )
@@ -272,45 +262,33 @@ async fn test_refund_from_bitcoin_user_deposit(
 
     // verify the swap state is WaitingMMDepositInitiated
     loop {
-        let swap = client
+        let swap_status = client
             .get(format!(
-                "http://localhost:{otc_port}/api/v1/swaps/{}",
-                response_json.swap_id
+                "http://localhost:{otc_port}/api/v2/swap/{}",
+                swap.id
             ))
             .send()
             .await
             .unwrap();
-        let swap: SwapResponse = swap.json().await.unwrap();
-        if swap.status == "WaitingMMDepositInitiated" {
+        let swap_status: Swap = swap_status.json().await.unwrap();
+        if swap_status.status == otc_models::SwapStatus::WaitingMMDepositInitiated {
             break;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
     // now refund the swap (advance time so that the swap can be refunded)
     MockClock::advance_system_time(Duration::from_secs(60 * 60 * 24 + 60)); // 24 hours + 1 minute
-    let refund_payload = RefundPayload {
-        swap_id: response_json.swap_id,
-        refund_recipient: user_account.bitcoin_wallet.address.to_string(),
-        refund_transaction_fee: U256::from(2000),
-    };
-    let signer = PrivateKeySigner::from_signing_key(
-        SigningKey::from_bytes(&user_account.secret_bytes.into()).unwrap(),
-    );
-    let signature = refund_payload.sign(&signer).to_vec();
-    let refund_request = RefundSwapRequest {
-        payload: refund_payload,
-        signature: signature,
-    };
-
     let refund_response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/refund",))
-        .json(&refund_request)
+        .post(format!(
+            "http://localhost:{otc_port}/api/v2/swap/{}/refund",
+            swap.id
+        ))
         .send()
         .await
         .unwrap();
 
     let response_status = refund_response.status();
-    let response_json = match response_status {
+    let refund_result = match response_status {
         StatusCode::OK => refund_response.json::<RefundSwapResponse>().await.unwrap(),
         _ => {
             let response_text = refund_response.text().await;
@@ -335,7 +313,7 @@ async fn test_refund_from_bitcoin_user_deposit(
     devnet
         .bitcoin
         .rpc_client
-        .send_raw_transaction(response_json.tx_data)
+        .send_raw_transaction(refund_result.tx_data)
         .await
         .unwrap();
     devnet.bitcoin.mine_blocks(6).await.unwrap();
@@ -475,8 +453,7 @@ async fn test_refund_from_evm_user_deposit(
 
     // Request a quote where the user deposits cbBTC on Ethereum and receives BTC
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: deposit_amount, // in cbBTC base units (18 decimals)
+        mode: SwapMode::ExactInput(deposit_amount.to::<u64>()), // in cbBTC base units (18 decimals)
         from: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
@@ -487,10 +464,11 @@ async fn test_refund_from_evm_user_deposit(
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
@@ -511,20 +489,20 @@ async fn test_refund_from_evm_user_deposit(
     let swap_request = CreateSwapRequest {
         quote,
         user_destination_address: user_account.bitcoin_wallet.address.to_string(),
-        user_evm_account_address: user_account.ethereum_address,
+        refund_address: user_account.ethereum_address.to_string(),
         metadata: None,
     };
 
     let response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
         .unwrap();
 
     let response_status = response.status();
-    let response_json = match response_status {
-        StatusCode::OK => response.json::<CreateSwapResponse>().await.unwrap(),
+    let swap = match response_status {
+        StatusCode::OK => response.json::<Swap>().await.unwrap(),
         _ => {
             let response_text = response.text().await;
             panic!(
@@ -561,11 +539,8 @@ async fn test_refund_from_evm_user_deposit(
     // Transfer exactly the expected amount to the deposit address
     user_token_contract
         .transfer(
-            response_json
-                .deposit_address
-                .parse()
-                .expect("valid deposit address"),
-            response_json.expected_amount,
+            swap.deposit_vault_address.parse().expect("valid deposit address"),
+            swap.quote.min_input,
         )
         .send()
         .await
@@ -576,16 +551,16 @@ async fn test_refund_from_evm_user_deposit(
 
     // Wait until swap reaches WaitingMMDepositInitiated after detecting the user deposit
     loop {
-        let swap = client
+        let swap_status = client
             .get(format!(
-                "http://localhost:{otc_port}/api/v1/swaps/{}",
-                response_json.swap_id
+                "http://localhost:{otc_port}/api/v2/swap/{}",
+                swap.id
             ))
             .send()
             .await
             .unwrap();
-        let swap: SwapResponse = swap.json().await.unwrap();
-        if swap.status == "WaitingMMDepositInitiated" {
+        let swap_status: Swap = swap_status.json().await.unwrap();
+        if swap_status.status == otc_models::SwapStatus::WaitingMMDepositInitiated {
             break;
         }
         tokio::time::sleep(Duration::from_secs(1)).await;
@@ -593,23 +568,11 @@ async fn test_refund_from_evm_user_deposit(
 
     // Now refund the swap (advance time so that the swap can be refunded)
     MockClock::advance_system_time(Duration::from_secs(60 * 60 * 24 + 60)); // 24 hours + 1 minute
-    let signer = PrivateKeySigner::from_signing_key(
-        SigningKey::from_bytes(&user_account.secret_bytes.into()).unwrap(),
-    );
-    let refund_payload = RefundPayload {
-        swap_id: response_json.swap_id,
-        refund_recipient: user_account.ethereum_address.to_string(),
-        refund_transaction_fee: U256::from(0),
-    };
-    let signature = refund_payload.sign(&signer).to_vec();
-    let refund_request = RefundSwapRequest {
-        payload: refund_payload,
-        signature: signature,
-    };
-
     let refund_response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/refund"))
-        .json(&refund_request)
+        .post(format!(
+            "http://localhost:{otc_port}/api/v2/swap/{}/refund",
+            swap.id
+        ))
         .send()
         .await
         .expect("Refund request should succeed")

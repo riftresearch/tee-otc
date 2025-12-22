@@ -1,9 +1,8 @@
 use crate::Result;
 use alloy::primitives::U256;
 use async_trait::async_trait;
-use blockchain_utils::FeeCalcFromLot;
 use chrono::{DateTime, Utc};
-use otc_models::{Lot, Swap, TokenIdentifier, TransferInfo, TxStatus, Wallet};
+use otc_models::{Currency, Lot, Swap, TokenIdentifier, TransferInfo, TxStatus, Wallet};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
@@ -12,6 +11,13 @@ use uuid::Uuid;
 pub struct MarketMakerPaymentVerification {
     pub aggregated_fee: U256,
     pub batch_nonce_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeeSettlementVerification {
+    pub confirmations: u64,
+    /// Amount paid to the protocol fee address, denominated in sats of the BTC-like fee asset.
+    pub amount_sats: U256,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,21 +41,34 @@ pub struct MarketMakerQueuedPayment {
     pub destination_address: String,
     pub mm_nonce: [u8; 16],
     pub user_deposit_confirmed_at: Option<DateTime<Utc>>,
+    /// Protocol fee for this payment (from realized swap)
+    pub protocol_fee: U256,
 }
 
-// we can derive a MarketMakerQueuedPayment from a Swap
+// Derive a MarketMakerQueuedPayment from a Swap
+// Requires the swap to have realized amounts computed
 impl From<&Swap> for MarketMakerQueuedPayment {
     fn from(swap: &Swap) -> Self {
+        // The realized amounts should exist when creating a queued payment
+        let realized = swap
+            .realized
+            .as_ref()
+            .expect("Swap must have realized amounts to create queued payment");
+
         MarketMakerQueuedPayment {
             swap_id: swap.id,
             quote_id: swap.quote.id,
-            lot: swap.quote.to.clone(), // to is what the MM is sending to the user always
+            lot: Lot {
+                currency: swap.quote.to.currency.clone(),
+                amount: realized.mm_output,
+            },
             destination_address: swap.user_destination_address.clone(),
             mm_nonce: swap.mm_nonce,
             user_deposit_confirmed_at: swap
                 .user_deposit_status
                 .as_ref()
                 .and_then(|status| status.confirmed_at),
+            protocol_fee: realized.protocol_fee,
         }
     }
 }
@@ -73,11 +92,8 @@ impl MarketMakerQueuedPaymentExt for [MarketMakerQueuedPayment] {
             })
             .collect();
 
-        // Calculate aggregated fee
-        let aggregated_fee: U256 = self
-            .iter()
-            .map(|qp| U256::from(qp.lot.compute_protocol_fee()))
-            .fold(U256::ZERO, |acc, fee| acc + fee);
+        // Calculate aggregated fee from pre-computed protocol fees
+        let aggregated_fee: U256 = self.iter().map(|qp| qp.protocol_fee).fold(U256::ZERO, |acc, fee| acc + fee);
 
         // Compute batch nonce digest by hashing all nonces together
         let mut nonce_data = Vec::new();
@@ -85,7 +101,10 @@ impl MarketMakerQueuedPaymentExt for [MarketMakerQueuedPayment] {
             // safety note: mm_nonce is 16 bytes always, so no risk of ambiguity attacks
             nonce_data.extend_from_slice(&qp.mm_nonce);
         }
-        let batch_nonce_digest = alloy::primitives::keccak256(&nonce_data).0;
+        let mut batch_nonce_digest = alloy::primitives::keccak256(&nonce_data).0;
+        // SECURITY: vanity-prefixing 4 bytes reduces the effective output length from 256 -> 224 bits.
+        // That implies ~224-bit preimage/2nd-preimage work (idealized) and ~112-bit collision security (birthday bound).
+        batch_nonce_digest[0..4].copy_from_slice(b"rift");
 
         Some(MarketMakerBatch {
             ordered_payments,
@@ -100,6 +119,14 @@ impl MarketMakerQueuedPaymentExt for [MarketMakerQueuedPayment] {
 // implementors of this trait should be stateless
 #[async_trait]
 pub trait ChainOperations: Send + Sync {
+    /// Optional access to an Esplora client for chains that are backed by Esplora.
+    ///
+    /// Most chains do not expose any Esplora API; they should keep the default `None`.
+    #[must_use]
+    fn esplora_client(&self) -> Option<&esplora_client::AsyncClient> {
+        None
+    }
+
     /// Create a new wallet, returning the wallet and the salt used
     fn create_wallet(&self) -> Result<(Wallet, [u8; 32])>;
 
@@ -113,11 +140,22 @@ pub trait ChainOperations: Send + Sync {
         market_maker_batch: &MarketMakerBatch,
     ) -> Result<Option<u64>>;
 
-    /// Check for transfers to an address
+    /// Verify a protocol fee settlement transaction.
+    ///
+    /// Returns `Ok(None)` if the tx is not found / not yet visible.
+    async fn verify_fee_settlement_transaction(
+        &self,
+        tx_hash: &str,
+        settlement_digest: [u8; 32],
+    ) -> Result<Option<FeeSettlementVerification>>;
+
+    /// Check for transfers to an address for a given currency.
+    /// Returns the first/largest transfer found (regardless of amount).
+    /// The caller is responsible for validating the amount against quote bounds.
     async fn search_for_transfer(
         &self,
         recipient_address: &str,
-        lot: &Lot,
+        currency: &Currency,
         // Before this block, the transfer was not possible/irrelevant - can be used to limit the search range
         from_block_height: Option<u64>,
     ) -> Result<Option<TransferInfo>>;

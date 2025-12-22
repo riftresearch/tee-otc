@@ -46,3 +46,4 @@ tmp/
 
 **/postgres-data/
 tx-flood-dedicated-wallets/
+rift-api/

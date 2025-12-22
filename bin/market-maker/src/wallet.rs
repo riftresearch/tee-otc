@@ -15,9 +15,9 @@ pub enum WalletError {
     #[snafu(display("Failed to update fee map: {}", error))]
     UpdateFeeMapFailed { error: String },
 
-    #[snafu(display("Crafting receive with authorization execution failed: {}", source))]
-    ReceiveAuthorizationFailed {
-        source: blockchain_utils::ReceiveAuthorizationError,
+    #[snafu(display("Crafting transfer with authorization execution failed: {}", source))]
+    TransferAuthorizationFailed {
+        source: blockchain_utils::TransferAuthorizationError,
         #[snafu(implicit)]
         loc: Location,
     },

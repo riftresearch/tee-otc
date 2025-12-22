@@ -1,14 +1,13 @@
-use crate::api::swaps::{
-    CreateSwapRequest, CreateSwapResponse, DepositInfoResponse, RefundSwapRequest,
-    RefundSwapResponse, SwapResponse,
-};
+use crate::api::swaps::{CreateSwapRequest, RefundSwapResponse};
 use crate::config::Settings;
 use crate::db::Database;
 use crate::error::OtcServerError;
 use crate::services::MMRegistry;
 use alloy::hex::FromHexError;
+use alloy::primitives::U256;
+use blockchain_utils::MempoolEsploraFeeExt;
 use otc_chains::ChainRegistry;
-use otc_models::{LatestRefund, Metadata, Swap, SwapStatus, TokenIdentifier};
+use otc_models::{ChainType, LatestRefund, Metadata, Swap, SwapStatus};
 use snafu::prelude::*;
 use std::sync::Arc;
 use tokio::sync::oneshot;
@@ -34,6 +33,9 @@ pub enum SwapError {
 
     #[snafu(display("Market maker not connected: {}", market_maker_id))]
     MarketMakerNotConnected { market_maker_id: String },
+
+    #[snafu(display("Market maker not in good standing: {}", market_maker_id))]
+    MarketMakerNotInGoodStanding { market_maker_id: String },
 
     #[snafu(display("Market maker validation timeout"))]
     MarketMakerValidationTimeout,
@@ -105,21 +107,9 @@ impl SwapManager {
 
     pub async fn refund_swap(
         &self,
-        refund_request: RefundSwapRequest,
+        swap_id: Uuid,
     ) -> SwapResult<RefundSwapResponse> {
-        let swap_id = refund_request.payload.swap_id;
         let swap = self.db.swaps().get(swap_id).await.context(DatabaseSnafu)?;
-        let signer_address = refund_request
-            .payload
-            .get_signer_address_from_signature(&refund_request.signature)
-            .map_err(|_| SwapError::BadRefundRequest {
-                reason: "Bad signature".to_string(),
-            })?;
-        if signer_address != swap.user_evm_account_address {
-            return Err(SwapError::BadRefundRequest {
-                reason: "Wrong signer address".to_string(),
-            });
-        }
 
         match swap.can_be_refunded() {
             Some(reason) => {
@@ -137,22 +127,42 @@ impl SwapManager {
                     })?;
 
                 let deposit_wallet = deposit_chain
-                    .derive_wallet(&self.settings.master_key_bytes(), &swap.user_deposit_salt)
+                    .derive_wallet(&self.settings.master_key_bytes(), &swap.deposit_vault_salt)
                     .map_err(|e| SwapError::WalletDerivation { source: e })?;
+
+
+                let fee = match swap.quote.from.currency.chain { 
+                    ChainType::Bitcoin => { 
+                        let esplora = deposit_chain.esplora_client().ok_or(SwapError::BadRefundRequest {
+                            reason: "Esplora client not available for Bitcoin chain".to_string(),
+                        })?;
+
+                        let next_block_fee_rate = esplora
+                            .get_mempool_fee_estimate_next_block()
+                            .await
+                            .map_err(|e| SwapError::BadRefundRequest {
+                                reason: format!("Failed to query mempool fee estimate: {e}"),
+                            })?;
+                        // 111 estimated vbytes for a refund tx that is P2WPKH
+                        (next_block_fee_rate * 111 as f64).ceil() as u64
+                    },
+                    ChainType::Ethereum => 0,
+                    ChainType::Base => 0,
+                };
 
                 let tx_data = deposit_chain
                     .dump_to_address(
                         &swap.quote.from.currency.token,
                         deposit_wallet.private_key(),
-                        &refund_request.payload.refund_recipient,
-                        refund_request.payload.refund_transaction_fee,
+                        &swap.refund_address,
+                        U256::from(fee),
                     )
                     .await
                     .map_err(|e| SwapError::DumpToAddress { err: e.to_string() })?;
 
                 let latest_refund = LatestRefund {
                     timestamp: utc::now(),
-                    recipient_address: refund_request.payload.refund_recipient.clone(),
+                    recipient_address: swap.refund_address.clone(),
                 };
 
                 self.db
@@ -186,29 +196,44 @@ impl SwapManager {
     /// 3. Ask the market maker if they'll fill the quote (TODO)
     /// 4. Generate salts for deterministic wallet derivation
     /// 5. Create the swap record in the database
-    /// 6. Return the deposit details to the user
-    pub async fn create_swap(&self, request: CreateSwapRequest) -> SwapResult<CreateSwapResponse> {
+    /// 6. Return the swap directly
+    pub async fn create_swap(&self, request: CreateSwapRequest) -> SwapResult<Swap> {
         let CreateSwapRequest {
             quote,
             user_destination_address,
-            user_evm_account_address,
+            refund_address,
             metadata,
         } = request;
 
         let metadata = metadata.unwrap_or_default();
         Self::validate_metadata(&metadata)?;
 
-        // ensure the user destination address is valid
-        let receive_chain = self.chain_registry.get(&quote.to.currency.chain).ok_or(
+        // Ensure the user destination address is valid for the "to" chain.
+        let destination_chain = self.chain_registry.get(&quote.to.currency.chain).ok_or(
             SwapError::ChainNotSupported {
                 chain: quote.to.currency.chain,
             },
         )?;
 
-        if !receive_chain.validate_address(&user_destination_address) {
+        if !destination_chain.validate_address(&user_destination_address) {
             return Err(SwapError::InvalidDestinationAddress {
                 address: user_destination_address,
                 chain: quote.to.currency.chain,
+            });
+        }
+
+        // Ensure the refund address is valid for the "from" chain.
+        let refund_chain = self.chain_registry.get(&quote.from.currency.chain).ok_or(
+            SwapError::ChainNotSupported {
+                chain: quote.from.currency.chain,
+            },
+        )?;
+
+        if !refund_chain.validate_address(&refund_address) {
+            // TODO: This should be InvalidRefundAddress
+            return Err(SwapError::InvalidDestinationAddress {
+                address: refund_address,
+                chain: quote.from.currency.chain,
             });
         }
 
@@ -230,6 +255,20 @@ impl SwapManager {
                 quote.market_maker_id
             );
             return Err(SwapError::MarketMakerNotConnected {
+                market_maker_id: quote.market_maker_id.to_string(),
+            });
+        }
+
+        // Enforce protocol fee good-standing gate.
+        let now = utc::now();
+        let is_good = self
+            .db
+            .fees()
+            .is_good_standing(quote.market_maker_id, now)
+            .await
+            .map_err(SwapError::from)?;
+        if !is_good {
+            return Err(SwapError::MarketMakerNotInGoodStanding {
                 market_maker_id: quote.market_maker_id.to_string(),
             });
         }
@@ -275,10 +314,10 @@ impl SwapManager {
         }
 
         // 5. Generate random salts for wallet derivation
-        let swap_id = Uuid::new_v4();
-        let mut user_deposit_salt = [0u8; 32];
+        let swap_id = Uuid::now_v7();
+        let mut deposit_vault_salt = [0u8; 32];
         let mut mm_nonce = [0u8; 16]; // 128 bits of collision resistance against an existing tx w/ a given output address && amount
-        getrandom::getrandom(&mut user_deposit_salt).expect("Failed to generate random salt");
+        getrandom::getrandom(&mut deposit_vault_salt).expect("Failed to generate random salt");
         getrandom::getrandom(&mut mm_nonce).expect("Failed to generate random nonce");
         // 7. Derive user deposit address for response
         let user_chain = self.chain_registry.get(&quote.from.currency.chain).ok_or(
@@ -287,8 +326,8 @@ impl SwapManager {
             },
         )?;
 
-        let user_deposit_address = &user_chain
-            .derive_wallet(&self.settings.master_key_bytes(), &user_deposit_salt)
+        let deposit_vault_address = &user_chain
+            .derive_wallet(&self.settings.master_key_bytes(), &deposit_vault_salt)
             .map_err(|e| SwapError::WalletDerivation { source: e })?
             .address;
 
@@ -298,12 +337,13 @@ impl SwapManager {
             id: swap_id,
             quote: quote.clone(),
             market_maker_id: quote.market_maker_id,
-            user_deposit_salt,
-            user_deposit_address: user_deposit_address.clone(),
+            deposit_vault_salt,
+            deposit_vault_address: deposit_vault_address.clone(),
             mm_nonce,
             metadata,
+            realized: None, // Populated when user deposit is detected
             user_destination_address,
-            user_evm_account_address,
+            refund_address,
             status: SwapStatus::WaitingUserDepositInitiated,
             user_deposit_status: None,
             mm_deposit_status: None,
@@ -322,104 +362,15 @@ impl SwapManager {
 
         info!("Created swap {} for quote {}", swap_id, quote.id);
 
-        // 7. Derive user deposit address for response
-        let user_chain = self.chain_registry.get(&quote.from.currency.chain).ok_or(
-            SwapError::ChainNotSupported {
-                chain: quote.from.currency.chain,
-            },
-        )?;
-
-        let user_wallet = user_chain
-            .derive_wallet(&self.settings.master_key_bytes(), &user_deposit_salt)
-            .map_err(|e| SwapError::WalletDerivation { source: e })?;
-
-        // 8. Return response
-        Ok(CreateSwapResponse {
-            swap_id,
-            deposit_address: user_wallet.address.clone(),
-            deposit_chain: format!("{:?}", quote.from.currency.chain),
-            expected_amount: quote.from.amount,
-            decimals: quote.from.currency.decimals,
-            token: match &quote.from.currency.token {
-                TokenIdentifier::Native => "Native".to_string(),
-                TokenIdentifier::Address(addr) => addr.clone(),
-            },
-            expires_at: quote.expires_at,
-            status: "waiting_user_deposit".to_string(),
-        })
+        Ok(swap)
     }
 
-    /// Get swap details by ID with derived wallet addresses
-    pub async fn get_swap(&self, swap_id: Uuid) -> SwapResult<SwapResponse> {
-        // Get swap from database
-        let swap = self.db.swaps().get(swap_id).await.context(DatabaseSnafu)?;
-
-        // Derive wallet addresses
-        let master_key = self.settings.master_key_bytes();
-
-        let user_chain = self
-            .chain_registry
-            .get(&swap.quote.from.currency.chain)
-            .ok_or(SwapError::ChainNotSupported {
-                chain: swap.quote.from.currency.chain,
-            })?;
-
-        let user_wallet = user_chain
-            .derive_wallet(&master_key, &swap.user_deposit_salt)
-            .map_err(|e| SwapError::WalletDerivation { source: e })?;
-
-        // Build response
-        Ok(SwapResponse {
-            id: swap.id,
-            quote_id: swap.quote.id,
-            status: format!("{:?}", swap.status),
-            created_at: swap.created_at,
-            updated_at: swap.updated_at,
-            user_deposit: DepositInfoResponse {
-                address: user_wallet.address.clone(),
-                chain: format!("{:?}", swap.quote.from.currency.chain),
-                expected_amount: swap.quote.from.amount,
-                decimals: swap.quote.from.currency.decimals,
-                token: match &swap.quote.from.currency.token {
-                    TokenIdentifier::Native => "Native".to_string(),
-                    TokenIdentifier::Address(addr) => addr.clone(),
-                },
-                deposit_tx: swap.user_deposit_status.as_ref().map(|d| d.tx_hash.clone()),
-                deposit_amount: swap.user_deposit_status.as_ref().map(|d| d.amount),
-                deposit_detected_at: swap
-                    .user_deposit_status
-                    .as_ref()
-                    .map(|d| d.deposit_detected_at),
-            },
-            mm_deposit: DepositInfoResponse {
-                address: swap.user_destination_address.clone(),
-                chain: format!("{:?}", swap.quote.to.currency.chain),
-                expected_amount: swap.quote.to.amount,
-                decimals: swap.quote.to.currency.decimals,
-                token: match &swap.quote.to.currency.token {
-                    TokenIdentifier::Native => "Native".to_string(),
-                    TokenIdentifier::Address(addr) => addr.clone(),
-                },
-                deposit_tx: swap.mm_deposit_status.as_ref().map(|d| d.tx_hash.clone()),
-                deposit_amount: swap.mm_deposit_status.as_ref().map(|d| d.amount),
-                deposit_detected_at: swap
-                    .mm_deposit_status
-                    .as_ref()
-                    .map(|d| d.deposit_detected_at),
-            },
-        })
+    /// Get swap details by ID
+    pub async fn get_swap(&self, swap_id: Uuid) -> SwapResult<Swap> {
+        self.db.swaps().get(swap_id).await.context(DatabaseSnafu)
     }
 
     fn validate_metadata(metadata: &Metadata) -> SwapResult<()> {
-        if let Some(value) = metadata.affiliate.as_ref() {
-            if value.chars().count() > 1000 {
-                return InvalidMetadataSnafu {
-                    reason: "affiliate must be 1000 characters or fewer".to_string(),
-                }
-                .fail();
-            }
-        }
-
         if let Some(value) = metadata.start_asset.as_ref() {
             if value.chars().count() > 1000 {
                 return InvalidMetadataSnafu {

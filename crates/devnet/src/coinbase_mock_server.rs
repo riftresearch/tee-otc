@@ -112,7 +112,7 @@ impl AppState {
         Self {
             bitcoin_devnet,
             ethereum_devnet,
-            btc_account_id: Uuid::new_v4().to_string(),
+            btc_account_id: Uuid::now_v7().to_string(),
             deposit_addresses: Arc::new(DashMap::new()),
             withdrawals: Arc::new(DashMap::new()),
             processing_mode,
@@ -375,7 +375,7 @@ async fn create_withdrawal(
         );
     }
 
-    let withdrawal_id = Uuid::new_v4().to_string();
+    let withdrawal_id = Uuid::now_v7().to_string();
     let created_at = Utc::now().to_rfc3339();
 
     // Determine delay based on configuration

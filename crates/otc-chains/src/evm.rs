@@ -1,4 +1,4 @@
-use crate::traits::MarketMakerBatch;
+use crate::traits::{FeeSettlementVerification, MarketMakerBatch};
 use crate::{key_derivation, ChainOperations, Result};
 use alloy::consensus::Transaction;
 use alloy::primitives::{Address, TxHash, U256};
@@ -7,7 +7,7 @@ use alloy::rpc::types::{Log as RpcLog, TransactionReceipt};
 use alloy::signers::local::{LocalSigner, PrivateKeySigner};
 use alloy::{hex, sol};
 use async_trait::async_trait;
-use blockchain_utils::create_receive_with_authorization_execution;
+use blockchain_utils::create_transfer_with_authorization_execution;
 use eip3009_erc20_contract::GenericEIP3009ERC20::GenericEIP3009ERC20Instance;
 use evm_token_indexer_client::TokenIndexerClient;
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier, TransferInfo, TxStatus, Wallet};
@@ -150,10 +150,10 @@ impl ChainOperations for EvmChain {
     async fn search_for_transfer(
         &self,
         recipient_address: &str,
-        lot: &Lot,
+        currency: &Currency,
         _from_block_height: Option<u64>,
     ) -> Result<Option<TransferInfo>> {
-        let token_address = match &lot.currency.token {
+        let token_address = match &currency.token {
             TokenIdentifier::Address(address) => address,
             TokenIdentifier::Native => return Ok(None),
         };
@@ -172,7 +172,7 @@ impl ChainOperations for EvmChain {
                 message: "Invalid address".to_string(),
             })?;
 
-        let transfer_hint = self.get_transfer(&recipient_address, &lot.amount).await?;
+        let transfer_hint = self.get_transfer(&recipient_address).await?;
         if transfer_hint.is_none() {
             return Ok(None);
         }
@@ -225,12 +225,6 @@ impl ChainOperations for EvmChain {
             });
         }
 
-        let fee_address = Address::from_str(
-            &otc_models::FEE_ADDRESSES_BY_CHAIN[&self.chain_type],
-        )
-        .map_err(|_| crate::Error::Serialization {
-            message: "Invalid fee address".to_string(),
-        })?;
         // Now get the receipt for the transaction
         let transaction_receipt = self
             .provider
@@ -287,7 +281,7 @@ impl ChainOperations for EvmChain {
             .zip(&market_maker_batch.ordered_payments);
 
         // Track current index for error reporting
-        let mut index = start_index;
+        let mut _index = start_index;
 
         // Validate each transfer matches its corresponding payment
         for (transfer, payment) in transfers_and_payments {
@@ -327,43 +321,9 @@ impl ChainOperations for EvmChain {
                 });
             }
 
-            index += 1;
+            _index += 1;
         }
 
-        // Enforce invariant: the next transfer log must be the fee transfer
-        let Some(next_log) = intra_tx_transfers.get(index) else {
-            return Err(crate::Error::BadMarketMakerBatch {
-                chain: self.chain_type,
-                tx_hash: tx_hash.to_string(),
-                message: "Missing next transfer log for fee validation".to_string(),
-                loc: location!(),
-            });
-        };
-        // Same token and correct recipient
-        if next_log.address() != self.allowed_token {
-            return Err(crate::Error::BadMarketMakerBatch {
-                chain: self.chain_type,
-                tx_hash: tx_hash.to_string(),
-                message: "Next transfer not from allowed token contract".to_string(),
-                loc: location!(),
-            });
-        }
-        if next_log.inner.data.to != fee_address {
-            return Err(crate::Error::BadMarketMakerBatch {
-                chain: self.chain_type,
-                tx_hash: tx_hash.to_string(),
-                message: "Fee address is not the expected address in next log".to_string(),
-                loc: location!(),
-            });
-        }
-        if next_log.inner.data.value < market_maker_batch.payment_verification.aggregated_fee {
-            return Err(crate::Error::BadMarketMakerBatch {
-                chain: self.chain_type,
-                tx_hash: tx_hash.to_string(),
-                message: "Fee amount in next log is less than expected".to_string(),
-                loc: location!(),
-            });
-        }
         let current_block_height = self.provider.get_block_number().await;
 
         let current_block_height = match current_block_height {
@@ -376,6 +336,112 @@ impl ChainOperations for EvmChain {
 
         let confirmations = current_block_height - transaction_receipt.block_number.unwrap();
         Ok(Some(confirmations))
+    }
+
+    async fn verify_fee_settlement_transaction(
+        &self,
+        tx_hash: &str,
+        settlement_digest: [u8; 32],
+    ) -> Result<Option<FeeSettlementVerification>> {
+        let transaction_hash: TxHash = tx_hash.parse().map_err(|_| {
+            crate::Error::TransactionDeserializationFailed {
+                context: format!("Failed to parse EVM transaction hash {tx_hash}"),
+                loc: location!(),
+            }
+        })?;
+
+        let transaction = self.provider.get_transaction_by_hash(transaction_hash).await;
+        let transaction = match transaction {
+            Ok(transaction) => transaction,
+            Err(e) => {
+                warn!("RPCError getting transaction by hash: {e}");
+                return Ok(None);
+            }
+        };
+
+        let transaction = match transaction {
+            Some(transaction) => transaction,
+            None => {
+                warn!("Transaction not found for evm fee settlement: {tx_hash}");
+                return Ok(None);
+            }
+        };
+
+        // Commitment: digest bytes must appear in calldata (same style as batch nonce).
+        let tx_hex = alloy::hex::encode(transaction.input());
+        let digest_hex = alloy::hex::encode(settlement_digest);
+        if !tx_hex.contains(&digest_hex) {
+            return Err(crate::Error::BadMarketMakerBatch {
+                chain: self.chain_type,
+                tx_hash: tx_hash.to_string(),
+                message: "Fee settlement tx does not contain expected digest".to_string(),
+                loc: location!(),
+            });
+        }
+
+        let fee_address =
+            Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&self.chain_type]).map_err(
+                |_| crate::Error::Serialization {
+                    message: "Invalid fee address".to_string(),
+                },
+            )?;
+
+        let transaction_receipt = self
+            .provider
+            .get_transaction_receipt(transaction_hash)
+            .await
+            .map_err(|e| crate::Error::EVMRpcError {
+                source: e,
+                loc: location!(),
+            })?;
+
+        let transaction_receipt = match transaction_receipt {
+            Some(transaction_receipt) => transaction_receipt,
+            None => {
+                warn!("Transaction receipt not found for evm fee settlement: {tx_hash}");
+                return Ok(None);
+            }
+        };
+
+        let intra_tx_transfers =
+            extract_all_transfers_from_transaction_receipt(&transaction_receipt);
+
+        // Sum all transfers (from allowed token contract) into the protocol fee address.
+        let mut amount_paid = U256::ZERO;
+        for t in intra_tx_transfers {
+            if t.address() != self.allowed_token {
+                continue;
+            }
+            if t.inner.data.to != fee_address {
+                continue;
+            }
+            amount_paid += t.inner.data.value;
+        }
+
+        if amount_paid == U256::ZERO {
+            return Err(crate::Error::BadMarketMakerBatch {
+                chain: self.chain_type,
+                tx_hash: tx_hash.to_string(),
+                message: "Fee settlement tx transfers 0 to protocol fee address".to_string(),
+                loc: location!(),
+            });
+        }
+
+        let current_block_height = self.provider.get_block_number().await;
+        let current_block_height = match current_block_height {
+            Ok(current_block_height) => current_block_height,
+            Err(e) => {
+                warn!("RPCError getting current block height: {e}");
+                return Ok(None);
+            }
+        };
+
+        let confirmations = current_block_height - transaction_receipt.block_number.unwrap();
+
+        Ok(Some(FeeSettlementVerification {
+            confirmations,
+            amount_sats: amount_paid,
+        }))
     }
 
     /// Dump to address here just gives permission for the recipient to call receiveWithAuthorization
@@ -427,7 +493,7 @@ impl ChainOperations for EvmChain {
             amount: token_balance,
         };
 
-        let execution = create_receive_with_authorization_execution(
+        let execution = create_transfer_with_authorization_execution(
             &lot,
             &sender_signer,
             &self.provider,
@@ -469,21 +535,16 @@ impl ChainOperations for EvmChain {
 }
 
 impl EvmChain {
-    // Note this function's response is safe to trust, b/c it will validate the responses from the untrusted evm_indexer_client
-    async fn get_transfer(
-        &self,
-        recipient_address: &Address,
-        amount: &U256,
-    ) -> Result<Option<TransferInfo>> {
-        debug!(
-            "Searching for transfer for address: {}, amount: {}",
-            recipient_address, amount
-        );
+    /// Search for any transfer to an address.
+    /// Returns the most confirmed transfer found (regardless of amount).
+    /// The caller is responsible for validating the amount against quote bounds.
+    async fn get_transfer(&self, recipient_address: &Address) -> Result<Option<TransferInfo>> {
+        debug!("Searching for transfer for address: {}", recipient_address);
 
         // use the untrusted evm_indexer_client to get the transfer hint - this will only return 50 latest transfers (TODO: how to handle this?)
         let transfers = self
             .evm_indexer_client
-            .get_transfers_to(*recipient_address, None, Some(*amount))
+            .get_transfers_to(*recipient_address, None, None)
             .await
             .map_err(|e| crate::Error::EVMTokenIndexerClientError {
                 source: e,
@@ -535,11 +596,6 @@ impl EvmChain {
                         "Transfer recipient is not the expected address: {:?}",
                         transfer
                     );
-                    continue;
-                }
-                // validate the amount
-                if transfer_log.inner.data.value < *amount {
-                    debug!("Transfer amount is less than expected: {:?}", transfer);
                     continue;
                 }
 

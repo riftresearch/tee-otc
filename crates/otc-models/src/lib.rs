@@ -3,6 +3,7 @@ pub mod chain;
 pub mod constants;
 pub mod fees;
 pub mod quote;
+pub mod serde_utils;
 pub mod status;
 pub mod swap;
 pub mod swap_transitions;

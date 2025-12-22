@@ -1,10 +1,15 @@
 pub mod batch_repo;
 pub mod conversions;
+pub mod fee_repo;
 pub mod quote_repo;
 pub mod row_mappers;
 pub mod swap_repo;
 
 pub use batch_repo::BatchRepository;
+pub use fee_repo::{
+    FeeRepository, GOOD_STANDING_THRESHOLD_SATS, GOOD_STANDING_WINDOW_SECS,
+    MM_FEE_DEBT_SATS_METRIC,
+};
 pub use swap_repo::SwapRepository;
 
 use crate::{db::quote_repo::QuoteRepository, error::OtcServerResult};
@@ -64,5 +69,10 @@ impl Database {
     #[must_use]
     pub fn batches(&self) -> BatchRepository {
         BatchRepository::new(self.pool.clone())
+    }
+
+    #[must_use]
+    pub fn fees(&self) -> FeeRepository {
+        FeeRepository::new(self.pool.clone())
     }
 }

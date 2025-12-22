@@ -3,6 +3,11 @@ use std::sync::LazyLock;
 
 use crate::{ChainType, TokenIdentifier};
 
+/// Minimum viable output in satoshis. Swaps that would result in an output below this
+/// threshold are rejected to prevent dust outputs and uneconomical swaps.
+/// Set to 546 sats (Bitcoin's standard dust limit for P2PKH outputs).
+pub const MIN_VIABLE_OUTPUT_SATS: u64 = 546;
+
 pub const CB_BTC_CONTRACT_ADDRESS: &str = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf";
 
 pub const CBBTC_TOKEN: LazyLock<TokenIdentifier> = LazyLock::new(|| TokenIdentifier::Address(CB_BTC_CONTRACT_ADDRESS.to_string()));

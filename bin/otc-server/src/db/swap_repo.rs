@@ -1,17 +1,18 @@
 use std::collections::HashMap;
 
+use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
 use otc_models::{
-    ChainType, LatestRefund, Lot, MMDepositStatus, SettlementStatus, Swap, SwapStatus,
-    UserDepositStatus,
+    ChainType, LatestRefund, Lot, MMDepositStatus, RealizedSwap, SettlementStatus, Swap,
+    SwapStatus, UserDepositStatus,
 };
 use sqlx::postgres::PgPool;
 use sqlx::Row;
 use uuid::Uuid;
 
 use super::conversions::{
-    latest_refund_to_json, lot_from_db, metadata_to_json,
-    mm_deposit_status_to_json, settlement_status_to_json, user_deposit_status_from_json,
+    currency_from_db, latest_refund_to_json, metadata_to_json, mm_deposit_status_to_json,
+    realized_swap_to_json, settlement_status_to_json, user_deposit_status_from_json,
     user_deposit_status_to_json,
 };
 use super::row_mappers::FromRow;
@@ -28,13 +29,14 @@ pub struct PendingMMDepositSwap {
     pub user_destination_address: String,
     pub mm_nonce: [u8; 16],
     pub expected_lot: Lot,
+    pub protocol_fee: U256,
     pub user_deposit_confirmed_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
 pub struct SettledSwapNotification {
     pub swap_id: Uuid,
-    pub user_deposit_salt: [u8; 32],
+    pub deposit_vault_salt: [u8; 32],
     pub user_deposit_tx_hash: String,
     pub lot: Lot,
     pub deposit_chain: ChainType,
@@ -45,7 +47,7 @@ pub struct SettledSwapNotification {
 pub struct ForceSwapNotification {
     pub swap_id: Uuid,
     pub market_maker_id: Uuid,
-    pub user_deposit_salt: [u8; 32],
+    pub deposit_vault_salt: [u8; 32],
     pub user_deposit_tx_hash: String,
     pub lot: Lot,
 }
@@ -88,8 +90,8 @@ impl SwapRepository {
             INSERT INTO swaps (
                 id, quote_id, market_maker_id,
                 metadata,
-                user_deposit_salt, user_deposit_address, mm_nonce,
-                user_destination_address, user_evm_account_address,
+                deposit_vault_salt, deposit_vault_address, mm_nonce,
+                user_destination_address, refund_address,
                 status,
                 user_deposit_status, mm_deposit_status, settlement_status,
                 latest_refund,
@@ -111,11 +113,11 @@ impl SwapRepository {
         .bind(swap.quote.id)
         .bind(swap.market_maker_id)
         .bind(metadata_json)
-        .bind(&swap.user_deposit_salt[..])
-        .bind(&swap.user_deposit_address)
+        .bind(&swap.deposit_vault_salt[..])
+        .bind(&swap.deposit_vault_address)
         .bind(&swap.mm_nonce[..])
         .bind(&swap.user_destination_address)
-        .bind(swap.user_evm_account_address.to_string())
+        .bind(swap.refund_address.to_string())
         .bind(swap.status)
         .bind(user_deposit_json)
         .bind(mm_deposit_json)
@@ -138,9 +140,9 @@ impl SwapRepository {
             r"
             SELECT 
                 s.id, s.quote_id, s.market_maker_id,
-                s.metadata,
-                s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
-                s.user_destination_address, s.user_evm_account_address,
+                s.metadata, s.realized_swap,
+                s.deposit_vault_salt, s.deposit_vault_address, s.mm_nonce,
+                s.user_destination_address, s.refund_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
                 s.latest_refund,
@@ -149,9 +151,12 @@ impl SwapRepository {
                 s.created_at, s.updated_at,
                 -- Quote fields
                 q.id as quote_id,
-                q.from_chain, q.from_token, q.from_amount, q.from_decimals,
-                q.to_chain, q.to_token, q.to_amount, q.to_decimals,
-                q.fee_schedule AS quote_fee_schedule,
+                q.from_chain, q.from_token, q.from_decimals, q.from_amount,
+                q.to_chain, q.to_token, q.to_decimals, q.to_amount,
+                q.liquidity_fee_bps, q.protocol_fee_bps, q.network_fee_sats,
+                q.fee_liquidity, q.fee_protocol, q.fee_network,
+                q.min_input, q.max_input,
+                q.affiliate as quote_affiliate,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
@@ -176,9 +181,9 @@ impl SwapRepository {
             r"
             SELECT 
                 s.id, s.quote_id, s.market_maker_id,
-                s.metadata,
-                s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
-                s.user_destination_address, s.user_evm_account_address,
+                s.metadata, s.realized_swap,
+                s.deposit_vault_salt, s.deposit_vault_address, s.mm_nonce,
+                s.user_destination_address, s.refund_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
                 s.latest_refund,
@@ -187,9 +192,12 @@ impl SwapRepository {
                 s.created_at, s.updated_at,
                 -- Quote fields
                 q.id as quote_id,
-                q.from_chain, q.from_token, q.from_amount, q.from_decimals,
-                q.to_chain, q.to_token, q.to_amount, q.to_decimals,
-                q.fee_schedule AS quote_fee_schedule,
+                q.from_chain, q.from_token, q.from_decimals, q.from_amount,
+                q.to_chain, q.to_token, q.to_decimals, q.to_amount,
+                q.liquidity_fee_bps, q.protocol_fee_bps, q.network_fee_sats,
+                q.fee_liquidity, q.fee_protocol, q.fee_network,
+                q.min_input, q.max_input,
+                q.affiliate as quote_affiliate,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
@@ -353,9 +361,9 @@ impl SwapRepository {
             r"
             SELECT 
                 s.id, s.quote_id, s.market_maker_id,
-                s.metadata,
-                s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
-                s.user_destination_address, s.user_evm_account_address,
+                s.metadata, s.realized_swap,
+                s.deposit_vault_salt, s.deposit_vault_address, s.mm_nonce,
+                s.user_destination_address, s.refund_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
                 s.latest_refund,
@@ -364,9 +372,12 @@ impl SwapRepository {
                 s.created_at, s.updated_at,
                 -- Quote fields
                 q.id as quote_id,
-                q.from_chain, q.from_token, q.from_amount, q.from_decimals,
-                q.to_chain, q.to_token, q.to_amount, q.to_decimals,
-                q.fee_schedule AS quote_fee_schedule,
+                q.from_chain, q.from_token, q.from_decimals, q.from_amount,
+                q.to_chain, q.to_token, q.to_decimals, q.to_amount,
+                q.liquidity_fee_bps, q.protocol_fee_bps, q.network_fee_sats,
+                q.fee_liquidity, q.fee_protocol, q.fee_network,
+                q.min_input, q.max_input,
+                q.affiliate as quote_affiliate,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
@@ -399,15 +410,16 @@ impl SwapRepository {
                 s.user_destination_address,
                 s.mm_nonce,
                 s.user_deposit_status,
+                s.realized_swap,
                 q.to_chain,
                 q.to_token,
-                q.to_amount,
                 q.to_decimals
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
             WHERE s.market_maker_id = $1
               AND s.status = $2
               AND s.user_deposit_status IS NOT NULL
+              AND s.realized_swap IS NOT NULL
             "#,
         )
         .bind(market_maker_id)
@@ -426,12 +438,24 @@ impl SwapRepository {
             let mut mm_nonce = [0u8; 16];
             mm_nonce.copy_from_slice(&mm_nonce_vec);
 
-            let expected_lot = lot_from_db(
+            // Get realized swap to extract mm_output
+            let realized_json: serde_json::Value = row.try_get("realized_swap")?;
+            let realized: RealizedSwap = serde_json::from_value(realized_json)
+                .map_err(|e| OtcServerError::InvalidData {
+                    message: format!("Failed to deserialize realized_swap: {e}"),
+                })?;
+
+            // Build expected_lot from to_currency and realized.mm_output
+            let to_currency = currency_from_db(
                 row.try_get::<String, _>("to_chain")?,
                 row.try_get::<serde_json::Value, _>("to_token")?,
-                row.try_get::<String, _>("to_amount")?,
                 row.try_get::<i16, _>("to_decimals")? as u8,
             )?;
+
+            let expected_lot = Lot {
+                currency: to_currency,
+                amount: realized.mm_output,
+            };
 
             let deposit_status_json: serde_json::Value = row.try_get("user_deposit_status")?;
             let deposit_status = user_deposit_status_from_json(deposit_status_json)?;
@@ -448,6 +472,7 @@ impl SwapRepository {
                 user_destination_address: row.try_get("user_destination_address")?,
                 mm_nonce,
                 expected_lot,
+                protocol_fee: realized.protocol_fee,
                 user_deposit_confirmed_at,
             });
         }
@@ -464,17 +489,12 @@ impl SwapRepository {
             r#"
             SELECT
                 s.id AS swap_id,
-                s.user_deposit_salt,
+                s.deposit_vault_salt,
                 s.user_deposit_status,
                 s.updated_at,
                 q.from_chain,
                 q.from_token,
-                q.from_amount,
-                q.from_decimals,
-                q.to_chain,
-                q.to_token,
-                q.to_amount,
-                q.to_decimals
+                q.from_decimals
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
             WHERE s.market_maker_id = $1
@@ -491,14 +511,14 @@ impl SwapRepository {
 
         let mut swaps = Vec::with_capacity(rows.len());
         for row in rows {
-            let salt_vec: Vec<u8> = row.try_get("user_deposit_salt")?;
+            let salt_vec: Vec<u8> = row.try_get("deposit_vault_salt")?;
             if salt_vec.len() != 32 {
                 return Err(OtcServerError::InvalidData {
-                    message: "user_deposit_salt must be exactly 32 bytes".to_string(),
+                    message: "deposit_vault_salt must be exactly 32 bytes".to_string(),
                 });
             }
-            let mut user_deposit_salt = [0u8; 32];
-            user_deposit_salt.copy_from_slice(&salt_vec);
+            let mut deposit_vault_salt = [0u8; 32];
+            deposit_vault_salt.copy_from_slice(&salt_vec);
 
             let from_chain: String = row.try_get("from_chain")?;
             let deposit_chain = ChainType::from_db_string(&from_chain).ok_or(OtcServerError::InvalidData {
@@ -510,20 +530,20 @@ impl SwapRepository {
 
             let swap_settlement_timestamp: DateTime<Utc> = row.try_get("updated_at")?;
 
-            // Build the lot structure from the quote's from fields, but use the actual
-            // on-chain balance from user_deposit_status.amount instead of the quoted amount
-            let mut actual_deposit_lot = lot_from_db(
+            // Build the lot from currency and actual deposit amount
+            let from_currency = currency_from_db(
                 row.try_get::<String, _>("from_chain")?,
                 row.try_get::<serde_json::Value, _>("from_token")?,
-                row.try_get::<String, _>("from_amount")?,
                 row.try_get::<i16, _>("from_decimals")? as u8,
             )?;
-            // Override with the actual on-chain balance from the user's deposit
-            actual_deposit_lot.amount = deposit_status.amount;
+            let actual_deposit_lot = Lot {
+                currency: from_currency,
+                amount: deposit_status.amount,
+            };
 
             swaps.push(SettledSwapNotification {
                 swap_id: row.try_get("swap_id")?,
-                user_deposit_salt,
+                deposit_vault_salt,
                 user_deposit_tx_hash: deposit_status.tx_hash,
                 lot: actual_deposit_lot,
                 deposit_chain,
@@ -542,11 +562,10 @@ impl SwapRepository {
             SELECT
                 s.id AS swap_id,
                 s.market_maker_id,
-                s.user_deposit_salt,
+                s.deposit_vault_salt,
                 s.user_deposit_status,
                 q.from_chain,
                 q.from_token,
-                q.from_amount,
                 q.from_decimals
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
@@ -561,29 +580,32 @@ impl SwapRepository {
 
         let mut swaps = Vec::with_capacity(rows.len());
         for row in rows {
-            let salt_vec: Vec<u8> = row.try_get("user_deposit_salt")?;
+            let salt_vec: Vec<u8> = row.try_get("deposit_vault_salt")?;
             if salt_vec.len() != 32 {
                 return Err(OtcServerError::InvalidData {
-                    message: "user_deposit_salt must be exactly 32 bytes".to_string(),
+                    message: "deposit_vault_salt must be exactly 32 bytes".to_string(),
                 });
             }
-            let mut user_deposit_salt = [0u8; 32];
-            user_deposit_salt.copy_from_slice(&salt_vec);
+            let mut deposit_vault_salt = [0u8; 32];
+            deposit_vault_salt.copy_from_slice(&salt_vec);
 
             let user_deposit_status_json: serde_json::Value = row.try_get("user_deposit_status")?;
             let user_deposit_status = user_deposit_status_from_json(user_deposit_status_json)?;
 
-            let lot = lot_from_db(
+            let from_currency = currency_from_db(
                 row.try_get::<String, _>("from_chain")?,
                 row.try_get::<serde_json::Value, _>("from_token")?,
-                row.try_get::<String, _>("from_amount")?,
                 row.try_get::<i16, _>("from_decimals")? as u8,
             )?;
+            let lot = Lot {
+                currency: from_currency,
+                amount: user_deposit_status.amount,
+            };
 
             swaps.push(ForceSwapNotification {
                 swap_id: row.try_get("swap_id")?,
                 market_maker_id: row.try_get("market_maker_id")?,
-                user_deposit_salt,
+                deposit_vault_salt,
                 user_deposit_tx_hash: user_deposit_status.tx_hash,
                 lot,
             });
@@ -614,6 +636,11 @@ impl SwapRepository {
             .as_ref()
             .map(latest_refund_to_json)
             .transpose()?;
+        let realized_json = swap
+            .realized
+            .as_ref()
+            .map(realized_swap_to_json)
+            .transpose()?;
         
         let result = match expected_status {
             Some(expected) => {
@@ -626,13 +653,14 @@ impl SwapRepository {
                         mm_deposit_status = $4,
                         settlement_status = $5,
                         latest_refund = $6,
-                        failure_reason = $7,
-                        failure_at = $8,
-                        mm_notified_at = $9,
-                        mm_private_key_sent_at = $10,
-                        updated_at = $11
+                        realized_swap = $7,
+                        failure_reason = $8,
+                        failure_at = $9,
+                        mm_notified_at = $10,
+                        mm_private_key_sent_at = $11,
+                        updated_at = $12
                     WHERE id = $1
-                      AND status = $12
+                      AND status = $13
                     ",
                 )
                 .bind(swap.id)
@@ -641,6 +669,7 @@ impl SwapRepository {
                 .bind(mm_deposit_json)
                 .bind(settlement_json)
                 .bind(latest_refund_json)
+                .bind(realized_json)
                 .bind(&swap.failure_reason)
                 .bind(swap.failure_at)
                 .bind(swap.mm_notified_at)
@@ -660,11 +689,12 @@ impl SwapRepository {
                         mm_deposit_status = $4,
                         settlement_status = $5,
                         latest_refund = $6,
-                        failure_reason = $7,
-                        failure_at = $8,
-                        mm_notified_at = $9,
-                        mm_private_key_sent_at = $10,
-                        updated_at = $11
+                        realized_swap = $7,
+                        failure_reason = $8,
+                        failure_at = $9,
+                        mm_notified_at = $10,
+                        mm_private_key_sent_at = $11,
+                        updated_at = $12
                     WHERE id = $1
                     ",
                 )
@@ -674,6 +704,7 @@ impl SwapRepository {
                 .bind(mm_deposit_json)
                 .bind(settlement_json)
                 .bind(latest_refund_json)
+                .bind(realized_json)
                 .bind(&swap.failure_reason)
                 .bind(swap.failure_at)
                 .bind(swap.mm_notified_at)
@@ -705,9 +736,9 @@ impl SwapRepository {
             r"
             SELECT 
                 s.id, s.quote_id, s.market_maker_id,
-                s.metadata,
-                s.user_deposit_salt, s.user_deposit_address, s.mm_nonce,
-                s.user_destination_address, s.user_evm_account_address,
+                s.metadata, s.realized_swap,
+                s.deposit_vault_salt, s.deposit_vault_address, s.mm_nonce,
+                s.user_destination_address, s.refund_address,
                 s.status,
                 s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
                 s.latest_refund,
@@ -716,9 +747,12 @@ impl SwapRepository {
                 s.created_at, s.updated_at,
                 -- Quote fields
                 q.id as quote_id,
-                q.from_chain, q.from_token, q.from_amount, q.from_decimals,
-                q.to_chain, q.to_token, q.to_amount, q.to_decimals,
-                q.fee_schedule AS quote_fee_schedule,
+                q.from_chain, q.from_token, q.from_decimals, q.from_amount,
+                q.to_chain, q.to_token, q.to_decimals, q.to_amount,
+                q.liquidity_fee_bps, q.protocol_fee_bps, q.network_fee_sats,
+                q.fee_liquidity, q.fee_protocol, q.fee_network,
+                q.min_input, q.max_input,
+                q.affiliate as quote_affiliate,
                 q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
             FROM swaps s
             JOIN quotes q ON s.quote_id = q.id
@@ -748,6 +782,7 @@ impl SwapRepository {
         &self,
         swap_id: Uuid,
         deposit_status: UserDepositStatus,
+        realized: Option<RealizedSwap>,
     ) -> OtcServerResult<()> {
         // First get the swap
         let mut swap = self.get(swap_id).await?;
@@ -760,6 +795,7 @@ impl SwapRepository {
             deposit_status.tx_hash.clone(),
             deposit_status.amount,
             deposit_status.confirmations,
+            realized,
         )
         .map_err(|e| OtcServerError::InvalidState {
             message: format!("State transition failed: {e}"),
@@ -1203,27 +1239,22 @@ mod tests {
     use alloy::primitives::U256;
     use chrono::Duration;
     use otc_models::{
-        ChainType, Currency, FeeSchedule, LatestRefund, Lot, MMDepositStatus, Metadata, Quote,
-        SettlementStatus, Swap, SwapStatus, TokenIdentifier, UserDepositStatus,
+        ChainType, Currency, Fees, LatestRefund, Lot, MMDepositStatus, Metadata, Quote,
+        SettlementStatus, Swap, SwapRates, SwapStatus, TokenIdentifier, UserDepositStatus,
     };
     use uuid::Uuid;
 
-    #[sqlx::test]
-    async fn test_swap_round_trip(pool: sqlx::PgPool) -> sqlx::Result<()> {
-        // Database will auto-initialize with schema
-        let db = Database::from_pool(pool.clone()).await.unwrap();
-        let swap_repo = db.swaps();
-
-        // First create a quote that the swap will reference
-        let quote = Quote {
-            id: Uuid::new_v4(),
+    fn create_test_quote() -> Quote {
+        Quote {
+            id: Uuid::now_v7(),
+            market_maker_id: Uuid::now_v7(),
             from: Lot {
                 currency: Currency {
                     chain: ChainType::Bitcoin,
                     token: TokenIdentifier::Native,
                     decimals: 8,
                 },
-                amount: U256::from(1000000u64), // 0.01 BTC
+                amount: U256::from(1_000_000u64),
             },
             to: Lot {
                 currency: Currency {
@@ -1231,40 +1262,41 @@ mod tests {
                     token: TokenIdentifier::Native,
                     decimals: 18,
                 },
-                amount: U256::from(500000000000000000u64), // 0.5 ETH
+                amount: U256::from(996_700u64),
             },
-            fee_schedule: FeeSchedule {
-                network_fee_sats: 1100,
-                liquidity_fee_sats: 2100,
-                protocol_fee_sats: 600,
+            rates: SwapRates::new(13, 10, 1000),
+            fees: Fees {
+                liquidity_fee: U256::from(1300u64),
+                protocol_fee: U256::from(1000u64),
+                network_fee: U256::from(1000u64),
             },
-            market_maker_id: Uuid::new_v4(),
+            min_input: U256::from(10_000u64),
+            max_input: U256::from(100_000_000u64),
+            affiliate: None,
             expires_at: utc::now() + Duration::hours(1),
             created_at: utc::now(),
-        };
+        }
+    }
 
-        // Create test salt and nonce
+    fn create_test_swap(quote: Quote) -> Swap {
         let mut user_salt = [0u8; 32];
         let mut mm_nonce = [0u8; 16];
         getrandom::getrandom(&mut user_salt).unwrap();
         getrandom::getrandom(&mut mm_nonce).unwrap();
 
-        // Create a test swap
-        let original_swap = Swap {
-            id: Uuid::new_v4(),
+        Swap {
+            id: Uuid::now_v7(),
             market_maker_id: quote.market_maker_id,
-            quote: quote.clone(),
+            quote,
             metadata: Metadata {
-                affiliate: Some("affiliate_123".to_string()),
                 start_asset: Some("btc".to_string()),
             },
-            user_deposit_salt: user_salt,
-            user_deposit_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
+            realized: None,
+            deposit_vault_salt: user_salt,
+            deposit_vault_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
             mm_nonce,
             user_destination_address: "0x1234567890123456789012345678901234567890".to_string(),
-            user_evm_account_address: "0x1234567890123456789012345678901234567890"
-                .parse()
-                .unwrap(),
+            refund_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx124".to_string(),
             status: SwapStatus::WaitingUserDepositInitiated,
             user_deposit_status: None,
             mm_deposit_status: None,
@@ -1276,7 +1308,18 @@ mod tests {
             mm_private_key_sent_at: None,
             created_at: utc::now(),
             updated_at: utc::now(),
-        };
+        }
+    }
+
+    #[sqlx::test]
+    async fn test_swap_round_trip(pool: sqlx::PgPool) -> sqlx::Result<()> {
+        // Database will auto-initialize with schema
+        let db = Database::from_pool(pool.clone()).await.unwrap();
+        let swap_repo = db.swaps();
+
+        // First create a quote that the swap will reference
+        let quote = create_test_quote();
+        let original_swap = create_test_swap(quote.clone());
 
         // Store the swap
         swap_repo.create(&original_swap).await.unwrap();
@@ -1292,16 +1335,16 @@ mod tests {
             original_swap.market_maker_id
         );
         assert_eq!(
-            retrieved_swap.user_deposit_salt,
-            original_swap.user_deposit_salt
+            retrieved_swap.deposit_vault_salt,
+            original_swap.deposit_vault_salt
         );
         assert_eq!(
-            retrieved_swap.user_deposit_address,
-            original_swap.user_deposit_address
+            retrieved_swap.deposit_vault_address,
+            original_swap.deposit_vault_address
         );
         assert_eq!(
-            retrieved_swap.metadata.affiliate,
-            original_swap.metadata.affiliate
+            retrieved_swap.quote.affiliate,
+            original_swap.quote.affiliate
         );
         assert_eq!(
             retrieved_swap.metadata.start_asset,
@@ -1313,8 +1356,8 @@ mod tests {
             original_swap.user_destination_address
         );
         assert_eq!(
-            retrieved_swap.user_evm_account_address,
-            original_swap.user_evm_account_address
+            retrieved_swap.refund_address,
+            original_swap.refund_address
         );
         assert_eq!(retrieved_swap.status, original_swap.status);
 
@@ -1327,82 +1370,31 @@ mod tests {
         let db = Database::from_pool(pool.clone()).await.unwrap();
         let swap_repo = db.swaps();
 
-        // Create quote
-        let quote = Quote {
-            id: Uuid::new_v4(),
-            from: Lot {
-                currency: Currency {
-                    chain: ChainType::Bitcoin,
-                    token: TokenIdentifier::Native,
-                    decimals: 8,
-                },
-                amount: U256::from(2000000u64),
-            },
-            to: Lot {
-                currency: Currency {
-                    chain: ChainType::Ethereum,
-                    token: TokenIdentifier::Native,
-                    decimals: 18,
-                },
-                amount: U256::from(1000000000000000000u64),
-            },
-            fee_schedule: FeeSchedule {
-                network_fee_sats: 1200,
-                liquidity_fee_sats: 2200,
-                protocol_fee_sats: 700,
-            },
-            market_maker_id: Uuid::new_v4(),
-            expires_at: utc::now() + Duration::hours(1),
-            created_at: utc::now(),
-        };
-
-        // Create test salt and nonce
-        let mut user_salt = [0u8; 32];
-        let mut mm_nonce = [0u8; 16];
-        getrandom::getrandom(&mut user_salt).unwrap();
-        getrandom::getrandom(&mut mm_nonce).unwrap();
+        // Create quote using helper
+        let quote = create_test_quote();
+        let now = utc::now();
 
         // Create swap with deposit info
-        let now = utc::now();
-        let original_swap = Swap {
-            id: Uuid::new_v4(),
-            market_maker_id: quote.market_maker_id,
-            quote: quote.clone(),
-            metadata: Metadata::default(),
-            user_deposit_salt: user_salt,
-            user_deposit_address: "bc1qnahvmnz8vgsdmrr68l5mfr8v8q9fxqz3n5d9u0".to_string(),
-            mm_nonce,
-            user_destination_address: "0x9876543210987654321098765432109876543210".to_string(),
-            user_evm_account_address: "0x1234567890123456789012345678901234567890"
-                .parse()
-                .unwrap(),
-            status: SwapStatus::WaitingMMDepositConfirmed,
-            user_deposit_status: Some(UserDepositStatus {
-                tx_hash: "7d865e959b2466918c9863afca942d0fb89d7c9ac0c99bafc3749504ded97730"
-                    .to_string(),
-                amount: U256::from(2000000u64),
-                deposit_detected_at: now,
-                confirmed_at: None,
-                confirmations: 6,
-                last_checked: now,
-            }),
-            mm_deposit_status: Some(MMDepositStatus {
-                tx_hash: "0x88df016429689c079f3b2f6ad39fa052532c56b6a39df8e3c84c03b8346cfc63"
-                    .to_string(),
-                amount: U256::from(1000000000000000000u64),
-                deposit_detected_at: now + Duration::minutes(5),
-                confirmations: 12,
-                last_checked: now + Duration::minutes(5),
-            }),
-            settlement_status: None,
-            latest_refund: None,
-            failure_reason: None,
-            failure_at: None,
-            mm_notified_at: None,
-            mm_private_key_sent_at: None,
-            created_at: now,
-            updated_at: now + Duration::minutes(5),
-        };
+        let mut original_swap = create_test_swap(quote.clone());
+        original_swap.status = SwapStatus::WaitingMMDepositConfirmed;
+        original_swap.user_deposit_status = Some(UserDepositStatus {
+            tx_hash: "7d865e959b2466918c9863afca942d0fb89d7c9ac0c99bafc3749504ded97730"
+                .to_string(),
+            amount: U256::from(2000000u64),
+            deposit_detected_at: now,
+            confirmed_at: None,
+            confirmations: 6,
+            last_checked: now,
+        });
+        original_swap.mm_deposit_status = Some(MMDepositStatus {
+            tx_hash: "0x88df016429689c079f3b2f6ad39fa052532c56b6a39df8e3c84c03b8346cfc63"
+                .to_string(),
+            amount: U256::from(1000000000000000000u64),
+            deposit_detected_at: now + Duration::minutes(5),
+            confirmations: 12,
+            last_checked: now + Duration::minutes(5),
+        });
+        original_swap.updated_at = now + Duration::minutes(5);
 
         // Store and retrieve
         swap_repo.create(&original_swap).await.unwrap();
@@ -1442,66 +1434,9 @@ mod tests {
         let db = Database::from_pool(pool.clone()).await.unwrap();
         let swap_repo = db.swaps();
 
-        // Create quote
-        let quote = Quote {
-            id: Uuid::new_v4(),
-            from: Lot {
-                currency: Currency {
-                    chain: ChainType::Bitcoin,
-                    token: TokenIdentifier::Native,
-                    decimals: 8,
-                },
-                amount: U256::from(1000000u64),
-            },
-            to: Lot {
-                currency: Currency {
-                    chain: ChainType::Ethereum,
-                    token: TokenIdentifier::Native,
-                    decimals: 18,
-                },
-                amount: U256::from(500000000000000000u64),
-            },
-            fee_schedule: FeeSchedule {
-                network_fee_sats: 900,
-                liquidity_fee_sats: 1700,
-                protocol_fee_sats: 450,
-            },
-            market_maker_id: Uuid::new_v4(),
-            expires_at: utc::now() + Duration::hours(1),
-            created_at: utc::now(),
-        };
-
-        // Create test salt and nonce
-        let mut user_salt = [0u8; 32];
-        let mut mm_nonce = [0u8; 16];
-        getrandom::getrandom(&mut user_salt).unwrap();
-        getrandom::getrandom(&mut mm_nonce).unwrap();
-
-        // Create swap
-        let swap = Swap {
-            id: Uuid::new_v4(),
-            market_maker_id: quote.market_maker_id,
-            quote: quote.clone(),
-            metadata: Metadata::default(),
-            user_deposit_salt: user_salt,
-            user_deposit_address: "bc1qxy2kgdygjrsqtzq2n0yrf2493p83kkfjhx0wlh".to_string(),
-            mm_nonce,
-            user_destination_address: "0xabcdef1234567890abcdef1234567890abcdef12".to_string(),
-            user_evm_account_address: "0x1234567890123456789012345678901234567890"
-                .parse()
-                .unwrap(),
-            status: SwapStatus::WaitingUserDepositInitiated,
-            user_deposit_status: None,
-            mm_deposit_status: None,
-            settlement_status: None,
-            latest_refund: None,
-            failure_reason: None,
-            failure_at: None,
-            mm_notified_at: None,
-            mm_private_key_sent_at: None,
-            created_at: utc::now(),
-            updated_at: utc::now(),
-        };
+        // Create quote and swap using helpers
+        let quote = create_test_quote();
+        let swap = create_test_swap(quote);
 
         swap_repo.create(&swap).await.unwrap();
 
@@ -1563,63 +1498,8 @@ mod tests {
         let db = Database::from_pool(pool.clone()).await.unwrap();
         let swaps = db.swaps();
 
-        let quote = Quote {
-            id: Uuid::new_v4(),
-            from: Lot {
-                currency: Currency {
-                    chain: ChainType::Bitcoin,
-                    token: TokenIdentifier::Native,
-                    decimals: 8,
-                },
-                amount: U256::from(1500000u64),
-            },
-            to: Lot {
-                currency: Currency {
-                    chain: ChainType::Ethereum,
-                    token: TokenIdentifier::Native,
-                    decimals: 18,
-                },
-                amount: U256::from(600000000000000000u64),
-            },
-            fee_schedule: FeeSchedule {
-                network_fee_sats: 1000,
-                liquidity_fee_sats: 2000,
-                protocol_fee_sats: 500,
-            },
-            market_maker_id: Uuid::new_v4(),
-            expires_at: utc::now() + Duration::hours(1),
-            created_at: utc::now(),
-        };
-
-        let mut user_deposit_salt = [0u8; 32];
-        let mut mm_nonce = [0u8; 16];
-        getrandom::getrandom(&mut user_deposit_salt).unwrap();
-        getrandom::getrandom(&mut mm_nonce).unwrap();
-
-        let swap = Swap {
-            id: Uuid::new_v4(),
-            market_maker_id: quote.market_maker_id,
-            quote: quote.clone(),
-            metadata: Metadata::default(),
-            user_deposit_salt,
-            user_deposit_address: "bc1qabcdhg8nmn6zq2q9c5u4q4wcnn8w9sredp3g4s".to_string(),
-            mm_nonce,
-            user_destination_address: "0x1234567890123456789012345678901234567890".to_string(),
-            user_evm_account_address: "0x1234567890123456789012345678901234567890"
-                .parse()
-                .unwrap(),
-            status: SwapStatus::WaitingUserDepositInitiated,
-            user_deposit_status: None,
-            mm_deposit_status: None,
-            settlement_status: None,
-            latest_refund: None,
-            failure_reason: None,
-            failure_at: None,
-            mm_notified_at: None,
-            mm_private_key_sent_at: None,
-            created_at: utc::now(),
-            updated_at: utc::now(),
-        };
+        let quote = create_test_quote();
+        let swap = create_test_swap(quote);
 
         swaps.create(&swap).await.unwrap();
 

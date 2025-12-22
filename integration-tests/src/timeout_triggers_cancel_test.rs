@@ -13,11 +13,10 @@ use market_maker::wallet::Wallet;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, MarketMakerArgs};
 use mock_instant::global::MockClock;
 use otc_chains::traits::Payment;
-use otc_models::{ChainType, Currency, Lot, Quote, QuoteMode, QuoteRequest, TokenIdentifier};
+use otc_models::{Swap, SwapMode, ChainType, Currency, Lot, Quote, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
-use otc_server::api::SwapResponse;
 use otc_server::{
-    api::{CreateSwapRequest, CreateSwapResponse},
+    api::CreateSwapRequest,
     server::run_server,
     OtcServerArgs,
 };
@@ -164,8 +163,7 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
 
     // Request a quote from the RFQ server
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: U256::from(100_000_000i128), // 1 cbbtc
+        mode: SwapMode::ExactInput(100_000_000i128 as u64), // 1 cbbtc
         from: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
@@ -176,10 +174,11 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
@@ -205,22 +204,22 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
     let swap_request = CreateSwapRequest {
         quote: quote.clone(),
         user_destination_address: user_account.bitcoin_wallet.address.to_string(),
-        user_evm_account_address: user_account.ethereum_address,
+        refund_address: user_account.ethereum_address.to_string(),
         metadata: None,
     };
 
     let response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
         .unwrap();
 
     let response_status = response.status();
-    let response_json = match response_status {
+    let swap = match response_status {
         StatusCode::OK => {
-            let response_json: CreateSwapResponse = response.json().await.unwrap();
-            response_json
+            let swap: Swap = response.json().await.unwrap();
+            swap
         }
         _ => {
             let response_text = response.text().await;
@@ -239,11 +238,11 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
                         token: TokenIdentifier::Address(
                             devnet.ethereum.cbbtc_contract.address().to_string(),
                         ),
-                        decimals: response_json.decimals,
+                        decimals: swap.quote.from.currency.decimals,
                     },
-                    amount: response_json.expected_amount,
+                    amount: swap.quote.min_input,
                 },
-                to_address: response_json.deposit_address,
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )
@@ -270,25 +269,25 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
         .unwrap();
 
     info!("Tx status: {:#?}", get_tx_status);
-    let swap_response = wait_for_swap_status(
+    let swap_result = wait_for_swap_status(
         &client,
         otc_port,
-        response_json.swap_id,
+        swap.id,
         "WaitingMMDepositConfirmed",
     )
     .await;
 
-    let mm_deposit_tx = swap_response
-        .mm_deposit
-        .deposit_tx
-        .expect("MM deposit tx should be present");
+    let mm_deposit_tx = swap_result
+        .mm_deposit_status
+        .expect("MM deposit status should be present")
+        .tx_hash;
 
     // mm_deposit_tx is bitcoin Txid
-    let mm_deposit_tx = bitcoin::Txid::from_str(&mm_deposit_tx).unwrap();
+    let mm_deposit_txid = bitcoin::Txid::from_str(&mm_deposit_tx).unwrap();
     let mm_deposit_tx_status = devnet
         .bitcoin
         .rpc_client
-        .get_raw_transaction_verbose(&mm_deposit_tx)
+        .get_raw_transaction_verbose(&mm_deposit_txid)
         .await
         .unwrap();
 
@@ -300,7 +299,7 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
     let database = Database::connect(&mm_db_url, 10, 2).await.unwrap();
     database
         .payments()
-        .has_payment_been_made(response_json.swap_id)
+        .has_payment_been_made(swap.id)
         .await
         .unwrap()
         .expect("Payment storage should have recorded the txid");
@@ -323,7 +322,7 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
         let mm_deposit_tx_status = devnet
             .bitcoin
             .rpc_client
-            .get_raw_transaction_verbose(&mm_deposit_tx)
+            .get_raw_transaction_verbose(&mm_deposit_txid)
             .await;
         if mm_deposit_tx_status.is_err() {
             let err = mm_deposit_tx_status.unwrap_err();

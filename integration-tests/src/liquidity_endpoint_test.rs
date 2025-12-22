@@ -1,7 +1,7 @@
 use alloy::primitives::U256;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::run_market_maker;
-use otc_models::{ChainType, Currency, QuoteMode, QuoteRequest, TokenIdentifier};
+use otc_models::{SwapMode, ChainType, Currency, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::time::Duration;
@@ -101,7 +101,7 @@ async fn test_liquidity_endpoint_returns_data(
     // Request liquidity from the endpoint
     let client = reqwest::Client::new();
     let liquidity_response = client
-        .get(format!("http://localhost:{rfq_port}/api/v1/liquidity"))
+        .get(format!("http://localhost:{rfq_port}/api/v2/liquidity"))
         .send()
         .await
         .unwrap();
@@ -174,10 +174,10 @@ async fn test_liquidity_endpoint_returns_data(
     // Note: max_amount is conservative, so we add a significant margin to ensure it exceeds capacity
     let over_limit_amount = btc_to_cbbtc.max_amount + btc_to_cbbtc.max_amount / U256::from(100); // +1%
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactOutput,
-        amount: over_limit_amount,
+        mode: SwapMode::ExactInput(over_limit_amount.to::<u64>()),
         from: btc_to_cbbtc.from.clone(),
         to: btc_to_cbbtc.to.clone(),
+        affiliate: None,
     };
 
     info!(
@@ -185,7 +185,7 @@ async fn test_liquidity_endpoint_returns_data(
         over_limit_amount
     );
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
@@ -197,8 +197,7 @@ async fn test_liquidity_endpoint_returns_data(
         "Quote request should return 200"
     );
 
-    let quote_response: rfq_server::server::QuoteResponse =
-        quote_response.json().await.unwrap();
+    let quote_response: rfq_server::server::QuoteResponse = quote_response.json().await.unwrap();
     info!("Over-limit BTC->CBBTC quote response: {:?}", quote_response);
 
     // Should either have no quote or an error result
@@ -207,7 +206,9 @@ async fn test_liquidity_endpoint_returns_data(
             RFQResult::Success(_) => {
                 panic!("Should not get successful quote for amount exceeding liquidity limit");
             }
-            RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) | RFQResult::Unsupported(err) => {
+            RFQResult::MakerUnavailable(err)
+            | RFQResult::InvalidRequest(err)
+            | RFQResult::Unsupported(err) => {
                 info!("Got expected error for over-limit amount: {}", err);
             }
         }
@@ -220,10 +221,10 @@ async fn test_liquidity_endpoint_returns_data(
     // Note: max_amount is conservative, so we add a significant margin to ensure it exceeds capacity
     let over_limit_amount = cbbtc_to_btc.max_amount + cbbtc_to_btc.max_amount / U256::from(100); // +1%
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactOutput,
-        amount: over_limit_amount,
+        mode: SwapMode::ExactInput(over_limit_amount.to::<u64>()),
         from: cbbtc_to_btc.from.clone(),
         to: cbbtc_to_btc.to.clone(),
+        affiliate: None,
     };
 
     info!(
@@ -231,7 +232,7 @@ async fn test_liquidity_endpoint_returns_data(
         over_limit_amount
     );
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
@@ -243,8 +244,7 @@ async fn test_liquidity_endpoint_returns_data(
         "Quote request should return 200"
     );
 
-    let quote_response: rfq_server::server::QuoteResponse =
-        quote_response.json().await.unwrap();
+    let quote_response: rfq_server::server::QuoteResponse = quote_response.json().await.unwrap();
     info!("Over-limit CBBTC->BTC quote response: {:?}", quote_response);
 
     // Should either have no quote or an error result
@@ -253,7 +253,9 @@ async fn test_liquidity_endpoint_returns_data(
             RFQResult::Success(_) => {
                 panic!("Should not get successful quote for amount exceeding liquidity limit");
             }
-            RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) | RFQResult::Unsupported(err) => {
+            RFQResult::MakerUnavailable(err)
+            | RFQResult::InvalidRequest(err)
+            | RFQResult::Unsupported(err) => {
                 info!("Got expected error for over-limit amount: {}", err);
             }
         }
@@ -265,41 +267,48 @@ async fn test_liquidity_endpoint_returns_data(
     // Using ExactOutput to directly specify the OUTPUT amount the MM must provide
     let exact_amount = btc_to_cbbtc.max_amount;
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactOutput,
-        amount: exact_amount,
+        mode: SwapMode::ExactInput(exact_amount.to::<u64>()),
         from: btc_to_cbbtc.from.clone(),
         to: btc_to_cbbtc.to.clone(),
+        affiliate: None,
     };
 
-    info!("Testing BTC->CBBTC with exact max OUTPUT amount: {}", exact_amount);
+    info!(
+        "Testing BTC->CBBTC with exact max OUTPUT amount: {}",
+        exact_amount
+    );
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
         .unwrap();
 
-    assert_eq!(
-        quote_response.status(),
-        200,
-        "Quote request should succeed"
-    );
+    assert_eq!(quote_response.status(), 200, "Quote request should succeed");
 
-    let quote_response: rfq_server::server::QuoteResponse =
-        quote_response.json().await.unwrap();
-    info!("Exact amount BTC->CBBTC quote response: {:?}", quote_response);
+    let quote_response: rfq_server::server::QuoteResponse = quote_response.json().await.unwrap();
+    info!(
+        "Exact amount BTC->CBBTC quote response: {:?}",
+        quote_response
+    );
 
     // Should get a successful quote
     match quote_response.quote.expect("Should have a quote") {
         RFQResult::Success(quote) => {
             info!("Got successful quote for exact max amount: {:?}", quote);
-            assert_eq!(
-                quote.to.amount, exact_amount,
-                "Quote to amount should match requested output amount"
+            // In rate-based model, verify the input_hint is within bounds
+            assert!(
+                exact_amount >= quote.min_input && exact_amount <= quote.max_input,
+                "Requested amount should be within quote bounds"
             );
         }
-        RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) | RFQResult::Unsupported(err) => {
-            panic!("Should get successful quote for exact max amount, got error: {}", err);
+        RFQResult::MakerUnavailable(err)
+        | RFQResult::InvalidRequest(err)
+        | RFQResult::Unsupported(err) => {
+            panic!(
+                "Should get successful quote for exact max amount, got error: {}",
+                err
+            );
         }
     }
 
@@ -307,45 +316,51 @@ async fn test_liquidity_endpoint_returns_data(
     // Using ExactOutput to directly specify the OUTPUT amount the MM must provide
     let exact_amount = cbbtc_to_btc.max_amount;
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactOutput,
-        amount: exact_amount,
+        mode: SwapMode::ExactInput(exact_amount.to::<u64>()),
         from: cbbtc_to_btc.from.clone(),
         to: cbbtc_to_btc.to.clone(),
+        affiliate: None,
     };
 
-    info!("Testing CBBTC->BTC with exact max OUTPUT amount: {}", exact_amount);
+    info!(
+        "Testing CBBTC->BTC with exact max OUTPUT amount: {}",
+        exact_amount
+    );
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
         .unwrap();
 
-    assert_eq!(
-        quote_response.status(),
-        200,
-        "Quote request should succeed"
-    );
+    assert_eq!(quote_response.status(), 200, "Quote request should succeed");
 
-    let quote_response: rfq_server::server::QuoteResponse =
-        quote_response.json().await.unwrap();
-    info!("Exact amount CBBTC->BTC quote response: {:?}", quote_response);
+    let quote_response: rfq_server::server::QuoteResponse = quote_response.json().await.unwrap();
+    info!(
+        "Exact amount CBBTC->BTC quote response: {:?}",
+        quote_response
+    );
 
     // Should get a successful quote
     match quote_response.quote.expect("Should have a quote") {
         RFQResult::Success(quote) => {
             info!("Got successful quote for exact max amount: {:?}", quote);
-            assert_eq!(
-                quote.to.amount, exact_amount,
-                "Quote to amount should match requested output amount"
+            // In rate-based model, verify the input_hint is within bounds
+            assert!(
+                exact_amount >= quote.min_input && exact_amount <= quote.max_input,
+                "Requested amount should be within quote bounds"
             );
         }
-        RFQResult::MakerUnavailable(err) | RFQResult::InvalidRequest(err) | RFQResult::Unsupported(err) => {
-            panic!("Should get successful quote for exact max amount, got error: {}", err);
+        RFQResult::MakerUnavailable(err)
+        | RFQResult::InvalidRequest(err)
+        | RFQResult::Unsupported(err) => {
+            panic!(
+                "Should get successful quote for exact max amount, got error: {}",
+                err
+            );
         }
     }
 
     drop(devnet);
     tokio::join!(service_join_set.shutdown());
 }
-

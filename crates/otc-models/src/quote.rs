@@ -1,4 +1,4 @@
-use crate::{ChainType, FeeSchedule};
+use crate::{serde_utils::u256_decimal, ChainType, SwapMode, SwapRates};
 use alloy::primitives::{keccak256, U256};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, Serializer};
@@ -19,12 +19,33 @@ pub struct Currency {
     pub decimals: u8,
 }
 
+/// A lot represents a specific amount of a currency.
+/// Used for tracking actual deposited/sent amounts in swaps.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Lot {
     pub currency: Currency,
+    #[serde(with = "u256_decimal")]
     pub amount: U256,
 }
 
+/// Fee amounts for a realized swap.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Fees {
+    #[serde(with = "u256_decimal")]
+    pub liquidity_fee: U256,
+    #[serde(with = "u256_decimal")]
+    pub protocol_fee: U256,
+    #[serde(with = "u256_decimal")]
+    pub network_fee: U256,
+}
+
+/// A quote that defines the terms for a swap.
+///
+/// Contains:
+/// - Exact quoted amounts (`from`/`to` lots) for the requested input/output
+/// - Valid deposit bounds (`min_input`/`max_input`) - user can deposit any amount within
+/// - Rate parameters (`rates`) to compute realized amounts for any deposit
+/// - Fee breakdown (`fees`) for the exact quoted amount
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quote {
     pub id: Uuid,
@@ -32,31 +53,45 @@ pub struct Quote {
     /// The market maker that created the quote
     pub market_maker_id: Uuid,
 
-    /// The currency the user will send
+    /// What the user sends (currency + exact quoted amount)
     pub from: Lot,
 
-    /// The currency the user will receive
+    /// What the user receives (currency + exact quoted amount)
     pub to: Lot,
 
-    pub fee_schedule: FeeSchedule,
+    /// Rate parameters used for computation
+    /// (used to compute realized amounts if user deposits a different amount)
+    pub rates: SwapRates,
+
+    /// Fee breakdown for the exact quoted amount
+    pub fees: Fees,
+
+    /// Minimum input amount allowed (in from currency smallest unit)
+    #[serde(with = "u256_decimal")]
+    pub min_input: U256,
+
+    /// Maximum input amount allowed (in from currency smallest unit)
+    #[serde(with = "u256_decimal")]
+    pub max_input: U256,
+
+    /// Optional affiliate identifier that determined the protocol fee rate
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affiliate: Option<String>,
 
     /// The expiration time of the quote
     pub expires_at: DateTime<Utc>,
     pub created_at: DateTime<Utc>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
-pub enum QuoteMode {
-    ExactInput,
-    ExactOutput,
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct QuoteRequest {
-    pub mode: QuoteMode,
     pub from: Currency,
     pub to: Currency,
-    pub amount: U256,
+    /// Swap mode: ExactInput or ExactOutput with the specified amount
+    pub mode: SwapMode,
+    /// Optional affiliate identifier for custom protocol fee rates
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub affiliate: Option<String>,
 }
 
 /// Serialize an f64 as its JSON number, but if it is NaN or ±Inf, serialize as `null`.
@@ -121,6 +156,11 @@ impl Quote {
             ..self.clone()
         };
         keccak256(to_canonical_json(&normalized).unwrap().as_bytes()).into()
+    }
+
+    /// Checks if the given input amount is within the allowed bounds.
+    pub fn is_valid_input(&self, amount: U256) -> bool {
+        amount >= self.min_input && amount <= self.max_input
     }
 }
 

@@ -1,5 +1,7 @@
+use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
 use otc_models::Lot;
+use otc_models::ChainType;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -33,6 +35,8 @@ pub enum MMRequest {
         deposit_address: String,
         /// Proof that user is real - their deposit tx hash
         user_tx_hash: String,
+        /// Actual amount the user deposited (for accurate liquidity locking)
+        deposit_amount: U256,
         timestamp: DateTime<Utc>,
     },
 
@@ -47,6 +51,8 @@ pub enum MMRequest {
         mm_nonce: [u8; 16],
         /// Expected payment details
         expected_lot: Lot,
+        /// Protocol fee for this swap (from realized amounts)
+        protocol_fee: U256,
         user_deposit_confirmed_at: DateTime<Utc>,
         timestamp: DateTime<Utc>,
     },
@@ -73,6 +79,31 @@ pub enum MMRequest {
     NewBatches { 
         request_id: Uuid,
         newest_batch_timestamp: Option<DateTime<Utc>>,
+    },
+
+    /// Respond with the MM's current protocol fee standing status (server-side view).
+    FeeStandingStatusResponse {
+        request_id: Uuid,
+        debt_sats: i64,
+        over_threshold_since: Option<DateTime<Utc>>,
+        threshold_sats: i64,
+        window_secs: i64,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Acknowledge (accept/reject) a protocol fee settlement notification from the market maker.
+    ///
+    /// This is the *only* reliable signal the market maker has that the server has accepted the
+    /// settlement and will apply it to fee standing state. The market maker may replay settlements
+    /// until it receives an `accepted=true` acknowledgment.
+    FeeSettlementAck {
+        /// The `request_id` from the corresponding `MMResponse::FeeSettlementSubmitted`.
+        request_id: Uuid,
+        chain: ChainType,
+        tx_hash: String,
+        accepted: bool,
+        rejection_reason: Option<String>,
+        timestamp: DateTime<Utc>,
     },
 }
 
@@ -117,6 +148,21 @@ pub enum MMResponse {
     Batches {
         request_id: Uuid,
         batches: Vec<NetworkBatch>,
+    },
+
+    /// Notification that MM has sent a protocol fee settlement payment.
+    FeeSettlementSubmitted {
+        request_id: Uuid,
+        chain: ChainType,
+        tx_hash: String,
+        batch_nonce_digests: Vec<[u8; 32]>,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Request the current protocol fee standing status (MM -> server).
+    FeeStandingStatusRequest {
+        request_id: Uuid,
+        timestamp: DateTime<Utc>,
     },
 
     /// Acknowledgment of `SwapComplete`

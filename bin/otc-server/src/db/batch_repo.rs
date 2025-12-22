@@ -35,6 +35,7 @@ impl BatchRepository {
             serde_json::to_value(&swap_ids).map_err(|e| OtcServerError::InvalidData {
                 message: format!("Failed to serialize swap ids: {e}"),
             })?;
+        let batch_nonce_digest: Vec<u8> = batch.payment_verification.batch_nonce_digest.to_vec();
 
         sqlx::query(
             r#"
@@ -44,9 +45,10 @@ impl BatchRepository {
                 full_batch,
                 swap_ids,
                 market_maker_id,
+                batch_nonce_digest,
                 created_at
             )
-            VALUES ($1, $2, $3, $4, $5, NOW())
+            VALUES ($1, $2, $3, $4, $5, $6, NOW())
             "#,
         )
         .bind(chain_str)
@@ -54,9 +56,35 @@ impl BatchRepository {
         .bind(batch_json)
         .bind(swap_ids_json)
         .bind(market_maker_id)
+        .bind(batch_nonce_digest)
         .execute(&self.pool)
         .await?;
 
+        Ok(())
+    }
+
+    /// Mark a batch as confirmed by otc-server (idempotent).
+    pub async fn mark_confirmed(
+        &self,
+        chain: &ChainType,
+        tx_hash: &str,
+        confirmed_at: DateTime<Utc>,
+    ) -> OtcServerResult<()> {
+        let chain_str = chain.to_db_string();
+        sqlx::query(
+            r#"
+            UPDATE batches
+            SET confirmed_at = $3
+            WHERE chain = $1
+              AND tx_hash = $2
+              AND confirmed_at IS NULL
+            "#,
+        )
+        .bind(chain_str)
+        .bind(tx_hash)
+        .bind(confirmed_at)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -124,6 +152,47 @@ impl BatchRepository {
         .await?;
 
         Ok(row.map(|r| r.get("created_at")))
+    }
+
+    /// Fetch confirmed batches by their `batch_nonce_digest` for a specific market maker.
+    ///
+    /// Only returns batches that have been marked as confirmed (i.e., `confirmed_at IS NOT NULL`).
+    pub async fn get_confirmed_batches_by_nonce_digests(
+        &self,
+        market_maker_id: Uuid,
+        batch_nonce_digests: &[[u8; 32]],
+    ) -> OtcServerResult<Vec<MarketMakerBatch>> {
+        if batch_nonce_digests.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let digests: Vec<Vec<u8>> = batch_nonce_digests.iter().map(|d| d.to_vec()).collect();
+
+        let rows = sqlx::query(
+            r#"
+            SELECT full_batch
+            FROM batches
+            WHERE market_maker_id = $1
+              AND batch_nonce_digest = ANY($2)
+              AND confirmed_at IS NOT NULL
+            "#,
+        )
+        .bind(market_maker_id)
+        .bind(digests)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut out = Vec::with_capacity(rows.len());
+        for row in rows {
+            let batch_json: serde_json::Value = row.get("full_batch");
+            let batch: MarketMakerBatch = serde_json::from_value(batch_json).map_err(|e| {
+                OtcServerError::InvalidData {
+                    message: format!("Failed to deserialize batch: {e}"),
+                }
+            })?;
+            out.push(batch);
+        }
+        Ok(out)
     }
 
 }

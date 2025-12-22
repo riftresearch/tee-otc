@@ -76,14 +76,14 @@ docker-release:
 # Deploy to Phala
 phala-deploy:
     # stop the app first, otherwise the deploy command will just shutoff the machine and stop the app
-    -phala cvms stop app_97c189391e051abc6e372aecad1d54bb34c39fde
+    -phala cvms stop app_03a88ee7dab2988329c67dd35745c7e03e06d45d
     sleep 3
-    phala deploy --uuid 1c11019a-3dc1-440d-8a52-2147dcf608da -c etc/compose.phala.yml -e .env.otc
+    phala deploy --uuid 8f4537ca-8784-426f-be7b-26fe1e2db9e4 -c etc/compose.phala.yml -e .env.otc
 
 # Docker compose prefix command for local integration testing 
 # DOCKER_DEFAULT_PLATFORM=linux/amd64  
 dc +args:
-   HELIOS_BASE_EXECUTION_RPC="mock" HELIOS_ETHEREUM_EXECUTION_RPC="mock" PHALA_DB_SNI=mock PRIMARY_DB_PASSWORD=replica_password REPLICA_DB_PASSWORD=actual_replica_password POSTGRES_REPLICA_PASSWORD=replica_password {{dc_files}} {{args}}
+    HELIOS_ETHEREUM_CONSENSUS_RPC="mock" HELIOS_BASE_CONSENSUS_RPC="mock" HELIOS_BASE_EXECUTION_RPC="mock" HELIOS_ETHEREUM_EXECUTION_RPC="mock" PHALA_DB_SNI=mock PRIMARY_DB_PASSWORD=replica_password REPLICA_DB_PASSWORD=actual_replica_password POSTGRES_REPLICA_PASSWORD=replica_password {{dc_files}} {{args}}
 
 # Docker compose prefix command for market maker with all config files - passes through any arguments
 mm +args:

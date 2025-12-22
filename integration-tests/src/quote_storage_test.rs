@@ -1,7 +1,7 @@
 use alloy::primitives::U256;
-use chrono::{Duration, Utc};
+use chrono::Duration;
 use market_maker::db::Database;
-use otc_models::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
+use otc_models::{ChainType, Currency, Fees, Lot, Quote, SwapRates, TokenIdentifier};
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use uuid::Uuid;
 
@@ -18,15 +18,15 @@ async fn test_quote_storage_round_trip(
     let storage = database.quotes();
 
     let original_quote = Quote {
-        id: Uuid::new_v4(),
-        market_maker_id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
+        market_maker_id: Uuid::now_v7(),
         from: Lot {
             currency: Currency {
                 chain: ChainType::Bitcoin,
                 token: TokenIdentifier::Native,
                 decimals: 8,
             },
-            amount: U256::from(1000000u64),
+            amount: U256::from(1_000_000u64),
         },
         to: Lot {
             currency: Currency {
@@ -34,13 +34,17 @@ async fn test_quote_storage_round_trip(
                 token: TokenIdentifier::Native,
                 decimals: 18,
             },
-            amount: U256::from(500000000000000000u64),
+            amount: U256::from(996_700u64),
         },
-        fee_schedule: FeeSchedule {
-            network_fee_sats: 1800,
-            liquidity_fee_sats: 2800,
-            protocol_fee_sats: 900,
+        rates: SwapRates::new(13, 10, 1000),
+        fees: Fees {
+            liquidity_fee: U256::from(1300u64),
+            protocol_fee: U256::from(1000u64),
+            network_fee: U256::from(1000u64),
         },
+        min_input: U256::from(10_000u64),
+        max_input: U256::from(100_000_000u64),
+        affiliate: None,
         expires_at: utc::now() + Duration::minutes(10),
         created_at: utc::now(),
     };
@@ -62,7 +66,10 @@ async fn test_quote_storage_round_trip(
     );
     assert_eq!(retrieved_quote.from.amount, original_quote.from.amount);
     assert_eq!(retrieved_quote.to.amount, original_quote.to.amount);
-    assert_eq!(retrieved_quote.fee_schedule, original_quote.fee_schedule);
+    assert_eq!(retrieved_quote.min_input, original_quote.min_input);
+    assert_eq!(retrieved_quote.max_input, original_quote.max_input);
+    assert_eq!(retrieved_quote.rates, original_quote.rates);
+    assert_eq!(retrieved_quote.fees, original_quote.fees);
 
     Ok(())
 }

@@ -1,6 +1,6 @@
 use alloy::primitives::U256;
 use market_maker::run_market_maker;
-use otc_models::{ChainType, Currency, QuoteRequest, TokenIdentifier};
+use otc_models::{SwapMode, ChainType, Currency, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use rfq_server::server::run_server as run_rfq_server;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
@@ -14,7 +14,7 @@ use crate::utils::{
 };
 
 /// Test that market maker detects disconnection and reconnects within expected timeframe
-/// 
+///
 /// This test verifies the fix for the edge case where MM believes it's connected
 /// but the RFQ server has unregistered it. With the fixes:
 /// - PING_INTERVAL_SECS reduced from 30s to 10s
@@ -101,8 +101,7 @@ async fn test_rfq_market_maker_reconnection_and_detection(
 
     // Verify quote request works while connected
     let quote_request = QuoteRequest {
-        mode: otc_models::QuoteMode::ExactOutput,
-        amount: U256::from(50_000_000), // 0.5 BTC in sats
+        mode: SwapMode::ExactInput(50_000_000), // 0.5 BTC in sats
         to: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
@@ -113,9 +112,10 @@ async fn test_rfq_market_maker_reconnection_and_detection(
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
-    let quote_request_url = format!("http://127.0.0.1:{rfq_port}/api/v1/quotes/request");
+    let quote_request_url = format!("http://127.0.0.1:{rfq_port}/api/v2/quote");
     let client = reqwest::Client::new();
 
     let response = client
@@ -159,7 +159,7 @@ async fn test_rfq_market_maker_reconnection_and_detection(
     // Abort the RFQ server to simulate connection loss
     info!("Simulating connection loss by stopping RFQ server...");
     rfq_handle.abort();
-    
+
     // Wait for the server to actually stop
     tokio::time::sleep(Duration::from_secs(1)).await;
 
@@ -180,29 +180,27 @@ async fn test_rfq_market_maker_reconnection_and_detection(
     // (10s PING_INTERVAL_SECS + 5s PING_TIMEOUT_SECS)
     let reconnect_start = Instant::now();
     let max_detection_time = Duration::from_secs(20); // 15s + 5s buffer
-    
+
     info!(
         "Waiting for MM to detect disconnection and reconnect (max {}s)...",
         max_detection_time.as_secs()
     );
-    
+
     // Poll for reconnection
     let mut reconnected = false;
     while reconnect_start.elapsed() < max_detection_time {
         tokio::time::sleep(Duration::from_millis(500)).await;
-        
+
         // Check if MM is connected
         if let Ok(response) = client
-            .get(&format!(
-                "http://127.0.0.1:{rfq_port}/api/v1/market-makers/connected"
-            ))
+            .get(&format!("http://127.0.0.1:{rfq_port}/status"))
             .send()
             .await
         {
             if response.status() == 200 {
                 if let Ok(body) = response.json::<serde_json::Value>().await {
-                    if let Some(market_makers) = body["market_makers"].as_array() {
-                        if !market_makers.is_empty() {
+                    if let Some(connected_mms) = body["connected_market_makers"].as_array() {
+                        if !connected_mms.is_empty() {
                             reconnected = true;
                             let detection_time = reconnect_start.elapsed();
                             info!(
@@ -263,8 +261,7 @@ async fn test_rfq_market_maker_reconnection_and_detection(
     }
 
     info!("✓ RFQ reconnection test completed successfully!");
-    
+
     // Cleanup
     join_set.abort_all();
 }
-

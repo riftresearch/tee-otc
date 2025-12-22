@@ -13,11 +13,10 @@ use market_maker::evm_wallet::EVMWallet;
 use market_maker::wallet::Wallet;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, MarketMakerArgs};
 use otc_chains::traits::Payment;
-use otc_models::{ChainType, Currency, Lot, Quote, QuoteMode, QuoteRequest, TokenIdentifier};
+use otc_models::{Swap, SwapMode, ChainType, Currency, Lot, Quote, QuoteRequest, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
-use otc_server::api::SwapResponse;
 use otc_server::{
-    api::{CreateSwapRequest, CreateSwapResponse},
+    api::CreateSwapRequest,
     server::run_server,
     OtcServerArgs,
 };
@@ -157,8 +156,7 @@ async fn test_swap_from_bitcoin_to_ethereum(
 
     // Request a quote from the RFQ server
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: U256::from(10_000_000), // 0.1 BTC
+        mode: SwapMode::ExactInput(10_000_000), // 0.1 BTC
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -169,10 +167,11 @@ async fn test_swap_from_bitcoin_to_ethereum(
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
@@ -198,22 +197,22 @@ async fn test_swap_from_bitcoin_to_ethereum(
     let swap_request = CreateSwapRequest {
         quote: quote.clone(),
         user_destination_address: user_account.ethereum_address.to_string(),
-        user_evm_account_address: user_account.ethereum_address,
+        refund_address: user_account.bitcoin_wallet.address.to_string(),
         metadata: None,
     };
 
     let response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
         .unwrap();
 
     let response_status = response.status();
-    let response_json = match response_status {
+    let swap = match response_status {
         StatusCode::OK => {
-            let response_json: CreateSwapResponse = response.json().await.unwrap();
-            response_json
+            let swap: Swap = response.json().await.unwrap();
+            swap
         }
         _ => {
             let response_text = response.text().await;
@@ -227,20 +226,16 @@ async fn test_swap_from_bitcoin_to_ethereum(
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals: response_json.decimals,
-                    },
-                    amount: response_json.expected_amount,
+                    currency: swap.quote.from.currency.clone(),
+                    amount: swap.quote.min_input,
                 },
-                to_address: response_json.deposit_address,
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )
         .await
         .unwrap();
-    wait_for_swap_to_be_settled(otc_port, response_json.swap_id).await;
+    wait_for_swap_to_be_settled(otc_port, swap.id).await;
     drop(devnet);
     tokio::join!(wallet_join_set.shutdown(), service_join_set.shutdown());
 }
@@ -363,8 +358,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
     let client = reqwest::Client::new();
 
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: U256::from(10_000_000),
+        mode: SwapMode::ExactInput(10_000_000),
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -375,10 +369,11 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
@@ -396,25 +391,19 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
     let swap_request = CreateSwapRequest {
         quote,
         user_destination_address: user_account.ethereum_address.to_string(),
-        user_evm_account_address: user_account.ethereum_address,
+        refund_address: user_account.bitcoin_wallet.address.to_string(),
         metadata: None,
     };
 
     let swap_response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
         .unwrap();
 
     assert_eq!(swap_response.status(), StatusCode::OK);
-    let CreateSwapResponse {
-        swap_id,
-        deposit_address,
-        expected_amount,
-        decimals,
-        ..
-    } = swap_response.json().await.unwrap();
+    let swap: Swap = swap_response.json().await.unwrap();
 
     mm_task_id.abort();
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -430,14 +419,10 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
         .create_batch_payment(
             vec![Payment {
                 lot: Lot {
-                    currency: Currency {
-                        chain: ChainType::Bitcoin,
-                        token: TokenIdentifier::Native,
-                        decimals,
-                    },
-                    amount: expected_amount,
+                    currency: swap.quote.from.currency.clone(),
+                    amount: swap.quote.min_input,
                 },
-                to_address: deposit_address,
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )
@@ -448,7 +433,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
 
     devnet.bitcoin.mine_blocks(6).await.unwrap();
 
-    wait_for_swap_status(&client, otc_port, swap_id, "WaitingMMDepositInitiated").await;
+    wait_for_swap_status(&client, otc_port, swap.id, "WaitingMMDepositInitiated").await;
 
     let _mm_restart_task_id = service_join_set.spawn(async move {
         run_market_maker(mm_args_clone)
@@ -458,7 +443,7 @@ async fn test_swap_from_bitcoin_to_ethereum_mm_reconnect(
 
     wait_for_market_maker_to_connect_to_rfq_server(rfq_port).await;
 
-    wait_for_swap_to_be_settled(otc_port, swap_id).await;
+    wait_for_swap_to_be_settled(otc_port, swap.id).await;
 
     drop(devnet);
     tokio::join!(wallet_join_set.shutdown(), service_join_set.shutdown());
@@ -593,8 +578,7 @@ async fn test_swap_from_ethereum_to_bitcoin(
 
     // Request a quote from the RFQ server
     let quote_request = QuoteRequest {
-        mode: QuoteMode::ExactInput,
-        amount: U256::from(100_000_000i128), // 1 cbbtc
+        mode: SwapMode::ExactInput(100_000_000i128 as u64), // 1 cbbtc
         from: Currency {
             chain: ChainType::Ethereum,
             token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
@@ -605,10 +589,11 @@ async fn test_swap_from_ethereum_to_bitcoin(
             token: TokenIdentifier::Native,
             decimals: 8,
         },
+        affiliate: None,
     };
 
     let quote_response = client
-        .post(format!("http://localhost:{rfq_port}/api/v1/quotes/request"))
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
         .json(&quote_request)
         .send()
         .await
@@ -634,22 +619,22 @@ async fn test_swap_from_ethereum_to_bitcoin(
     let swap_request = CreateSwapRequest {
         quote: quote.clone(),
         user_destination_address: user_account.bitcoin_wallet.address.to_string(),
-        user_evm_account_address: user_account.ethereum_address,
+        refund_address: user_account.ethereum_address.to_string(),
         metadata: None,
     };
 
     let response = client
-        .post(format!("http://localhost:{otc_port}/api/v1/swaps"))
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
         .json(&swap_request)
         .send()
         .await
         .unwrap();
 
     let response_status = response.status();
-    let response_json = match response_status {
+    let swap = match response_status {
         StatusCode::OK => {
-            let response_json: CreateSwapResponse = response.json().await.unwrap();
-            response_json
+            let swap: Swap = response.json().await.unwrap();
+            swap
         }
         _ => {
             let response_text = response.text().await;
@@ -668,11 +653,11 @@ async fn test_swap_from_ethereum_to_bitcoin(
                         token: TokenIdentifier::Address(
                             devnet.ethereum.cbbtc_contract.address().to_string(),
                         ),
-                        decimals: response_json.decimals,
+                        decimals: swap.quote.from.currency.decimals,
                     },
-                    amount: response_json.expected_amount,
+                    amount: swap.quote.min_input,
                 },
-                to_address: response_json.deposit_address,
+                to_address: swap.deposit_vault_address.clone(),
             }],
             None,
         )
@@ -699,12 +684,12 @@ async fn test_swap_from_ethereum_to_bitcoin(
         .unwrap();
 
     info!("Tx status: {:#?}", get_tx_status);
-    wait_for_swap_to_be_settled(otc_port, response_json.swap_id).await;
+    wait_for_swap_to_be_settled(otc_port, swap.id).await;
 
     let database = Database::connect(&mm_db_url, 10, 2).await.unwrap();
     database
         .payments()
-        .has_payment_been_made(response_json.swap_id)
+        .has_payment_been_made(swap.id)
         .await
         .unwrap()
         .expect("Payment storage should have recorded the txid");

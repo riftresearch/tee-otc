@@ -160,7 +160,7 @@ impl DepositStore for DepositRepository {
     async fn take_deposits_that_fill_lot(&self, lot: &Lot, max_deposits: Option<usize>) -> DepositRepositoryResult<FillStatus> {
         let (chain, token, decimals) = Self::serialize_currency(&lot.currency);
         let target = lot.amount.to_string();
-        let reservation_id = Uuid::new_v4();
+        let reservation_id = Uuid::now_v7();
         let now = utc::now();
 
         let rows: Vec<PgRow> = if let Some(limit) = max_deposits {

@@ -11,7 +11,7 @@ use otc_models::{Lot, TokenIdentifier};
 use snafu::{Location, ResultExt, Snafu};
 
 #[derive(Debug, Snafu)]
-pub enum ReceiveAuthorizationError {
+pub enum TransferAuthorizationError {
     UnsupportedToken {
         token: TokenIdentifier,
         #[snafu(implicit)]
@@ -24,12 +24,12 @@ pub enum ReceiveAuthorizationError {
     },
 }
 
-pub async fn create_receive_with_authorization_execution(
+pub async fn create_transfer_with_authorization_execution(
     lot: &Lot,
     lot_signer: &PrivateKeySigner,
     provider: &DynProvider,
     recipient: &Address,
-) -> Result<Execution, ReceiveAuthorizationError> {
+) -> Result<Execution, TransferAuthorizationError> {
     let token_address = match &lot.currency.token {
         TokenIdentifier::Address(address) => address.parse::<Address>().unwrap(),
         _ => {
@@ -39,7 +39,6 @@ pub async fn create_receive_with_authorization_execution(
             .fail()
         }
     };
-    // TODO: how should we implement the case when the token is not an EIP-3009 token?
     let eip_3009_token_contract = GenericEIP3009ERC20Instance::new(token_address, provider);
 
     // TODO: Cache these:
@@ -49,8 +48,8 @@ pub async fn create_receive_with_authorization_execution(
         .await
         .unwrap();
 
-    let receive_with_authorization_typehash = eip_3009_token_contract
-        .RECEIVE_WITH_AUTHORIZATION_TYPEHASH()
+    let transfer_with_authorization_typehash = eip_3009_token_contract
+        .TRANSFER_WITH_AUTHORIZATION_TYPEHASH()
         .call()
         .await
         .unwrap();
@@ -92,7 +91,7 @@ pub async fn create_receive_with_authorization_execution(
     )
     */
     let message_value = DynSolValue::Tuple(vec![
-        DynSolValue::FixedBytes(receive_with_authorization_typehash, 32), // receive_with_authorization_typehash
+        DynSolValue::FixedBytes(transfer_with_authorization_typehash, 32), // transfer_with_authorization_typehash
         DynSolValue::Address(from),                                       // from
         DynSolValue::Address(to),                                         // to
         DynSolValue::Uint(value, 256),                                    // value
@@ -109,7 +108,7 @@ pub async fn create_receive_with_authorization_execution(
         .context(SignatureFailedSnafu)?;
 
     let calldata = eip_3009_token_contract
-        .receiveWithAuthorization(
+        .transferWithAuthorization(
             from,
             to,
             value,

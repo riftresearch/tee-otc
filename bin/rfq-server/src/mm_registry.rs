@@ -1,10 +1,11 @@
+use crate::suspension_watcher::SuspensionWatcher;
 use dashmap::DashMap;
 use otc_models::QuoteRequest;
 use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse};
 use snafu::Snafu;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 #[derive(Debug, Snafu)]
@@ -31,14 +32,16 @@ pub struct MarketMakerConnection {
 pub struct RfqMMRegistry {
     connections: Arc<DashMap<Uuid, MarketMakerConnection>>,
     pending_requests: Arc<DashMap<Uuid, mpsc::Sender<RFQResponse>>>,
+    suspension_watcher: Option<SuspensionWatcher>,
 }
 
 impl RfqMMRegistry {
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(suspension_watcher: Option<SuspensionWatcher>) -> Self {
         Self {
             connections: Arc::new(DashMap::new()),
             pending_requests: Arc::new(DashMap::new()),
+            suspension_watcher,
         }
     }
 
@@ -102,23 +105,34 @@ impl RfqMMRegistry {
         self.connections.contains_key(&market_maker_id)
     }
 
-    /// Broadcast a quote request to all connected market makers
+    /// Broadcast a quote request to all connected market makers (excluding suspended ones).
     pub async fn broadcast_quote_request(
         &self,
         request_id: &Uuid,
         request: &QuoteRequest,
     ) -> Vec<(Uuid, mpsc::Receiver<RFQResponse>)> {
         let mut receivers = Vec::new();
+        let mut skipped_suspended = 0usize;
 
         for entry in self.connections.iter() {
             let mm_id = *entry.key();
+
+            // Skip suspended market makers
+            if let Some(watcher) = &self.suspension_watcher {
+                if watcher.is_suspended(mm_id).await {
+                    debug!(market_maker_id = %mm_id, "Skipping suspended market maker");
+                    skipped_suspended += 1;
+                    continue;
+                }
+            }
+
             let connection = entry.value();
 
             // Create a channel for this MM's response
             let (response_tx, response_rx) = mpsc::channel::<RFQResponse>(1);
 
             // Store the response channel for this MM and request
-            let mm_request_id = Uuid::new_v4(); // Unique ID for this MM's request
+            let mm_request_id = Uuid::now_v7(); // Unique ID for this MM's request
             self.pending_requests.insert(mm_request_id, response_tx);
 
             let request = ProtocolMessage {
@@ -148,28 +162,40 @@ impl RfqMMRegistry {
         info!(
             request_id = %request_id,
             market_makers_count = receivers.len(),
+            skipped_suspended,
             "Broadcasted quote request to market makers"
         );
 
         receivers
     }
 
-    /// Broadcast a liquidity request to all connected market makers
+    /// Broadcast a liquidity request to all connected market makers (excluding suspended ones).
     pub async fn broadcast_liquidity_request(
         &self,
         request_id: &Uuid,
     ) -> Vec<(Uuid, mpsc::Receiver<RFQResponse>)> {
         let mut receivers = Vec::new();
+        let mut skipped_suspended = 0usize;
 
         for entry in self.connections.iter() {
             let mm_id = *entry.key();
+
+            // Skip suspended market makers
+            if let Some(watcher) = &self.suspension_watcher {
+                if watcher.is_suspended(mm_id).await {
+                    debug!(market_maker_id = %mm_id, "Skipping suspended market maker for liquidity");
+                    skipped_suspended += 1;
+                    continue;
+                }
+            }
+
             let connection = entry.value();
 
             // Create a channel for this MM's response
             let (response_tx, response_rx) = mpsc::channel::<RFQResponse>(1);
 
             // Store the response channel for this MM and request
-            let mm_request_id = Uuid::new_v4(); // Unique ID for this MM's request
+            let mm_request_id = Uuid::now_v7(); // Unique ID for this MM's request
             self.pending_requests.insert(mm_request_id, response_tx);
 
             let request = ProtocolMessage {
@@ -198,6 +224,7 @@ impl RfqMMRegistry {
         info!(
             request_id = %request_id,
             market_makers_count = receivers.len(),
+            skipped_suspended,
             "Broadcasted liquidity request to market makers"
         );
 
@@ -273,7 +300,7 @@ impl RfqMMRegistry {
 
 impl Default for RfqMMRegistry {
     fn default() -> Self {
-        Self::new()
+        Self::new(None)
     }
 }
 
@@ -283,10 +310,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_register_unregister() {
-        let registry = RfqMMRegistry::new();
+        let registry = RfqMMRegistry::new(None);
         let (tx, _rx) = mpsc::channel(10);
-        let mm_id = Uuid::new_v4();
-        let conn_id = Uuid::new_v4();
+        let mm_id = Uuid::now_v7();
+        let conn_id = Uuid::now_v7();
 
         // Register a market maker
         registry.register(mm_id, conn_id, tx, "1.0.0".to_string());
@@ -301,18 +328,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_unregister_race_condition() {
-        let registry = RfqMMRegistry::new();
-        let mm_id = Uuid::new_v4();
+        let registry = RfqMMRegistry::new(None);
+        let mm_id = Uuid::now_v7();
         
         // Connection A registers
         let (tx_a, _rx_a) = mpsc::channel(10);
-        let conn_id_a = Uuid::new_v4();
+        let conn_id_a = Uuid::now_v7();
         registry.register(mm_id, conn_id_a, tx_a, "1.0.0".to_string());
         assert!(registry.is_connected(mm_id));
         
         // Connection B registers (overwrites A)
         let (tx_b, _rx_b) = mpsc::channel(10);
-        let conn_id_b = Uuid::new_v4();
+        let conn_id_b = Uuid::now_v7();
         registry.register(mm_id, conn_id_b, tx_b, "1.0.0".to_string());
         assert!(registry.is_connected(mm_id));
         

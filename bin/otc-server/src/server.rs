@@ -1,12 +1,12 @@
 use crate::{
     api::swaps::{
-        BlockHashResponse, CreateSwapRequest, CreateSwapResponse, RefundSwapRequest,
-        RefundSwapResponse, SwapResponse,
+        BlockHashResponse, CreateSwapRequest, RefundSwapResponse,
     },
     config::Settings,
     db::{
         swap_repo::{SWAP_FEES_TOTAL_METRIC, SWAP_VOLUME_TOTAL_METRIC},
-        Database,
+        Database, GOOD_STANDING_THRESHOLD_SATS, GOOD_STANDING_WINDOW_SECS,
+        MM_FEE_DEBT_SATS_METRIC,
     },
     services::{
         swap_monitoring::{
@@ -28,11 +28,11 @@ use axum::{
     routing::{get, post, Router},
     Json,
 };
-use mm_websocket_server::{MessageHandler, MessageSender};
 use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use dstack_sdk::dstack_client::{DstackClient, GetQuoteResponse, InfoResponse};
-use metrics::{describe_gauge, describe_histogram, describe_counter, gauge, histogram};
+use metrics::{describe_counter, describe_gauge, describe_histogram, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
+use mm_websocket_server::{MessageHandler, MessageSender};
 use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
 use otc_chains::{bitcoin::BitcoinChain, evm::EvmChain, ChainRegistry};
 use otc_protocols::mm::{MMRequest, MMResponse, ProtocolMessage};
@@ -65,6 +65,12 @@ struct Status {
     status: String,
     version: String,
     last_monitor_pass: u64,
+    connected_market_makers: Vec<Uuid>,
+}
+
+#[derive(Serialize)]
+struct SuspendedMarketMakersResponse {
+    market_maker_ids: Vec<Uuid>,
 }
 
 const QUOTE_LATENCY_METRIC: &str = "otc_quote_response_seconds";
@@ -185,7 +191,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
             let mut interval = tokio::time::interval(Duration::from_secs(10));
             loop {
                 interval.tick().await;
-                
+
                 // Sync volume metrics
                 if let Ok(volumes) = db.swaps().get_settled_volume_totals().await {
                     for (market, total) in volumes {
@@ -196,7 +202,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
                         .set(total as f64);
                     }
                 }
-                
+
                 // Sync fee metrics
                 if let Ok(fees) = db.swaps().get_settled_fee_totals().await {
                     for (market, total) in fees {
@@ -205,6 +211,17 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
                             "market" => market,
                         )
                         .set(total as f64);
+                    }
+                }
+
+                // Sync MM fee debt metrics
+                if let Ok(states) = db.fees().list_all_fee_states().await {
+                    for (mm_id, debt_sats) in states {
+                        gauge!(
+                            MM_FEE_DEBT_SATS_METRIC,
+                            "market_maker_id" => mm_id.to_string(),
+                        )
+                        .set(debt_sats as f64);
                     }
                 }
             }
@@ -261,25 +278,13 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         .route("/ws", get(websocket_handler))
         .route("/ws/mm", get(mm_websocket_handler))
         // API endpoints
-        .route("/api/v1/swaps", post(create_swap))
-        .route("/api/v1/swaps/:id", get(get_swap))
-        .route(
-            "/api/v1/market-makers/connected",
-            get(get_connected_market_makers),
-        )
-        .route("/api/v1/refund", post(refund_swap))
-        .route(
-            "/api/v1/chains/bitcoin/best-hash",
-            get(get_best_bitcoin_hash),
-        )
-        .route(
-            "/api/v1/chains/ethereum/best-hash",
-            get(get_best_ethereum_hash),
-        )
-        .route(
-            "/api/v1/chains/base/best-hash",
-            get(get_best_base_hash),
-        )
+        .route("/api/v2/swap", post(create_swap))
+        .route("/api/v2/swap/:id", get(get_swap))
+        .route("/api/v2/swap/:id/refund", post(refund_swap))
+        .route("/api/v2/chains/bitcoin/tip", get(get_best_bitcoin_hash))
+        .route("/api/v2/chains/ethereum/tip", get(get_best_ethereum_hash))
+        .route("/api/v2/chains/base/tip", get(get_best_base_hash))
+        .route("/api/v2/market-makers/suspended", get(get_suspended_market_makers))
         .route("/api/v1/tdx/quote", get(get_tdx_quote))
         .route("/api/v1/tdx/info", get(get_tdx_info))
         .with_state(state);
@@ -382,6 +387,11 @@ fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
         "Settled protocol fees per market (sats), synced from database aggregate tables."
     );
 
+    describe_gauge!(
+        MM_FEE_DEBT_SATS_METRIC,
+        "Current protocol fee debt per market maker (sats). Negative values indicate credit."
+    );
+
     describe_counter!(
         "ethereum_rpc_requests_total",
         "Total number of Ethereum RPC requests."
@@ -444,9 +454,10 @@ async fn metrics_handler(State(handle): State<Arc<PrometheusHandle>>) -> impl In
 
 async fn status_handler(State(state): State<AppState>) -> impl IntoResponse {
     Json(Status {
-        status: "online".to_string(),
+        status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
         last_monitor_pass: state.swap_monitoring_service.last_monitor_pass(),
+        connected_market_makers: state.mm_registry.get_connected_market_makers(),
     })
 }
 
@@ -537,11 +548,11 @@ async fn handle_socket(mut socket: WebSocket) {
 
 async fn refund_swap(
     State(state): State<AppState>,
-    Json(request): Json<RefundSwapRequest>,
+    Path(swap_id): Path<Uuid>,
 ) -> Result<Json<RefundSwapResponse>, crate::error::OtcServerError> {
     state
         .swap_manager
-        .refund_swap(request)
+        .refund_swap(swap_id)
         .await
         .map(Json)
         .map_err(Into::into)
@@ -597,14 +608,28 @@ async fn get_best_base_hash(
     })
 }
 
+async fn get_suspended_market_makers(
+    State(state): State<AppState>,
+) -> Result<Json<SuspendedMarketMakersResponse>, crate::error::OtcServerError> {
+    let now = utc::now();
+    let market_maker_ids = state
+        .db
+        .fees()
+        .list_bad_standing(now)
+        .await?;
+    Ok(Json(SuspendedMarketMakersResponse { market_maker_ids }))
+}
+
 async fn create_swap(
     State(state): State<AppState>,
     Json(request): Json<CreateSwapRequest>,
-) -> Result<Json<CreateSwapResponse>, crate::error::OtcServerError> {
+) -> Result<Json<otc_models::Swap>, crate::error::OtcServerError> {
     // Address screening (only if configured). Block if either address is High/Severe risk.
     if let Some(screener) = &state.address_screener {
-        let mut to_check: Vec<String> = vec![request.user_destination_address.clone()];
-        to_check.push(request.user_evm_account_address.to_string());
+        let to_check: Vec<String> = vec![
+            request.user_destination_address.clone(),
+            request.refund_address.clone(),
+        ];
 
         for addr in to_check {
             match screener.get_address_risk(&addr).await {
@@ -635,7 +660,7 @@ async fn create_swap(
 async fn get_swap(
     State(state): State<AppState>,
     Path(swap_id): Path<Uuid>,
-) -> Result<Json<SwapResponse>, crate::error::OtcServerError> {
+) -> Result<Json<otc_models::Swap>, crate::error::OtcServerError> {
     state
         .swap_manager
         .get_swap(swap_id)
@@ -666,18 +691,6 @@ async fn get_swap(
         })
 }
 
-#[derive(Serialize)]
-struct ConnectedMarketMakersResponse {
-    market_makers: Vec<Uuid>,
-}
-
-async fn get_connected_market_makers(
-    State(state): State<AppState>,
-) -> Json<ConnectedMarketMakersResponse> {
-    let market_makers = state.mm_registry.get_connected_market_makers();
-    Json(ConnectedMarketMakersResponse { market_makers })
-}
-
 // ========== MM WebSocket Handler Implementation ==========
 
 /// Message handler for OTC protocol
@@ -693,12 +706,12 @@ struct OTCMessageHandler {
 impl MessageHandler for OTCMessageHandler {
     async fn handle_message(&self, mm_id: Uuid, text: &str) -> Option<String> {
         match serde_json::from_str::<ProtocolMessage<MMResponse>>(text) {
-                Ok(msg) => {
-                    let ProtocolMessage {
-                        version: _,
-                        sequence: _,
-                        payload,
-                    } = msg;
+            Ok(msg) => {
+                let ProtocolMessage {
+                    version: _,
+                    sequence: _,
+                    payload,
+                } = msg;
 
                 match payload {
                     MMResponse::QuoteValidated {
@@ -726,11 +739,14 @@ impl MessageHandler for OTCMessageHandler {
                         let mm_registry = self.mm_registry.clone();
                         let chain_registry = self.chain_registry.clone();
                         let swap_manager = self.swap_manager.clone();
-                        
+
                         tokio::spawn(async move {
                             match db
                                 .swaps()
-                                .get_settled_swaps_for_market_maker(mm_id, swap_settlement_timestamp)
+                                .get_settled_swaps_for_market_maker(
+                                    mm_id,
+                                    swap_settlement_timestamp,
+                                )
                                 .await
                             {
                                 Ok(settled_swaps) => {
@@ -738,7 +754,9 @@ impl MessageHandler for OTCMessageHandler {
                                         let master_key = swap_manager.master_key_bytes();
 
                                         for swap in settled_swaps {
-                                            let Some(chain_ops) = chain_registry.get(&swap.deposit_chain) else {
+                                            let Some(chain_ops) =
+                                                chain_registry.get(&swap.deposit_chain)
+                                            else {
                                                 error!(
                                                     market_maker_id = %mm_id,
                                                     swap_id = %swap.swap_id,
@@ -748,7 +766,8 @@ impl MessageHandler for OTCMessageHandler {
                                                 continue;
                                             };
 
-                                            let wallet = match chain_ops.derive_wallet(&master_key, &swap.user_deposit_salt)
+                                            let wallet = match chain_ops
+                                                .derive_wallet(&master_key, &swap.deposit_vault_salt)
                                             {
                                                 Ok(wallet) => wallet,
                                                 Err(err) => {
@@ -788,10 +807,7 @@ impl MessageHandler for OTCMessageHandler {
                         });
                         None
                     }
-                    MMResponse::Batches {
-                        batches,
-                        ..
-                    } => {
+                    MMResponse::Batches { batches, .. } => {
                         for batch in batches {
                             let tx_hash = batch.tx_hash;
                             let swap_ids = batch.swap_ids;
@@ -824,6 +840,282 @@ impl MessageHandler for OTCMessageHandler {
                         }
                         None
                     }
+                    MMResponse::FeeSettlementSubmitted {
+                        request_id,
+                        chain,
+                        tx_hash,
+                        batch_nonce_digests,
+                        ..
+                    } => {
+                        info!(
+                            market_maker_id = %mm_id,
+                            chain = ?chain,
+                            tx_hash = %tx_hash,
+                            batch_count = batch_nonce_digests.len(),
+                            "Received fee settlement notification from MM"
+                        );
+
+                        let db = self.db.clone();
+                        let chain_registry = self.chain_registry.clone();
+                        let mm_registry = self.mm_registry.clone();
+                        tokio::spawn(async move {
+                            let now = utc::now();
+                            let reject = |reason: &str| {
+                                mm_registry.notify_fee_settlement_ack(
+                                    &mm_id,
+                                    request_id,
+                                    chain,
+                                    &tx_hash,
+                                    false,
+                                    Some(reason.to_string()),
+                                )
+                            };
+                            let accept = || {
+                                mm_registry.notify_fee_settlement_ack(
+                                    &mm_id,
+                                    request_id,
+                                    chain,
+                                    &tx_hash,
+                                    true,
+                                    None,
+                                )
+                            };
+
+                            let mut digests = batch_nonce_digests;
+                            digests.sort();
+                            digests.dedup();
+
+                            if digests.is_empty() {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    tx_hash = %tx_hash,
+                                    "Fee settlement contains no batch digests"
+                                );
+                                reject("no_batch_digests").await;
+                                return;
+                            }
+
+                            // Compute settlement digest = keccak256(domain || mm_id || concat(sorted digests))
+                            let mut preimage = Vec::with_capacity(
+                                b"rift-fee-settle-v1".len() + 16 + 32 * digests.len(),
+                            );
+                            preimage.extend_from_slice(b"rift-fee-settle-v1");
+                            preimage.extend_from_slice(mm_id.as_bytes());
+                            for d in &digests {
+                                preimage.extend_from_slice(d);
+                            }
+                            let settlement_digest = alloy::primitives::keccak256(&preimage).0;
+
+                            // Fetch referenced batches (must be confirmed) and compute referenced fee total.
+                            let batches = match db
+                                .batches()
+                                .get_confirmed_batches_by_nonce_digests(mm_id, &digests)
+                                .await
+                            {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    error!(
+                                        market_maker_id = %mm_id,
+                                        tx_hash = %tx_hash,
+                                        error = %e,
+                                        "Failed to load confirmed batches for fee settlement"
+                                    );
+                                    reject("db_error_loading_batches").await;
+                                    return;
+                                }
+                            };
+
+                            if batches.len() != digests.len() {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    tx_hash = %tx_hash,
+                                    expected = digests.len(),
+                                    got = batches.len(),
+                                    "Fee settlement references missing/unconfirmed batches"
+                                );
+                                reject("missing_or_unconfirmed_batches").await;
+                                return;
+                            }
+
+                            let referenced_fee_sats_u64: u64 = batches
+                                .iter()
+                                .map(|b| b.payment_verification.aggregated_fee.to::<u64>())
+                                .sum();
+                            let referenced_fee_sats: i64 = match referenced_fee_sats_u64.try_into() {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    error!(
+                                        market_maker_id = %mm_id,
+                                        tx_hash = %tx_hash,
+                                        "Referenced fee does not fit into i64"
+                                    );
+                                    reject("referenced_fee_overflow").await;
+                                    return;
+                                }
+                            };
+
+                            let Some(chain_ops) = chain_registry.get(&chain) else {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    chain = ?chain,
+                                    "Chain not supported for fee settlement"
+                                );
+                                reject("unsupported_chain").await;
+                                return;
+                            };
+
+                            let verification = match chain_ops
+                                .verify_fee_settlement_transaction(&tx_hash, settlement_digest)
+                                .await
+                            {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    error!(
+                                        market_maker_id = %mm_id,
+                                        chain = ?chain,
+                                        tx_hash = %tx_hash,
+                                        error = %e,
+                                        "Fee settlement tx verification failed"
+                                    );
+                                    reject("verification_failed").await;
+                                    return;
+                                }
+                            };
+
+                            let Some(verification) = verification else {
+                                // Not visible yet; MM can retry later.
+                                info!(
+                                    market_maker_id = %mm_id,
+                                    chain = ?chain,
+                                    tx_hash = %tx_hash,
+                                    "Fee settlement tx not found yet; ignoring for now"
+                                );
+                                reject("tx_not_found_yet").await;
+                                return;
+                            };
+
+                            let min_conf = chain_ops.minimum_block_confirmations() as u64;
+                            if verification.confirmations < min_conf {
+                                info!(
+                                    market_maker_id = %mm_id,
+                                    chain = ?chain,
+                                    tx_hash = %tx_hash,
+                                    confirmations = verification.confirmations,
+                                    min_confirmations = min_conf,
+                                    "Fee settlement tx not sufficiently confirmed; ignoring for now"
+                                );
+                                reject("insufficient_confirmations").await;
+                                return;
+                            }
+
+                            let amount_sats_u64 = verification.amount_sats.to::<u64>();
+                            let amount_sats: i64 = match amount_sats_u64.try_into() {
+                                Ok(v) => v,
+                                Err(_) => {
+                                    error!(
+                                        market_maker_id = %mm_id,
+                                        tx_hash = %tx_hash,
+                                        "Settlement amount does not fit into i64"
+                                    );
+                                    reject("amount_overflow").await;
+                                    return;
+                                }
+                            };
+
+                            if amount_sats < referenced_fee_sats {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    tx_hash = %tx_hash,
+                                    amount_sats,
+                                    referenced_fee_sats,
+                                    "Fee settlement amount is less than referenced batch fee total"
+                                );
+                                reject("amount_less_than_referenced_fee").await;
+                                return;
+                            }
+
+                            if let Err(e) = db
+                                .fees()
+                                .record_settlement(
+                                    mm_id,
+                                    &chain.to_db_string(),
+                                    &tx_hash,
+                                    settlement_digest,
+                                    amount_sats,
+                                    &digests,
+                                    referenced_fee_sats,
+                                    now,
+                                )
+                                .await
+                            {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    chain = ?chain,
+                                    tx_hash = %tx_hash,
+                                    error = %e,
+                                    "Failed to record fee settlement"
+                                );
+                                reject("db_error_recording_settlement").await;
+                                return;
+                            }
+
+                            info!(
+                                market_maker_id = %mm_id,
+                                chain = ?chain,
+                                tx_hash = %tx_hash,
+                                amount_sats,
+                                referenced_fee_sats,
+                                "Fee settlement accepted and recorded"
+                            );
+                            accept().await;
+                        });
+
+                        None
+                    }
+                    MMResponse::FeeStandingStatusRequest { request_id, .. } => {
+                        let now = utc::now();
+                        let (debt_sats, over_threshold_since) = match self
+                            .db
+                            .fees()
+                            .get_fee_state(mm_id)
+                            .await
+                        {
+                            Ok(v) => v,
+                            Err(e) => {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    error = %e,
+                                    "Failed to load fee standing state"
+                                );
+                                return None;
+                            }
+                        };
+
+                        let response = ProtocolMessage {
+                            version: msg.version.clone(),
+                            sequence: msg.sequence + 1,
+                            payload: MMRequest::FeeStandingStatusResponse {
+                                request_id,
+                                debt_sats,
+                                over_threshold_since,
+                                threshold_sats: GOOD_STANDING_THRESHOLD_SATS,
+                                window_secs: GOOD_STANDING_WINDOW_SECS,
+                                timestamp: now,
+                            },
+                        };
+
+                        match serde_json::to_string(&response) {
+                            Ok(json) => Some(json),
+                            Err(e) => {
+                                error!(
+                                    market_maker_id = %mm_id,
+                                    error = %e,
+                                    "Failed to serialize FeeStandingStatusResponse"
+                                );
+                                None
+                            }
+                        }
+                    }
                     MMResponse::PaymentQueued { .. } => {
                         // Handle payment queued notification
                         None
@@ -846,7 +1138,11 @@ impl MessageHandler for OTCMessageHandler {
         }
     }
 
-    async fn on_connect(&self, mm_id: Uuid, _sender: &MessageSender) -> Result<(), mm_websocket_server::handler::MessageError> {
+    async fn on_connect(
+        &self,
+        mm_id: Uuid,
+        _sender: &MessageSender,
+    ) -> Result<(), mm_websocket_server::handler::MessageError> {
         // Send pending swaps awaiting MM deposit
         match self.db.swaps().get_waiting_mm_deposit_swaps(mm_id).await {
             Ok(pending_swaps) => {
@@ -859,6 +1155,7 @@ impl MessageHandler for OTCMessageHandler {
                             swap.user_destination_address.as_str(),
                             swap.mm_nonce,
                             &swap.expected_lot,
+                            swap.protocol_fee,
                             swap.user_deposit_confirmed_at,
                         )
                         .await;
@@ -874,22 +1171,41 @@ impl MessageHandler for OTCMessageHandler {
         }
 
         // Request latest deposit vault timestamp
-        if let Err(e) = self.mm_registry.request_latest_deposit_vault_timestamp(&mm_id).await {
+        if let Err(e) = self
+            .mm_registry
+            .request_latest_deposit_vault_timestamp(&mm_id)
+            .await
+        {
             error!(
                 market_maker_id = %mm_id,
                 error = %e,
                 "Failed to request latest deposit vault timestamp"
             );
         } else {
-            info!("Requested latest deposit vault timestamp from market maker {}", mm_id);
+            info!(
+                "Requested latest deposit vault timestamp from market maker {}",
+                mm_id
+            );
         }
 
         // Get and request new batches
-        match self.db.batches().get_latest_known_batch_timestamp_by_market_maker(&mm_id).await {
+        match self
+            .db
+            .batches()
+            .get_latest_known_batch_timestamp_by_market_maker(&mm_id)
+            .await
+        {
             Ok(newest_batch_timestamp) => {
-                info!("Latest known batch timestamp for market maker {} is {:#?}", mm_id, newest_batch_timestamp);
-                
-                if let Err(e) = self.mm_registry.request_new_batches(&mm_id, newest_batch_timestamp).await {
+                info!(
+                    "Latest known batch timestamp for market maker {} is {:#?}",
+                    mm_id, newest_batch_timestamp
+                );
+
+                if let Err(e) = self
+                    .mm_registry
+                    .request_new_batches(&mm_id, newest_batch_timestamp)
+                    .await
+                {
                     error!(
                         market_maker_id = %mm_id,
                         error = %e,
@@ -923,21 +1239,18 @@ impl MessageHandler for OTCMessageHandler {
 
 async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     // Generate unique connection ID to prevent race conditions
-    let connection_id = Uuid::new_v4();
-    
+    let connection_id = Uuid::now_v7();
+
     // Create channel for registry to send messages to the connection
     let (tx, rx) = mpsc::channel::<Message>(100);
 
     // Convert ProtocolMessage channel from registry into Message channel
     let (protocol_tx, mut protocol_rx) = mpsc::channel::<ProtocolMessage<MMRequest>>(100);
-    
+
     // Register the MM with the registry
-    state.mm_registry.register(
-        mm_uuid,
-        connection_id,
-        protocol_tx,
-        "1.0.0".to_string(),
-    );
+    state
+        .mm_registry
+        .register(mm_uuid, connection_id, protocol_tx, "1.0.0".to_string());
 
     // Spawn task to convert ProtocolMessage to Message
     let tx_clone = tx.clone();
@@ -961,14 +1274,8 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     });
 
     // Use the mm-websocket-server crate to handle the connection
-    let _ = mm_websocket_server::handle_mm_connection(
-        socket,
-        mm_uuid,
-        connection_id,
-        handler,
-        rx,
-    )
-    .await;
+    let _ = mm_websocket_server::handle_mm_connection(socket, mm_uuid, connection_id, handler, rx)
+        .await;
 }
 
 #[derive(Deserialize)]

@@ -142,8 +142,8 @@ configs:
     content: |
       #!/bin/bash
       set -euo pipefail
-
-      archive_url="https://rift-blockchain-archive.s3.us-west-1.amazonaws.com/bitcoind-datadir-2025-09-11.tar.lz4"
+      base_archive_url="https://snapshots.publicnode.com/bitcoin-base.tar.lz4"
+      part_archive_url="https://snapshots.publicnode.com/bitcoin-part-927450.tar.lz4"
 
       echo "Checking Bitcoin directory: $$BITCOIN_DATA_DIR"
 
@@ -155,12 +155,22 @@ configs:
           # Ensure target dir exists
           mkdir -p "$$BITCOIN_DATA_DIR"
 
-          echo "Downloading from: $$archive_url"
+          echo "Downloading base snapshot from: $$base_archive_url"
           echo "Extracting directly to: $$BITCOIN_DATA_DIR"
 
-          # Stream download -> lz4 decode -> tar extract
-          if wget -O - "$$archive_url" | tar -I lz4 -xvf - -C "$$BITCOIN_DATA_DIR"; then
-              echo "Download and extraction successful"
+          # Stream download -> lz4 decode -> tar extract (base)
+          if wget -O - "$$base_archive_url" | tar -I lz4 -xvf - -C "$$BITCOIN_DATA_DIR"; then
+              echo "Base snapshot download and extraction successful"
+
+              echo "Downloading part snapshot from: $$part_archive_url"
+              echo "Extracting directly to: $$BITCOIN_DATA_DIR"
+
+              # Stream download -> lz4 decode -> tar extract (part)
+              if wget -O - "$$part_archive_url" | tar -I lz4 -xvf - -C "$$BITCOIN_DATA_DIR"; then
+                  echo "Part snapshot download and extraction successful"
+              else
+                  echo "Warning: Failed to download or extract part snapshot. Bitcoin Core may need to sync remaining blocks."
+              fi
 
               # Ensure correct ownership if running as root
               if id -u bitcoin >/dev/null 2>&1; then
@@ -169,7 +179,7 @@ configs:
 
               echo "Data directory size: $$(du -sh $$BITCOIN_DATA_DIR | cut -f1)"
           else
-              echo "Warning: Failed to download or extract blockchain data. Bitcoin Core will sync from genesis."
+              echo "Warning: Failed to download or extract base snapshot. Bitcoin Core will sync from genesis."
               echo "This will take significantly longer but is still functional."
           fi
       else
@@ -293,7 +303,7 @@ configs:
         retention_delete_delay: 2h
         retention_delete_worker_count: 150
 
-  grafana-datasource-v5:
+  grafana-datasource-grafv6:
     content: |
       apiVersion: 1
       deleteDatasources:
@@ -313,7 +323,7 @@ configs:
           url: http://otc-loki:3100
           isDefault: false
 
-  grafana-dashboard-provider-v5:
+  grafana-dashboard-provider-grafv6:
     content: |
       apiVersion: 1
       providers:
@@ -325,7 +335,7 @@ configs:
           options:
             path: /etc/grafana/provisioning/dashboards
 
-  grafana-node-dashboard-v5:
+  grafana-node-dashboard-grafv6:
     content: |
       {
         "annotations": {
@@ -397,8 +407,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -667,8 +676,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -894,8 +902,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1010,8 +1017,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1111,8 +1117,167 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                }
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 0,
+              "y": 16
+            },
+            "id": 17,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "bottom",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "disableTextWrap": false,
+                "editorMode": "builder",
+                "expr": "otc_mm_fee_debt_sats{job=\"otc-server\"}",
+                "fullMetaSearch": false,
+                "includeNullMetadata": true,
+                "instant": false,
+                "legendFormat": "{{market_maker_id}}",
+                "range": true,
+                "refId": "A",
+                "useBackend": false
+              }
+            ],
+            "title": "MM Fee Debt",
+            "transformations": [
+              {
+                "id": "joinByField",
+                "options": {
+                  "byField": "Time",
+                  "mode": "outer"
+                }
+              },
+              {
+                "disabled": true,
+                "id": "organize",
+                "options": {
+                  "excludeByName": {
+                    "f901369b-84d7-4c03-8799-f504c22125f9": false
+                  },
+                  "includeByName": {},
+                  "indexByName": {},
+                  "renameByName": {
+                    "96c0bedb-bfda-4680-a8df-1317d1e09c8d": "",
+                    "Time": "",
+                    "{__name__=\"otc_mm_fee_debt_sats\", instance=\"otc-server:9000\", job=\"otc-server\", market_maker_id=\"96c0bedb-bfda-4680-a8df-1317d1e09c8d\"}": ""
+                  }
+                }
+              }
+            ],
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "loki",
+              "uid": "LOKI01"
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 12,
+              "y": 16
+            },
+            "id": 12,
+            "options": {
+              "dedupStrategy": "none",
+              "enableLogDetails": true,
+              "prettifyLogMessage": false,
+              "showCommonLabels": false,
+              "showLabels": false,
+              "showTime": false,
+              "sortOrder": "Descending",
+              "wrapLogMessage": false
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "loki",
+                  "uid": "LOKI01"
+                },
+                "editorMode": "code",
+                "expr": "{service=\"otc-server\"}\n| json\n| level=~\"(warn|error)\"\n| regexp \"(?:\\\"_spans\\\":\\\\[\\\"(?P<span>[^\\\"]+)\\\")?\"\n| line_format \"{{if .span}}{{.span}} | {{end}}{{._target}}: {{.message}}\"",
+                "queryType": "range",
+                "refId": "A"
+              }
+            ],
+            "title": "Warnings & Errors",
+            "type": "logs"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1128,7 +1293,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 0,
-              "y": 16
+              "y": 24
             },
             "id": 14,
             "options": {
@@ -1211,8 +1376,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1227,7 +1391,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 16
+              "y": 24
             },
             "id": 13,
             "options": {
@@ -1309,8 +1473,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1326,7 +1489,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 0,
-              "y": 24
+              "y": 32
             },
             "id": 15,
             "options": {
@@ -1409,8 +1572,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1425,7 +1587,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 24
+              "y": 32
             },
             "id": 16,
             "options": {
@@ -1462,43 +1624,6 @@ configs:
           },
           {
             "datasource": {
-              "type": "loki",
-              "uid": "LOKI01"
-            },
-            "gridPos": {
-              "h": 8,
-              "w": 12,
-              "x": 0,
-              "y": 32
-            },
-            "id": 12,
-            "options": {
-              "dedupStrategy": "none",
-              "enableLogDetails": true,
-              "prettifyLogMessage": false,
-              "showCommonLabels": false,
-              "showLabels": false,
-              "showTime": false,
-              "sortOrder": "Descending",
-              "wrapLogMessage": false
-            },
-            "targets": [
-              {
-                "datasource": {
-                  "type": "loki",
-                  "uid": "LOKI01"
-                },
-                "editorMode": "code",
-                "expr": "{service=\"otc-server\"}\n| json\n| level=~\"(warn|error)\"\n| regexp \"(?:\\\"_spans\\\":\\\\[\\\"(?P<span>[^\\\"]+)\\\")?\"\n| line_format \"{{if .span}}{{.span}} | {{end}}{{._target}}: {{.message}}\"",
-                "queryType": "range",
-                "refId": "A"
-              }
-            ],
-            "title": "Warnings & Errors",
-            "type": "logs"
-          },
-          {
-            "datasource": {
               "type": "prometheus",
               "uid": "PBFA97CFB590B2093"
             },
@@ -1544,114 +1669,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
-                    },
-                    {
-                      "color": "red",
-                      "value": 80
-                    }
-                  ]
-                },
-                "unit": "Bps"
-              },
-              "overrides": []
-            },
-            "gridPos": {
-              "h": 8,
-              "w": 12,
-              "x": 12,
-              "y": 32
-            },
-            "id": 4,
-            "options": {
-              "legend": {
-                "calcs": [],
-                "displayMode": "list",
-                "placement": "right",
-                "showLegend": true
-              },
-              "tooltip": {
-                "mode": "single",
-                "sort": "none"
-              }
-            },
-            "targets": [
-              {
-                "datasource": {
-                  "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
-                },
-                "editorMode": "code",
-                "expr": "sum by (name) (rate(container_network_receive_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
-                "legendFormat": "RX {{name}}",
-                "range": true,
-                "refId": "A"
-              },
-              {
-                "datasource": {
-                  "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
-                },
-                "editorMode": "code",
-                "expr": "sum by (name) (rate(container_network_transmit_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
-                "legendFormat": "TX {{name}}",
-                "range": true,
-                "refId": "B"
-              }
-            ],
-            "title": "Container Network I/O",
-            "type": "timeseries"
-          },
-          {
-            "datasource": {
-              "type": "prometheus",
-              "uid": "PBFA97CFB590B2093"
-            },
-            "fieldConfig": {
-              "defaults": {
-                "color": {
-                  "mode": "palette-classic"
-                },
-                "custom": {
-                  "axisBorderShow": false,
-                  "axisCenteredZero": false,
-                  "axisColorMode": "text",
-                  "axisLabel": "",
-                  "axisPlacement": "auto",
-                  "barAlignment": 0,
-                  "drawStyle": "line",
-                  "fillOpacity": 0,
-                  "gradientMode": "none",
-                  "hideFrom": {
-                    "legend": false,
-                    "tooltip": false,
-                    "viz": false
-                  },
-                  "insertNulls": false,
-                  "lineInterpolation": "linear",
-                  "lineWidth": 1,
-                  "pointSize": 5,
-                  "scaleDistribution": {
-                    "type": "linear"
-                  },
-                  "showPoints": "auto",
-                  "spanNulls": false,
-                  "stacking": {
-                    "group": "A",
-                    "mode": "none"
-                  },
-                  "thresholdsStyle": {
-                    "mode": "off"
-                  }
-                },
-                "mappings": [],
-                "thresholds": {
-                  "mode": "absolute",
-                  "steps": [
-                    {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1745,8 +1763,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1754,7 +1771,7 @@ configs:
                     }
                   ]
                 },
-                "unit": "decbytes"
+                "unit": "Bps"
               },
               "overrides": []
             },
@@ -1764,7 +1781,7 @@ configs:
               "x": 12,
               "y": 40
             },
-            "id": 2,
+            "id": 4,
             "options": {
               "legend": {
                 "calcs": [],
@@ -1784,13 +1801,24 @@ configs:
                   "uid": "PBFA97CFB590B2093"
                 },
                 "editorMode": "code",
-                "expr": "max by (name) (container_memory_working_set_bytes{name=~\"tee-.*\"})",
-                "legendFormat": "{{name}}",
+                "expr": "sum by (name) (rate(container_network_receive_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
+                "legendFormat": "RX {{name}}",
                 "range": true,
                 "refId": "A"
+              },
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "sum by (name) (rate(container_network_transmit_bytes_total{name=~\"tee-.*\", interface!=\"lo\"}[5m]))",
+                "legendFormat": "TX {{name}}",
+                "range": true,
+                "refId": "B"
               }
             ],
-            "title": "Container Memory Usage",
+            "title": "Container Network I/O",
             "type": "timeseries"
           },
           {
@@ -1840,8 +1868,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1935,8 +1962,101 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
+                    },
+                    {
+                      "color": "red",
+                      "value": 80
+                    }
+                  ]
+                },
+                "unit": "decbytes"
+              },
+              "overrides": []
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 12,
+              "y": 48
+            },
+            "id": 2,
+            "options": {
+              "legend": {
+                "calcs": [],
+                "displayMode": "list",
+                "placement": "right",
+                "showLegend": true
+              },
+              "tooltip": {
+                "mode": "single",
+                "sort": "none"
+              }
+            },
+            "targets": [
+              {
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "PBFA97CFB590B2093"
+                },
+                "editorMode": "code",
+                "expr": "max by (name) (container_memory_working_set_bytes{name=~\"tee-.*\"})",
+                "legendFormat": "{{name}}",
+                "range": true,
+                "refId": "A"
+              }
+            ],
+            "title": "Container Memory Usage",
+            "type": "timeseries"
+          },
+          {
+            "datasource": {
+              "type": "prometheus",
+              "uid": "PBFA97CFB590B2093"
+            },
+            "fieldConfig": {
+              "defaults": {
+                "color": {
+                  "mode": "palette-classic"
+                },
+                "custom": {
+                  "axisBorderShow": false,
+                  "axisCenteredZero": false,
+                  "axisColorMode": "text",
+                  "axisLabel": "",
+                  "axisPlacement": "auto",
+                  "barAlignment": 0,
+                  "drawStyle": "line",
+                  "fillOpacity": 0,
+                  "gradientMode": "none",
+                  "hideFrom": {
+                    "legend": false,
+                    "tooltip": false,
+                    "viz": false
+                  },
+                  "insertNulls": false,
+                  "lineInterpolation": "linear",
+                  "lineWidth": 1,
+                  "pointSize": 5,
+                  "scaleDistribution": {
+                    "type": "linear"
+                  },
+                  "showPoints": "auto",
+                  "spanNulls": false,
+                  "stacking": {
+                    "group": "A",
+                    "mode": "none"
+                  },
+                  "thresholdsStyle": {
+                    "mode": "off"
+                  }
+                },
+                "mappings": [],
+                "thresholds": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -1952,7 +2072,7 @@ configs:
               "h": 8,
               "w": 12,
               "x": 12,
-              "y": 48
+              "y": 56
             },
             "id": 6,
             "options": {
@@ -2030,8 +2150,7 @@ configs:
                   "mode": "absolute",
                   "steps": [
                     {
-                      "color": "green",
-                      "value": null
+                      "color": "green"
                     },
                     {
                       "color": "red",
@@ -2047,7 +2166,7 @@ configs:
               "h": 8,
               "w": 24,
               "x": 0,
-              "y": 56
+              "y": 64
             },
             "id": 7,
             "options": {
@@ -2088,45 +2207,18 @@ configs:
           "list": []
         },
         "time": {
-          "from": "now-1h",
+          "from": "now-15m",
           "to": "now"
         },
         "timepicker": {},
         "timezone": "",
         "title": "TEE Monitoring dev",
         "uid": "tee-monitoring-dev",
-        "version": 1,
+        "version": 3,
         "weekStart": ""
       }
 
-
 services:
-  volume-cleanup:
-    container_name: tee-volume-cleanup
-    image: alpine:3.22.1
-    command: >
-      sh -c "
-        echo 'Starting volume cleanup...';
-        echo 'Removing reth_logs...';
-        rm -rf /cleanup/reth_logs/* /cleanup/reth_logs/.[!.]* 2>/dev/null || true;
-        echo 'Removing eth_jwt_data...';
-        rm -rf /cleanup/eth_jwt_data/* /cleanup/eth_jwt_data/.[!.]* 2>/dev/null || true;
-        echo 'Removing lighthouse_data...';
-        rm -rf /cleanup/lighthouse_data/* /cleanup/lighthouse_data/.[!.]* 2>/dev/null || true;
-        echo 'Removing reth_mainnet_data...';
-        rm -rf /cleanup/reth_mainnet_data/* /cleanup/reth_mainnet_data/.[!.]* 2>/dev/null || true;
-        echo 'Volume cleanup complete!';
-        echo 'You can now remove these volumes with: docker volume rm tee-otc_reth_logs tee-otc_eth_jwt_data tee-otc_lighthouse_data tee-otc_reth_mainnet_data'
-      "
-    volumes:
-      - reth_logs:/cleanup/reth_logs
-      - eth_jwt_data:/cleanup/eth_jwt_data
-      - lighthouse_data:/cleanup/lighthouse_data
-      - reth_mainnet_data:/cleanup/reth_mainnet_data
-    restart: "no"
-    networks:
-      - rift-network
-
   pg-secret-generator:
     container_name: tee-pg-secret-generator
     image: alpine:3.22.1
@@ -2168,7 +2260,7 @@ services:
 
       POSTGRES_INITDB_ARGS: "--data-checksums"
     volumes:
-      - otc_postgres_data_v3:/var/lib/postgresql/data
+      - otc_postgres_data_v5:/var/lib/postgresql/data
       - pg_secrets:/run/postgres-secrets:ro
     configs:
       - source: postgres-conf
@@ -2233,7 +2325,7 @@ services:
           && mkdir -p /home/bitcoin/.bitcoin \
           && chown -R bitcoin:bitcoin /home/bitcoin/.bitcoin
         WORKDIR /opt/bitcoin
-        RUN curl -fsSL "https://bitcoincore.org/bin/bitcoin-core-29.0/bitcoin-29.0-x86_64-linux-gnu.tar.gz" -o bitcoin.tar.gz \
+        RUN curl -fsSL "https://bitcoincore.org/bin/bitcoin-core-30.0/bitcoin-30.0-x86_64-linux-gnu.tar.gz" -o bitcoin.tar.gz \
           && tar -xzf bitcoin.tar.gz --strip-components=1 \
           && install -m 0755 -o root -g root -t /usr/local/bin bin/* \
           && rm -rf /opt/bitcoin
@@ -2275,7 +2367,7 @@ services:
     platform: linux/amd64
 
   otc-server:
-    image: riftresearch/otc-server:0.11.0
+    image: riftresearch/otc-server:1.4.0
     restart: unless-stopped
     container_name: tee-otc-server
     depends_on:
@@ -2423,11 +2515,11 @@ services:
       GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER}
       GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
     configs:
-      - source: grafana-datasource-v5
+      - source: grafana-datasource-grafv6
         target: /etc/grafana/provisioning/datasources/prometheus.yml
-      - source: grafana-dashboard-provider-v5
+      - source: grafana-dashboard-provider-grafv6
         target: /etc/grafana/provisioning/dashboards/provider.yml
-      - source: grafana-node-dashboard-v5
+      - source: grafana-node-dashboard-grafv6
         target: /etc/grafana/provisioning/dashboards/tee-monitoring.json
     networks:
       - rift-network
@@ -2452,13 +2544,14 @@ services:
       --network mainnet
       --execution-rpc ${HELIOS_ETHEREUM_EXECUTION_RPC}
       --consensus-rpc ${HELIOS_ETHEREUM_CONSENSUS_RPC}
+      --checkpoint 0x9f6bfa8015ffd20cf5bcb56c6eca13a4edfdcefd75c14f5599e5aeffa92a537c
       --rpc-port 8190
       --rpc-bind-ip 0.0.0.0
       --freezer-archive-from 23730000
       --data-dir /data
 
     volumes:
-      - eth_helios_data:/data
+      - eth_helios_data_v2:/data
 
     networks:
       - rift-network
@@ -2501,16 +2594,11 @@ networks:
         - subnet: 172.21.0.0/16
 
 volumes:
-  otc_postgres_data_v3:
+  otc_postgres_data_v5:
   bitcoin_data:
   otc_server_config_data:
   prometheus_data_v4:
   otc_loki_data:
   pg_secrets:
-  eth_helios_data:
+  eth_helios_data_v2:
   base_helios_data:
-  # Volumes for cleanup - can be removed after cleanup service runs
-  reth_logs:
-  eth_jwt_data:
-  lighthouse_data:
-  reth_mainnet_data:

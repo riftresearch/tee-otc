@@ -27,6 +27,8 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
+  -- Volume is tracked from realized_swap.mm_output (amount sent to user)
+  -- Protocol fee is tracked from realized_swap.protocol_fee
   WITH
   new_settled AS (
     SELECT
@@ -41,11 +43,11 @@ BEGIN
              THEN q.to_chain||':Native'
              ELSE q.to_chain||':'||(q.to_token->>'data') END
       ) AS market,
-      SUM(q.to_amount::bigint) AS volume,
-      SUM(COALESCE((q.fee_schedule->>'protocol_fee_sats')::bigint, 0)) AS protocol_fee
+      SUM((s.realized_swap->>'mm_output')::numeric::bigint) AS volume,
+      SUM(COALESCE((s.realized_swap->>'protocol_fee')::numeric::bigint, 0)) AS protocol_fee
     FROM new_swaps s
     JOIN quotes q ON q.id = s.quote_id
-    WHERE s.status = 'settled'
+    WHERE s.status = 'settled' AND s.realized_swap IS NOT NULL
     GROUP BY 1
   ),
   old_settled AS (
@@ -61,11 +63,11 @@ BEGIN
              THEN q.to_chain||':Native'
              ELSE q.to_chain||':'||(q.to_token->>'data') END
       ) AS market,
-      SUM(q.to_amount::bigint) AS volume,
-      SUM(COALESCE((q.fee_schedule->>'protocol_fee_sats')::bigint, 0)) AS protocol_fee
+      SUM((s.realized_swap->>'mm_output')::numeric::bigint) AS volume,
+      SUM(COALESCE((s.realized_swap->>'protocol_fee')::numeric::bigint, 0)) AS protocol_fee
     FROM old_swaps s
     JOIN quotes q ON q.id = s.quote_id
-    WHERE s.status = 'settled'
+    WHERE s.status = 'settled' AND s.realized_swap IS NOT NULL
     GROUP BY 1
   ),
   deltas AS (
@@ -98,11 +100,11 @@ BEGIN
              THEN q.to_chain||':Native'
              ELSE q.to_chain||':'||(q.to_token->>'data') END
       ) AS market,
-      SUM(q.to_amount::bigint) AS volume,
-      SUM(COALESCE((q.fee_schedule->>'protocol_fee_sats')::bigint, 0)) AS protocol_fee
+      SUM((s.realized_swap->>'mm_output')::numeric::bigint) AS volume,
+      SUM(COALESCE((s.realized_swap->>'protocol_fee')::numeric::bigint, 0)) AS protocol_fee
     FROM new_swaps s
     JOIN quotes q ON q.id = s.quote_id
-    WHERE s.status = 'settled'
+    WHERE s.status = 'settled' AND s.realized_swap IS NOT NULL
     GROUP BY 1
   ),
   old_settled AS (
@@ -118,11 +120,11 @@ BEGIN
              THEN q.to_chain||':Native'
              ELSE q.to_chain||':'||(q.to_token->>'data') END
       ) AS market,
-      SUM(q.to_amount::bigint) AS volume,
-      SUM(COALESCE((q.fee_schedule->>'protocol_fee_sats')::bigint, 0)) AS protocol_fee
+      SUM((s.realized_swap->>'mm_output')::numeric::bigint) AS volume,
+      SUM(COALESCE((s.realized_swap->>'protocol_fee')::numeric::bigint, 0)) AS protocol_fee
     FROM old_swaps s
     JOIN quotes q ON q.id = s.quote_id
-    WHERE s.status = 'settled'
+    WHERE s.status = 'settled' AND s.realized_swap IS NOT NULL
     GROUP BY 1
   ),
   deltas AS (
@@ -161,6 +163,7 @@ ON swaps(quote_id) WHERE status = 'settled';
 
 -- === Backfill current totals per market =====================================
 -- Materialize once, reuse for both inserts (more efficient than duplicated CTEs)
+-- Volume is from realized_swap.mm_output, protocol fee from realized_swap.protocol_fee
 
 CREATE TEMP TABLE _current_market_totals ON COMMIT DROP AS
 SELECT
@@ -175,11 +178,11 @@ SELECT
          THEN q.to_chain||':Native'
          ELSE q.to_chain||':'||(q.to_token->>'data') END
   ) AS market,
-  SUM(q.to_amount::bigint) AS volume,
-  SUM(COALESCE((q.fee_schedule->>'protocol_fee_sats')::bigint, 0)) AS protocol_fee
+  SUM((s.realized_swap->>'mm_output')::numeric::bigint) AS volume,
+  SUM(COALESCE((s.realized_swap->>'protocol_fee')::numeric::bigint, 0)) AS protocol_fee
 FROM swaps s
 JOIN quotes q ON q.id = s.quote_id
-WHERE s.status = 'settled'
+WHERE s.status = 'settled' AND s.realized_swap IS NOT NULL
 GROUP BY 1;
 
 INSERT INTO settled_volume_totals_market(market, total, updated_at)

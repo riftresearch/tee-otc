@@ -12,7 +12,8 @@ pub use deposit_repo::{
     FillStatus,
 };
 pub use payment_repo::{
-    BatchStatus, PaymentRepository, PaymentRepositoryError, PaymentRepositoryResult, StoredBatch,
+    BatchStatus, FeeSettlementAckStatus, PaymentRepository, PaymentRepositoryError,
+    PaymentRepositoryResult, StoredBatch, StoredFeeSettlement,
 };
 pub use quote_repo::{QuoteRepository, QuoteRepositoryError, QuoteRepositoryResult};
 

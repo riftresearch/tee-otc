@@ -1,6 +1,6 @@
 use alloy::primitives::U256;
-use chrono::{DateTime};
-use otc_models::{ChainType, Currency, FeeSchedule, Lot, Quote, TokenIdentifier};
+use chrono::DateTime;
+use otc_models::{ChainType, Currency, Fees, Lot, Quote, SwapRates, TokenIdentifier};
 use uuid::Uuid;
 
 #[test]
@@ -22,15 +22,15 @@ fn test_datetime_precision_affects_hash() {
 
     // Now create two identical quotes except for timestamp precision
     let quote1 = Quote {
-        id: Uuid::new_v4(),
-        market_maker_id: Uuid::new_v4(),
+        id: Uuid::now_v7(),
+        market_maker_id: Uuid::now_v7(),
         from: Lot {
             currency: Currency {
                 chain: ChainType::Bitcoin,
                 token: TokenIdentifier::Native,
                 decimals: 8,
             },
-            amount: U256::from(100000000u64),
+            amount: U256::from(1_000_000u64),
         },
         to: Lot {
             currency: Currency {
@@ -38,13 +38,17 @@ fn test_datetime_precision_affects_hash() {
                 token: TokenIdentifier::Native,
                 decimals: 18,
             },
-            amount: U256::from(1000000000000000000u64),
+            amount: U256::from(996_700u64),
         },
-        fee_schedule: FeeSchedule {
-            network_fee_sats: 1000,
-            liquidity_fee_sats: 2000,
-            protocol_fee_sats: 500,
+        rates: SwapRates::new(13, 10, 1000),
+        fees: Fees {
+            liquidity_fee: U256::from(1300u64),
+            protocol_fee: U256::from(1000u64),
+            network_fee: U256::from(1000u64),
         },
+        min_input: U256::from(10_000u64),
+        max_input: U256::from(100_000_000u64),
+        affiliate: None,
         expires_at: now,
         created_at: now,
     };
