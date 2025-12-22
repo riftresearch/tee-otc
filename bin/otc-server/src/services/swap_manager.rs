@@ -230,6 +230,7 @@ impl SwapManager {
         )?;
 
         if !refund_chain.validate_address(&refund_address) {
+            // TODO: This should be InvalidRefundAddress
             return Err(SwapError::InvalidDestinationAddress {
                 address: refund_address,
                 chain: quote.from.currency.chain,

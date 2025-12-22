@@ -21,7 +21,7 @@ const LIQUIDITY_COMPUTE_INTERVAL: Duration = Duration::from_secs(1);
 ///
 /// Ethereum addresses can be represented in different cases (checksummed, lowercase, uppercase),
 /// but they all represent the same address. This function normalizes to lowercase.
-fn normalize_token(token: &TokenIdentifier) -> TokenIdentifier {
+pub fn normalize_token(token: &TokenIdentifier) -> TokenIdentifier {
     match token {
         TokenIdentifier::Native => TokenIdentifier::Native,
         TokenIdentifier::Address(addr) => TokenIdentifier::Address(addr.to_lowercase()),
