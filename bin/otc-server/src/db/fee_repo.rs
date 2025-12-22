@@ -72,18 +72,20 @@ impl FeeRepository {
         let inserted = sqlx::query(
             r#"
             INSERT INTO mm_protocol_fee_ledger (
+                id,
                 market_maker_id,
                 delta_sats,
                 kind,
                 batch_nonce_digest,
                 created_at
             )
-            VALUES ($1, $2, 'batch_accrual', $3, $4)
+            VALUES ($1, $2, $3, 'batch_accrual', $4, $5)
             ON CONFLICT (kind, market_maker_id, batch_nonce_digest)
             WHERE kind = 'batch_accrual'
             DO NOTHING
             "#,
         )
+        .bind(Uuid::now_v7())
         .bind(market_maker_id)
         .bind(fee_sats)
         .bind(batch_nonce_digest)
@@ -220,6 +222,7 @@ impl FeeRepository {
         let inserted = sqlx::query(
             r#"
             INSERT INTO mm_fee_settlements (
+                id,
                 market_maker_id,
                 chain,
                 tx_hash,
@@ -230,10 +233,11 @@ impl FeeRepository {
                 confirmed_at,
                 created_at
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $9)
             ON CONFLICT (chain, tx_hash) DO NOTHING
             "#,
         )
+        .bind(Uuid::now_v7())
         .bind(market_maker_id)
         .bind(chain)
         .bind(tx_hash)
@@ -256,6 +260,7 @@ impl FeeRepository {
         sqlx::query(
             r#"
             INSERT INTO mm_protocol_fee_ledger (
+                id,
                 market_maker_id,
                 delta_sats,
                 kind,
@@ -264,12 +269,13 @@ impl FeeRepository {
                 settlement_digest,
                 created_at
             )
-            VALUES ($1, $2, 'settlement_payment', $3, $4, $5, $6)
+            VALUES ($1, $2, $3, 'settlement_payment', $4, $5, $6, $7)
             ON CONFLICT (kind, market_maker_id, ref_chain, ref_tx_hash)
             WHERE kind = 'settlement_payment'
             DO NOTHING
             "#,
         )
+        .bind(Uuid::now_v7())
         .bind(market_maker_id)
         .bind(delta_sats)
         .bind(chain)
