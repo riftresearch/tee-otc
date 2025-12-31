@@ -7,7 +7,7 @@ pub mod swap_repo;
 
 pub use batch_repo::BatchRepository;
 pub use fee_repo::{
-    FeeRepository, GOOD_STANDING_THRESHOLD_SATS, GOOD_STANDING_WINDOW_SECS,
+    FeeRepository, GOOD_STANDING_THRESHOLD_SATS, GOOD_STANDING_WINDOW,
     MM_FEE_DEBT_SATS_METRIC,
 };
 pub use swap_repo::SwapRepository;

@@ -309,8 +309,38 @@ impl PaymentRepository {
         Ok(())
     }
 
+    /// Check if there's already a pending fee settlement for the given rail/chain.
+    /// Returns true if a pending settlement exists (and we should NOT create a new one).
+    pub async fn has_pending_fee_settlement(
+        &self,
+        rail: crate::FeeSettlementRail,
+        evm_chain: Option<ChainType>,
+    ) -> PaymentRepositoryResult<bool> {
+        let (rail_str, chain_filter) = match rail {
+            crate::FeeSettlementRail::Bitcoin => ("bitcoin", None),
+            crate::FeeSettlementRail::Evm => ("evm", evm_chain.map(|c| c.to_db_string())),
+        };
+
+        let count: i64 = sqlx::query_scalar(
+            r#"
+            SELECT COUNT(*)
+            FROM mm_fee_settlements
+            WHERE rail = $1
+              AND ($2::text IS NULL OR evm_chain = $2)
+              AND otc_ack_status = 'pending'
+            "#,
+        )
+        .bind(rail_str)
+        .bind(chain_filter)
+        .fetch_one(&self.pool)
+        .await
+        .context(DatabaseSnafu)?;
+
+        Ok(count > 0)
+    }
+
     /// Maximum number of submission attempts before giving up on a fee settlement.
-    const MAX_SUBMIT_ATTEMPTS: i64 = 10;
+    const MAX_SUBMIT_ATTEMPTS: i64 = 100;
 
     pub async fn list_fee_settlements_needing_resubmission(
         &self,

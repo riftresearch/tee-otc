@@ -15,6 +15,7 @@ use alloy::providers::Provider;
 use alloy::signers::local::PrivateKeySigner;
 use devnet::bitcoin_devnet::MiningMode;
 use devnet::{MultichainAccount, RiftDevnet};
+use mock_instant::global::MockClock;
 use eip3009_erc20_contract::GenericEIP3009ERC20::GenericEIP3009ERC20Instance;
 use market_maker::bitcoin_wallet::BitcoinWallet;
 use market_maker::run_market_maker;
@@ -37,6 +38,7 @@ use crate::utils::{
     build_rfq_server_test_args, build_test_user_ethereum_wallet, build_tmp_bitcoin_wallet_db_file,
     get_free_port, wait_for_market_maker_to_connect_to_rfq_server, wait_for_otc_server_to_be_ready,
     wait_for_rfq_server_to_be_ready, wait_for_swap_to_be_settled, PgConnectOptionsExt,
+    TEST_MARKET_MAKER_API_ID,
 };
 
 /// Helper struct to track swap info for fee verification
@@ -503,19 +505,41 @@ async fn test_fee_settlement_with_ethereum_swaps(
     info!("Waiting for batch confirmations to propagate...");
     tokio::time::sleep(Duration::from_secs(10)).await;
 
+    // Calculate expected fees upfront so we know what to wait for
+    // Protocol fee = ceil(deposited * 10 / 10000) for each swap
+    let protocol_fee_bps: u64 = 10;
+    let mut expected_fees: u64 = 0;
+    for swap in &swaps {
+        let amount = swap.deposited_amount.to::<u64>();
+        let fee = amount.saturating_mul(protocol_fee_bps).div_ceil(10_000);
+        info!(
+            "Swap {}: deposited {} sats, protocol fee {} sats",
+            swap.direction, amount, fee
+        );
+        expected_fees += fee;
+    }
+    let expected_fees = U256::from(expected_fees);
+    info!("Total expected fees: {} sats", expected_fees);
+
     // Wait for fee settlement (poll for up to 120 seconds)
     // The fee settlement engine runs every 5 seconds in tests
-    // Add buffer for standing status polling and settlement tx confirmation
+    // We wait for the FULL expected amount, not just any non-zero balance,
+    // because settlements may arrive in multiple batches
     let settlement_timeout = Duration::from_secs(120);
     let poll_interval = Duration::from_secs(3);
     let start = std::time::Instant::now();
 
     loop {
+        // Advance mock time to allow fee settlement resubmission logic to trigger
+        // The resubmission requires RESUBMIT_MIN_AGE_SECS (30s) to pass before retrying
+        MockClock::advance_system_time(Duration::from_secs(10));
+
         // Mine more blocks to help confirmations
+        // This is necessary because OTC server requires confirmations before accepting settlements
         devnet
             .ethereum
             .funded_provider
-            .anvil_mine(Some(2), None)
+            .anvil_mine(Some(5), None)
             .await
             .unwrap();
 
@@ -529,31 +553,23 @@ async fn test_fee_settlement_with_ethereum_swaps(
         let received = fee_balance.saturating_sub(initial_fee_balance);
 
         info!(
-            "Fee wallet balance check - received: {} sats (current: {}, initial: {})",
-            received, fee_balance, initial_fee_balance
+            "Fee wallet balance check - received: {} sats (expected: {}, current: {}, initial: {})",
+            received, expected_fees, fee_balance, initial_fee_balance
         );
 
-        // Fees should be exactly computable from actual deposited amounts
-        // Protocol fee = ceil(deposited * 10 / 10000) for each swap
-        if received > U256::ZERO {
-            info!("Fee settlement detected! Total fees received: {} sats", received);
-
-            // Calculate exact expected fees from actual deposited amounts
-            // Protocol fee uses ceiling division: ceil(amount * bps / 10000)
-            let protocol_fee_bps: u64 = 10;
-            let mut expected_fees: u64 = 0;
-            for swap in &swaps {
-                let amount = swap.deposited_amount.to::<u64>();
-                let fee = amount.saturating_mul(protocol_fee_bps).div_ceil(10_000);
-                info!("Swap {}: deposited {} sats, protocol fee {} sats", swap.direction, amount, fee);
-                expected_fees += fee;
-            }
+        // Wait until we've received ALL expected fees
+        if received >= expected_fees {
+            info!(
+                "Fee settlement complete! Total fees received: {} sats",
+                received
+            );
 
             let received_u64 = received.to::<u64>();
+            let expected_u64 = expected_fees.to::<u64>();
             assert_eq!(
-                received_u64, expected_fees,
+                received_u64, expected_u64,
                 "Expected exactly {} sats in protocol fees, got {} sats",
-                expected_fees, received_u64
+                expected_u64, received_u64
             );
 
             let total_volume: u64 = swaps.iter().map(|s| s.deposited_amount.to::<u64>()).sum();
@@ -568,13 +584,103 @@ async fn test_fee_settlement_with_ethereum_swaps(
 
         if start.elapsed() > settlement_timeout {
             panic!(
-                "Timeout waiting for fee settlement after {}s. Balance: {} (initial: {})",
-                settlement_timeout.as_secs(), fee_balance, initial_fee_balance
+                "Timeout waiting for fee settlement after {}s. Received {} sats, expected {} sats",
+                settlement_timeout.as_secs(),
+                received,
+                expected_fees
             );
         }
 
         tokio::time::sleep(poll_interval).await;
     }
+
+    // Wait for all fee settlements to be acknowledged by the OTC server
+    // The on-chain balance reaching the expected amount doesn't mean OTC has acknowledged all settlements.
+    // We need to give time for any pending settlements to be retried and accepted.
+    info!("Waiting for all fee settlements to be acknowledged by OTC server...");
+
+    // Advance mock time and mine blocks to allow retries to succeed
+    for _ in 0..5 {
+        MockClock::advance_system_time(Duration::from_secs(10));
+        devnet
+            .ethereum
+            .funded_provider
+            .anvil_mine(Some(5), None)
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_secs(2)).await;
+    }
+
+    // Verify the market maker is in good standing after fee settlement
+    // by attempting another swap - if MM is not in good standing, this will fail
+    // with a 503 "Market maker temporarily unavailable" error
+    info!("Verifying market maker is in good standing by attempting a new swap...");
+
+    let verification_quote_request = QuoteRequest {
+        mode: SwapMode::ExactInput(10_000), // Small amount for verification
+        from: Currency {
+            chain: ChainType::Bitcoin,
+            token: TokenIdentifier::Native,
+            decimals: 8,
+        },
+        to: Currency {
+            chain: ChainType::Ethereum,
+            token: TokenIdentifier::Address(cbbtc_address.clone()),
+            decimals: 8,
+        },
+        affiliate: None,
+    };
+
+    let quote_response = client
+        .post(format!("http://localhost:{rfq_port}/api/v2/quote"))
+        .json(&verification_quote_request)
+        .send()
+        .await
+        .expect("Quote request should not fail");
+
+    assert_eq!(
+        quote_response.status(),
+        200,
+        "Quote request should succeed when MM is in good standing"
+    );
+
+    let quote_response: rfq_server::server::QuoteResponse = quote_response
+        .json()
+        .await
+        .expect("Quote response should be valid JSON");
+
+    let verification_quote = match quote_response.quote.expect("Quote should be present") {
+        RFQResult::Success(q) => q,
+        other => panic!(
+            "Expected successful quote (MM in good standing), got: {:?}",
+            other
+        ),
+    };
+
+    // Attempt to create a swap - this will fail with 503 if MM is not in good standing
+    let verification_swap_request = CreateSwapRequest {
+        quote: verification_quote,
+        user_destination_address: user_account.ethereum_address.to_string(),
+        refund_address: user_account.bitcoin_wallet.address.to_string(),
+        metadata: None,
+    };
+
+    let swap_response = client
+        .post(format!("http://localhost:{otc_port}/api/v2/swap"))
+        .json(&verification_swap_request)
+        .send()
+        .await
+        .expect("Swap request should not fail");
+
+    assert_eq!(
+        swap_response.status(),
+        StatusCode::OK,
+        "Swap creation should succeed when MM is in good standing. \
+         Status {} indicates MM may not be in good standing after fee settlement.",
+        swap_response.status()
+    );
+
+    info!("Market maker verified to be in good standing - swap creation succeeded!");
 
     info!("Fee settlement test completed successfully!");
 

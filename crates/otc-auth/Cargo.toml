@@ -18,4 +18,4 @@ tracing = {workspace = true}
 tempfile = {workspace=true} 
 
 [features]
-integration-test = []
+test-market-makers = []

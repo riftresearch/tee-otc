@@ -111,8 +111,29 @@ impl OTCMessageHandler {
                     request_id = %request_id,
                     tx_hash = %tx_hash,
                     accepted = %accepted,
+                    rejection_reason = ?rejection_reason,
                     "Received fee settlement ack from otc-server"
                 );
+
+                // Treat certain rejection reasons as temporary - the MM should retry these.
+                // - "tx_not_found_yet": The tx isn't visible on chain yet
+                // - "insufficient_confirmations": Not enough confirmations yet
+                // For these, we don't mark as rejected, so the retry loop will pick them up.
+                let is_temporary_rejection = !*accepted
+                    && rejection_reason.as_ref().map_or(false, |r| {
+                        r == "tx_not_found_yet" || r == "insufficient_confirmations"
+                    });
+
+                if is_temporary_rejection {
+                    info!(
+                        request_id = %request_id,
+                        tx_hash = %tx_hash,
+                        rejection_reason = ?rejection_reason,
+                        "Fee settlement temporarily rejected; will retry"
+                    );
+                    // Don't update the ack status - leave as pending for retry
+                    return None;
+                }
 
                 let now = utc::now();
                 let res = self

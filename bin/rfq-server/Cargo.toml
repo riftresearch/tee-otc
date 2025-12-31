@@ -42,4 +42,4 @@ reqwest = { workspace = true }
 url = { workspace = true }
 
 [features]
-integration-test = ["otc-auth/integration-test"]
+test-market-makers = ["otc-auth/test-market-makers"]

@@ -6,22 +6,16 @@ use uuid::Uuid;
 use crate::error::OtcServerResult;
 
 /// Protocol fee debt threshold in satoshis. MMs with debt above this enter grace window.
-#[cfg(not(feature = "integration-test"))]
+#[cfg(not(feature = "test-fast-fee-settle"))]
 pub const GOOD_STANDING_THRESHOLD_SATS: i64 = 100_000;
-#[cfg(feature = "integration-test")]
+#[cfg(feature = "test-fast-fee-settle")]
 pub const GOOD_STANDING_THRESHOLD_SATS: i64 = 1_000; // Lower for fast test triggering
 
 /// Grace window duration. MMs over threshold for longer than this are not in good standing.
-#[cfg(not(feature = "integration-test"))]
+#[cfg(not(feature = "test-fast-fee-settle"))]
 pub const GOOD_STANDING_WINDOW: Duration = Duration::hours(24);
-#[cfg(feature = "integration-test")]
+#[cfg(feature = "test-fast-fee-settle")]
 pub const GOOD_STANDING_WINDOW: Duration = Duration::seconds(30);
-
-/// Grace window in seconds (for protocol messages).
-#[cfg(not(feature = "integration-test"))]
-pub const GOOD_STANDING_WINDOW_SECS: i64 = 24 * 60 * 60;
-#[cfg(feature = "integration-test")]
-pub const GOOD_STANDING_WINDOW_SECS: i64 = 30;
 
 /// Prometheus metric: current protocol fee debt per market maker (sats).
 pub const MM_FEE_DEBT_SATS_METRIC: &str = "otc_mm_fee_debt_sats";
@@ -127,6 +121,7 @@ impl FeeRepository {
 
     /// Returns `true` iff the MM is in good standing.
     pub async fn is_good_standing(&self, market_maker_id: Uuid, now: DateTime<Utc>) -> OtcServerResult<bool> {
+        tracing::info!("Checking good standing for market maker {}", market_maker_id);
         let row = sqlx::query(
             r#"
             SELECT debt_sats, over_threshold_since
@@ -139,6 +134,7 @@ impl FeeRepository {
         .await?;
 
         let Some(row) = row else {
+            tracing::info!("No debt state yet for market maker {}, treating as good standing", market_maker_id);
             // No debt state yet => treat as good standing.
             return Ok(true);
         };
@@ -147,15 +143,21 @@ impl FeeRepository {
         let over_threshold_since: Option<DateTime<Utc>> = row.try_get("over_threshold_since")?;
 
         if debt_sats <= GOOD_STANDING_THRESHOLD_SATS {
+            tracing::info!("Debt below threshold for market maker {}, treating as good standing", market_maker_id);
             return Ok(true);
         }
 
         let Some(since) = over_threshold_since else {
+            tracing::info!("No over threshold since for market maker {}, treating as bad standing", market_maker_id);
             // Defensive: if state is inconsistent, fail closed.
             return Ok(false);
         };
 
-        Ok(now - since <= GOOD_STANDING_WINDOW)
+        let is_good = now - since <= GOOD_STANDING_WINDOW;
+        tracing::info!("Now: {}, Since: {}, Good standing window: {}", now, since, GOOD_STANDING_WINDOW);
+        tracing::info!("Market maker {} final standing: {}", market_maker_id, is_good);
+
+        Ok(is_good)
     }
 
     pub async fn get_fee_state(

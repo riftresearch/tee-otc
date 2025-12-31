@@ -143,6 +143,41 @@ pub fn spawn_fee_settlement_engine(
                 continue;
             }
 
+            // Don't create a new settlement if there's already a pending one for this rail/chain.
+            // We should wait for that settlement to be accepted or permanently rejected before
+            // creating new on-chain transactions. This prevents wasteful cascades of small
+            // settlements when the OTC server is rejecting due to temporary issues like
+            // insufficient confirmations.
+            //
+            // For Bitcoin: checks for any pending Bitcoin settlement (no chain distinction).
+            // For EVM: checks for the specific chain (Base vs Ethereum) since they're independent.
+            let chain_filter = match rail {
+                FeeSettlementRail::Bitcoin => None,
+                FeeSettlementRail::Evm => Some(evm_chain),
+            };
+            match payment_repository
+                .has_pending_fee_settlement(rail, chain_filter)
+                .await
+            {
+                Ok(true) => {
+                    info!(
+                        rail = ?rail,
+                        chain = ?chain_filter,
+                        "Skipping new fee settlement: pending settlement already exists"
+                    );
+                    continue;
+                }
+                Ok(false) => {}
+                Err(e) => {
+                    warn!(
+                        rail = ?rail,
+                        error = %e,
+                        "Failed to check for pending fee settlements"
+                    );
+                    continue;
+                }
+            }
+
             let batches = payment_repository
                 .get_confirmed_unsettled_batches(MAX_BATCHES_PER_SETTLEMENT)
                 .await

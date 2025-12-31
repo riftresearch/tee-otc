@@ -6,14 +6,14 @@ pub static API_KEYS: LazyLock<Vec<PublicApiKeyRecord>> = LazyLock::new(|| {
     vec![
         // the integration tests use hardcoded API keys for the test market makers
         // we don't want these to exist in production, so hide them behind the
-        // `integration-test` feature
-        #[cfg(feature = "integration-test")]
+        // `test-market-makers` feature
+        #[cfg(feature = "test-market-makers")]
         PublicApiKeyRecord {
             id: "96c0bedb-bfda-4680-a8df-1317d1e09c8d".parse().unwrap(),
             tag: "test-mm-eth".to_string(),
             hash: "$argon2id$v=19$m=19456,t=2,p=1$xtwHECDisKE9Vpp71a0XdA$Q+d1QhDH5UGIKaFhLycFPSh7fV7bVbqR1NkKqo+W5jI".to_string(),
         },
-        #[cfg(feature = "integration-test")]
+        #[cfg(feature = "test-market-makers")]
         PublicApiKeyRecord {
             id: "f901369b-84d7-4c03-8799-f504c22125f9".parse().unwrap(),
             tag: "test-mm-base".to_string(),

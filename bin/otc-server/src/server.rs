@@ -1,13 +1,12 @@
 use crate::{
-    api::swaps::{
-        BlockHashResponse, CreateSwapRequest, RefundSwapResponse,
-    },
+    api::swaps::{BlockHashResponse, CreateSwapRequest, RefundSwapResponse},
     config::Settings,
     db::{
         swap_repo::{SWAP_FEES_TOTAL_METRIC, SWAP_VOLUME_TOTAL_METRIC},
-        Database, GOOD_STANDING_THRESHOLD_SATS, GOOD_STANDING_WINDOW_SECS,
+        Database, GOOD_STANDING_THRESHOLD_SATS, GOOD_STANDING_WINDOW,
         MM_FEE_DEBT_SATS_METRIC,
     },
+    http_metrics::{track_http_metrics, HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION_SECONDS},
     services::{
         swap_monitoring::{
             ACTIVE_INDIVIDUAL_SWAPS_METRIC, ACTIVE_SWAP_BATCHES_METRIC,
@@ -287,6 +286,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         .route("/api/v2/market-makers/suspended", get(get_suspended_market_makers))
         .route("/api/v1/tdx/quote", get(get_tdx_quote))
         .route("/api/v1/tdx/info", get(get_tdx_info))
+        .layer(axum::middleware::from_fn(track_http_metrics))
         .with_state(state);
 
     // Add CORS layer if cors_domain is specified
@@ -346,7 +346,18 @@ fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
         return Ok(handle.clone());
     }
 
+    // Custom histogram buckets for HTTP latency metrics (in seconds).
+    // Provides good granularity for P50/P95/P99 calculations on typical web request latencies.
+    let http_latency_buckets = vec![
+        0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0,
+    ];
+
     let handle = PrometheusBuilder::new()
+        .set_buckets_for_metric(
+            metrics_exporter_prometheus::Matcher::Full(HTTP_REQUEST_DURATION_SECONDS.to_string()),
+            &http_latency_buckets,
+        )
+        .context(crate::MetricsRecorderSnafu)?
         .install_recorder()
         .context(crate::MetricsRecorderSnafu)?;
     let shared_handle = Arc::new(handle);
@@ -400,6 +411,16 @@ fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
     describe_histogram!(
         "ethereum_rpc_duration_seconds",
         "Duration in seconds of Ethereum RPC requests."
+    );
+
+    describe_counter!(
+        HTTP_REQUESTS_TOTAL,
+        "Total number of HTTP requests by method, path, and status."
+    );
+
+    describe_histogram!(
+        HTTP_REQUEST_DURATION_SECONDS,
+        "HTTP request latency in seconds by method, path, and status."
     );
 
     if PROMETHEUS_HANDLE.set(shared_handle.clone()).is_err() {
@@ -1099,7 +1120,7 @@ impl MessageHandler for OTCMessageHandler {
                                 debt_sats,
                                 over_threshold_since,
                                 threshold_sats: GOOD_STANDING_THRESHOLD_SATS,
-                                window_secs: GOOD_STANDING_WINDOW_SECS,
+                                window_secs: GOOD_STANDING_WINDOW.num_seconds(),
                                 timestamp: now,
                             },
                         };

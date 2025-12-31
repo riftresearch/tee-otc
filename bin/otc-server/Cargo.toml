@@ -55,4 +55,5 @@ getrandom = { workspace = true }
 bitcoin = { workspace = true }
 
 [features]
-integration-test = ["otc-auth/integration-test"]
+test-market-makers = []
+test-fast-fee-settle = []

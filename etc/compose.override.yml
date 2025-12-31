@@ -93,7 +93,7 @@ services:
         COPY --from=planner /app/sqlx-sqlite-shim ./sqlx-sqlite-shim
         RUN cargo chef cook --release --recipe-path recipe.json
         COPY . .
-        RUN cargo build --release --bin otc-server --features integration-test --exclude integration-tests --workspace
+        RUN cargo build --release --bin otc-server --features test-market-makers,test-fast-fee-settle --exclude integration-tests --workspace
 
         FROM debian:trixie
         RUN apt-get update && apt-get install -y \
@@ -168,7 +168,7 @@ services:
         COPY --from=planner /app/sqlx-sqlite-shim ./sqlx-sqlite-shim
         RUN cargo chef cook --release --recipe-path recipe.json
         COPY . .
-        RUN cargo build --release --bin rfq-server --features integration-test --exclude integration-tests --workspace
+        RUN cargo build --release --bin rfq-server --features test-market-makers --exclude integration-tests --workspace
 
         FROM debian:trixie
         RUN apt-get update && apt-get install -y \
