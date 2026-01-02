@@ -73,6 +73,26 @@ docker-release:
     docker push riftresearch/otc-server:${VERSION_TAG}
     docker push riftresearch/otc-server:latest
 
+# Build and push the market-maker Docker image
+mm-release:
+    #!/usr/bin/env bash
+    set -e
+    VERSION_TAG=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name=="market-maker") | .version')
+    echo "Checking version: ${VERSION_TAG}"
+    
+    # Check if the version tag already exists in Docker Hub
+    if docker manifest inspect riftresearch/market-maker:${VERSION_TAG} > /dev/null 2>&1; then
+        echo "Error: Version ${VERSION_TAG} already exists in Docker Hub"
+        echo "Please update the version in Cargo.toml before releasing"
+        exit 1
+    fi
+    
+    echo "Building Docker image for version: ${VERSION_TAG}"
+    docker build -f etc/Dockerfile.mm -t riftresearch/market-maker:${VERSION_TAG} .
+    docker tag riftresearch/market-maker:${VERSION_TAG} riftresearch/market-maker:latest
+    docker push riftresearch/market-maker:${VERSION_TAG}
+    docker push riftresearch/market-maker:latest
+
 # Deploy to Phala
 phala-deploy:
     # stop the app first, otherwise the deploy command will just shutoff the machine and stop the app
