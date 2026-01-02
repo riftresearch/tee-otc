@@ -53,8 +53,9 @@ impl DepositRepository {
 
     fn serialize_currency(currency: &Currency) -> (String, serde_json::Value, i16) {
         let chain = currency.chain.to_db_string();
-         
-        let token = match &currency.token {
+        let normalized_token = currency.token.normalize();
+
+        let token = match &normalized_token {
             otc_models::TokenIdentifier::Native => serde_json::json!({"type": "Native"}),
             otc_models::TokenIdentifier::Address(addr) => {
                 serde_json::json!({"type": "Address", "data": addr})
@@ -121,19 +122,29 @@ impl DepositStore for DepositRepository {
     async fn balance(&self, currency: &Currency) -> DepositRepositoryResult<U256> {
         let (chain, token, decimals) = Self::serialize_currency(currency);
 
+        // Extract the lowercase address for case-insensitive matching as fallback
+        let token_data_lowercase = token
+            .get("data")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_lowercase());
+
         let row: Option<(String,)> = sqlx::query_as(
             r#"
             SELECT COALESCE(SUM(amount)::TEXT, '0')
             FROM mm_deposits
             WHERE status = 'available'
               AND chain = $1
-              AND token = $2
-              AND decimals = $3
+              AND decimals = $2
+              AND (
+                  token = $3
+                  OR (token->>'type' = 'Address' AND LOWER(token->>'data') = $4)
+              )
             "#,
         )
         .bind(&chain)
-        .bind(&token)
         .bind(decimals)
+        .bind(&token)
+        .bind(&token_data_lowercase)
         .fetch_optional(&self.pool)
         .await
         .context(DatabaseSnafu)?;
@@ -163,6 +174,12 @@ impl DepositStore for DepositRepository {
         let reservation_id = Uuid::now_v7();
         let now = utc::now();
 
+        // Extract the lowercase address for case-insensitive matching as fallback
+        let token_data_lowercase = token
+            .get("data")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_lowercase());
+
         let rows: Vec<PgRow> = if let Some(limit) = max_deposits {
             sqlx::query(
                 r#"
@@ -171,10 +188,13 @@ impl DepositStore for DepositRepository {
                     FROM mm_deposits
                     WHERE status = 'available'
                       AND chain = $1
-                      AND token = $2
-                      AND decimals = $3
+                      AND decimals = $2
+                      AND (
+                          token = $3
+                          OR (token->>'type' = 'Address' AND LOWER(token->>'data') = $4)
+                      )
                     ORDER BY created_at, private_key
-                    LIMIT $7
+                    LIMIT $8
                     FOR UPDATE SKIP LOCKED
                 ),
                 pref AS (
@@ -183,20 +203,21 @@ impl DepositStore for DepositRepository {
                     FROM ordered
                 ),
                 take AS (
-                    SELECT private_key FROM pref WHERE (run - amount) < $4::numeric
+                    SELECT private_key FROM pref WHERE (run - amount) < $5::numeric
                 )
                 UPDATE mm_deposits i
                 SET status = 'reserved',
-                    reserved_by = $5,
-                    reserved_at = $6
+                    reserved_by = $6,
+                    reserved_at = $7
                 FROM take
                 WHERE i.private_key = take.private_key
                 RETURNING i.private_key, i.amount::TEXT, i.funding_tx_hash;
                 "#,
             )
             .bind(&chain)
-            .bind(&token)
             .bind(decimals)
+            .bind(&token)
+            .bind(&token_data_lowercase)
             .bind(&target)
             .bind(reservation_id)
             .bind(now)
@@ -212,8 +233,11 @@ impl DepositStore for DepositRepository {
                     FROM mm_deposits
                     WHERE status = 'available'
                       AND chain = $1
-                      AND token = $2
-                      AND decimals = $3
+                      AND decimals = $2
+                      AND (
+                          token = $3
+                          OR (token->>'type' = 'Address' AND LOWER(token->>'data') = $4)
+                      )
                     ORDER BY created_at, private_key
                     FOR UPDATE SKIP LOCKED
                 ),
@@ -223,20 +247,21 @@ impl DepositStore for DepositRepository {
                     FROM ordered
                 ),
                 take AS (
-                    SELECT private_key FROM pref WHERE (run - amount) < $4::numeric
+                    SELECT private_key FROM pref WHERE (run - amount) < $5::numeric
                 )
                 UPDATE mm_deposits i
                 SET status = 'reserved',
-                    reserved_by = $5,
-                    reserved_at = $6
+                    reserved_by = $6,
+                    reserved_at = $7
                 FROM take
                 WHERE i.private_key = take.private_key
                 RETURNING i.private_key, i.amount::TEXT, i.funding_tx_hash;
                 "#,
             )
             .bind(&chain)
-            .bind(&token)
             .bind(decimals)
+            .bind(&token)
+            .bind(&token_data_lowercase)
             .bind(&target)
             .bind(reservation_id)
             .bind(now)

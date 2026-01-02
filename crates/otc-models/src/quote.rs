@@ -12,6 +12,20 @@ pub enum TokenIdentifier {
     Address(String),
 }
 
+impl TokenIdentifier {
+    /// Normalize the token identifier to lowercase for case-insensitive comparisons.
+    ///
+    /// Ethereum addresses can be represented in different cases (checksummed, lowercase, uppercase),
+    /// but they all represent the same address. This function normalizes to lowercase.
+    #[must_use]
+    pub fn normalize(&self) -> Self {
+        match self {
+            Self::Native => Self::Native,
+            Self::Address(addr) => Self::Address(addr.to_lowercase()),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Currency {
     pub chain: ChainType,

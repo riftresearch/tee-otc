@@ -748,14 +748,12 @@ pub async fn create_evm_transfer_transaction(
 }
 
 fn ensure_valid_token(chain_type: ChainType, token: &TokenIdentifier) -> Result<(), WalletError> {
-    use crate::liquidity_cache::normalize_token;
-
-    let normalized = normalize_token(token);
+    let normalized = token.normalize();
     let supported = otc_models::SUPPORTED_TOKENS_BY_CHAIN
         .get(&chain_type)
         .unwrap()
         .iter()
-        .any(|t| normalize_token(t) == normalized);
+        .any(|t| t.normalize() == normalized);
 
     if !supported {
         return Err(WalletError::UnsupportedToken {

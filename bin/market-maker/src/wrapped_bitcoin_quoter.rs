@@ -79,17 +79,6 @@ pub enum WrappedBitcoinQuoterError {
 
 type Result<T, E = WrappedBitcoinQuoterError> = std::result::Result<T, E>;
 
-/// Normalize a TokenIdentifier to lowercase for case-insensitive comparison.
-///
-/// Ethereum addresses can be represented in different cases (checksummed, lowercase, uppercase),
-/// but they all represent the same address. This function normalizes to lowercase.
-fn normalize_token(token: &TokenIdentifier) -> TokenIdentifier {
-    match token {
-        TokenIdentifier::Native => TokenIdentifier::Native,
-        TokenIdentifier::Address(addr) => TokenIdentifier::Address(addr.to_lowercase()),
-    }
-}
-
 pub struct WrappedBitcoinQuoter {
     trade_spread_bps: u64,
     wallet_registry: Arc<WalletManager>,
@@ -386,11 +375,11 @@ impl WrappedBitcoinQuoter {
         }
 
         // Get the cbBTC token address for the configured chain (normalized to lowercase)
-        let cbbtc_token = normalize_token(&constants::CBBTC_TOKEN);
+        let cbbtc_token = constants::CBBTC_TOKEN.normalize();
 
         // Normalize request tokens for case-insensitive comparison
-        let from_token = normalize_token(&quote_request.from.token);
-        let to_token = normalize_token(&quote_request.to.token);
+        let from_token = quote_request.from.token.normalize();
+        let to_token = quote_request.to.token.normalize();
 
         // Valid swap patterns:
         // 1. Bitcoin (native) -> cbBTC on configured EVM chain
