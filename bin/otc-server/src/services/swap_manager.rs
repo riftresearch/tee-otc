@@ -143,8 +143,12 @@ impl SwapManager {
                             .map_err(|e| SwapError::BadRefundRequest {
                                 reason: format!("Failed to query mempool fee estimate: {e}"),
                             })?;
-                        // 111 estimated vbytes for a refund tx that is P2WPKH
-                        (next_block_fee_rate * 111 as f64).ceil() as u64
+                        // Estimated vbytes for a refund tx spending from P2WPKH:
+                        // - P2WPKH input: ~68 vbytes
+                        // - Output (P2WPKH: 31, P2TR: 34 vbytes)
+                        // - Overhead: ~10 vbytes
+                        // Using 125 vbytes to safely cover all output types including Taproot
+                        (next_block_fee_rate * 125.0).ceil() as u64
                     },
                     ChainType::Ethereum => 0,
                     ChainType::Base => 0,

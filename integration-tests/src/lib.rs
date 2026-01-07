@@ -73,3 +73,6 @@ mod fee_settlement_test;
 
 #[cfg(test)]
 mod quote_modes_swap_test;
+
+#[cfg(test)]
+mod taproot_address_test;
