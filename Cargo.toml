@@ -23,7 +23,7 @@ devnet = { path = "crates/devnet" }
 evm-token-indexer-client = { path = "crates/evm-token-indexer-client" }
 otc-server = {path = "bin/otc-server"}
 market-maker = {path = "bin/market-maker"}
-bitcoin-wallet-utils = {path = "bin/bitcoin-wallet-utils"}
+rand-wallet = {path = "bin/rand-wallet"}
 eip7702-delegator-contract = {path = "crates/eip7702-delegator-contract"}
 eip3009-erc20-contract = {path = "crates/eip3009-erc20-contract"}
 utc = {path = "crates/utc"}
@@ -33,7 +33,7 @@ mm-websocket-server = { path = "crates/mm-websocket-server" }
 coinbase-exchange-client = { path = "crates/coinbase-exchange-client" }
 
 # All of the following dependences (before the empty line) are implicitly linked to the same version, if one of them is updated they must all be updated simultaneously 
-bitcoin = { version = "0.32.0", default-features = false, features = ["serde", "base64", "secp-recovery"] }
+bitcoin = { version = "0.32.0", default-features = false, features = ["serde", "base64", "secp-recovery", "rand-std"] }
 bitcoincore-rpc-async = { git = "https://github.com/riftresearch/rust-bitcoincore-rpc-async", rev = "c50734a50f2af2f8a9be3f03b98832dd04e788b1" }
 corepc-node = { version = "0.8.0", features = ["29_0", "download"] }
 electrsd = { git = "https://github.com/RCasatta/electrsd", rev = "bdc97e879bad82e13e69c74d898271db12224f44", features = ["corepc-node_29_0", "esplora_a33e97e1", "legacy"] }

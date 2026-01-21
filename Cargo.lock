@@ -2135,22 +2135,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bitcoin-wallet-utils"
-version = "1.5.1"
-dependencies = [
- "argon2",
- "bitcoin",
- "blockchain-utils",
- "otc-models",
- "rand 0.8.5",
- "serde_json",
- "snafu",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
-
-[[package]]
 name = "bitcoin_hashes"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5918,6 +5902,25 @@ dependencies = [
  "rand_chacha 0.9.0",
  "rand_core 0.9.3",
  "serde",
+]
+
+[[package]]
+name = "rand-wallet"
+version = "1.5.1"
+dependencies = [
+ "alloy 1.0.30",
+ "argon2",
+ "bitcoin",
+ "blockchain-utils",
+ "clap",
+ "hex",
+ "otc-models",
+ "rand 0.9.2",
+ "serde_json",
+ "snafu",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
