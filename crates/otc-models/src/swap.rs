@@ -144,6 +144,10 @@ pub struct Swap {
 pub struct Metadata {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub start_asset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub end_asset: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub integrator_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -1290,6 +1290,8 @@ mod tests {
             quote,
             metadata: Metadata {
                 start_asset: Some("btc".to_string()),
+                end_asset: None,
+                integrator_name: None,
             },
             realized: None,
             deposit_vault_salt: user_salt,

@@ -383,6 +383,22 @@ impl SwapManager {
                 .fail();
             }
         }
+        if let Some(value) = metadata.end_asset.as_ref() {
+            if value.chars().count() > 1000 {
+                return InvalidMetadataSnafu {
+                    reason: "end_asset must be 1000 characters or fewer".to_string(),
+                }
+                .fail();
+            }
+        }
+        if let Some(value) = metadata.integrator_name.as_ref() {
+            if value.chars().count() > 1000 {
+                return InvalidMetadataSnafu {
+                    reason: "integrator_name must be 1000 characters or fewer".to_string(),
+                }
+                .fail();
+            }
+        }
 
         Ok(())
     }
