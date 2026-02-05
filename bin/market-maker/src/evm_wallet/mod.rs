@@ -218,6 +218,7 @@ impl Wallet for EVMWallet {
         // now make sure all payments lots currencies are the same
         for payment in &payments {
             if payment.lot.currency != first_payment.lot.currency {
+                tracing::error!("Payment set has different currencies: {:?}", payments);
                 return Err(WalletError::InvalidBatchPaymentRequest { loc: location!() });
             }
         }
