@@ -2,10 +2,11 @@ use crate::{serde_utils::u256_decimal, ChainType, SwapMode, SwapRates};
 use alloy::primitives::{keccak256, U256};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, Serializer};
+use serde::de::Deserializer;
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Serialize, Debug, Clone, PartialEq, Eq, Hash)]
 #[serde(tag = "type", content = "data")]
 pub enum TokenIdentifier {
     Native,
@@ -28,6 +29,25 @@ impl TokenIdentifier {
         match self {
             Self::Native => Self::Native,
             Self::Address(addr) => Self::address(addr),
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for TokenIdentifier {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(tag = "type", content = "data")]
+        enum RawTokenIdentifier {
+            Native,
+            Address(String),
+        }
+
+        match RawTokenIdentifier::deserialize(deserializer)? {
+            RawTokenIdentifier::Native => Ok(TokenIdentifier::Native),
+            RawTokenIdentifier::Address(addr) => Ok(TokenIdentifier::address(addr)),
         }
     }
 }
