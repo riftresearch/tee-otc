@@ -168,7 +168,7 @@ async fn test_refund_from_bitcoin_user_deposit(
         },
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         affiliate: None,
@@ -456,7 +456,7 @@ async fn test_refund_from_evm_user_deposit(
         mode: SwapMode::ExactInput(deposit_amount.to::<u64>()), // in cbBTC base units (18 decimals)
         from: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         to: Currency {

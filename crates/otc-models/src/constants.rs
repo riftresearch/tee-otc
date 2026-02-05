@@ -10,7 +10,7 @@ pub const MIN_VIABLE_OUTPUT_SATS: u64 = 546;
 
 pub const CB_BTC_CONTRACT_ADDRESS: &str = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf";
 
-pub const CBBTC_TOKEN: LazyLock<TokenIdentifier> = LazyLock::new(|| TokenIdentifier::Address(CB_BTC_CONTRACT_ADDRESS.to_string()));
+pub const CBBTC_TOKEN: LazyLock<TokenIdentifier> = LazyLock::new(|| TokenIdentifier::address(CB_BTC_CONTRACT_ADDRESS.to_string()));
 
 pub static SUPPORTED_TOKENS_BY_CHAIN: LazyLock<HashMap<ChainType, HashSet<TokenIdentifier>>> =
     LazyLock::new(|| {

@@ -92,7 +92,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         mode: SwapMode::ExactInput(test_amount.to::<u64>()),
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         from: Currency {
@@ -177,7 +177,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         mode: SwapMode::ExactInput(test_amount.to::<u64>()),
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         from: Currency {
@@ -233,7 +233,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         mode: SwapMode::ExactInput(test_amount.to::<u64>()),
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         from: Currency {

@@ -197,7 +197,7 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
         },
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         affiliate: None,

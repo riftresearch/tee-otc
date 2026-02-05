@@ -104,7 +104,7 @@ async fn test_rfq_market_maker_reconnection_and_detection(
         mode: SwapMode::ExactInput(50_000_000), // 0.5 BTC in sats
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         from: Currency {

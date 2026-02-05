@@ -312,12 +312,12 @@ impl Args {
         // Define the currency pairs
         let eth_cbbtc = Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(CBBTC_ADDRESS.to_string()),
+            token: TokenIdentifier::address(CBBTC_ADDRESS.to_string()),
             decimals: 8,
         };
         let base_cbbtc = Currency {
             chain: ChainType::Base,
-            token: TokenIdentifier::Address(CBBTC_ADDRESS.to_string()),
+            token: TokenIdentifier::address(CBBTC_ADDRESS.to_string()),
             decimals: 8,
         };
         let btc_currency = Currency {

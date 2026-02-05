@@ -118,7 +118,7 @@ async fn test_evm_wallet_nonce_error_retry(
     let lot = Lot {
         currency: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(test_token.to_string()),
+            token: TokenIdentifier::address(test_token.to_string()),
             decimals: 18,
         },
         amount: U256::from(1000) * U256::pow(U256::from(10), U256::from(18)), // 1000 tokens
@@ -317,7 +317,7 @@ async fn test_evm_wallet_gas_price_bumping(
     let lot = Lot {
         currency: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(test_token.to_string()),
+            token: TokenIdentifier::address(test_token.to_string()),
             decimals: 18,
         },
         amount: U256::from(100) * U256::pow(U256::from(10), U256::from(18)),
@@ -412,7 +412,7 @@ async fn test_evm_wallet_error_handling(
     let invalid_lot = Lot {
         currency: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(
+            token: TokenIdentifier::address(
                 "0x1234567890123456789012345678901234567890".to_string(),
             ),
             decimals: 18,
@@ -531,7 +531,7 @@ async fn test_evm_wallet_actually_sends_token(
     let lot = Lot {
         currency: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(test_token.to_string()),
+            token: TokenIdentifier::address(test_token.to_string()),
             decimals: 18,
         },
         amount: U256::from(1000) * U256::pow(U256::from(10), U256::from(18)), // 1000 tokens
@@ -660,7 +660,7 @@ async fn test_evm_wallet_spend_from_deposit_storage(
     let deposit_lot = Lot {
         currency: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(token_address.to_string()),
+            token: TokenIdentifier::address(token_address.to_string()),
             decimals: 18,
         },
         amount: two_cbbtc,
@@ -693,7 +693,7 @@ async fn test_evm_wallet_spend_from_deposit_storage(
     let lot = Lot {
         currency: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(token_address.to_string()),
+            token: TokenIdentifier::address(token_address.to_string()),
             decimals: 18,
         },
         amount: three_cbbtc,

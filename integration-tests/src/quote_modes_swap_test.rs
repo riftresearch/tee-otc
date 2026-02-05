@@ -407,7 +407,7 @@ async fn request_quote(
         },
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(cbbtc_address.to_string()),
+            token: TokenIdentifier::address(cbbtc_address.to_string()),
             decimals: 8,
         },
         affiliate: None,

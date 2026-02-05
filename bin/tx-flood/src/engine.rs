@@ -128,7 +128,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
         SwapMode::EthToBtc => {
             let cbbtc = Currency {
                 chain: ChainType::Ethereum,
-                token: TokenIdentifier::Address(
+                token: TokenIdentifier::address(
                     "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
                 ),
                 decimals: 8,
@@ -143,7 +143,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
         SwapMode::BaseToBtc => {
             let cbbtc = Currency {
                 chain: ChainType::Base,
-                token: TokenIdentifier::Address(
+                token: TokenIdentifier::address(
                     "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
                 ),
                 decimals: 8,
@@ -163,7 +163,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
             };
             let cbbtc = Currency {
                 chain: ChainType::Ethereum,
-                token: TokenIdentifier::Address(
+                token: TokenIdentifier::address(
                     "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
                 ),
                 decimals: 8,
@@ -178,7 +178,7 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
             };
             let cbbtc = Currency {
                 chain: ChainType::Base,
-                token: TokenIdentifier::Address(
+                token: TokenIdentifier::address(
                     "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
                 ),
                 decimals: 8,

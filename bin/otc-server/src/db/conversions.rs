@@ -13,9 +13,11 @@ pub fn token_identifier_to_json(token: &TokenIdentifier) -> OtcServerResult<serd
 }
 
 pub fn token_identifier_from_json(value: serde_json::Value) -> OtcServerResult<TokenIdentifier> {
-    serde_json::from_value(value).map_err(|e| OtcServerError::InvalidData {
-        message: format!("Failed to deserialize token identifier: {e}"),
-    })
+    serde_json::from_value(value)
+        .map(|token: TokenIdentifier| token.normalize())
+        .map_err(|e| OtcServerError::InvalidData {
+            message: format!("Failed to deserialize token identifier: {e}"),
+        })
 }
 
 #[must_use]
@@ -32,7 +34,7 @@ pub fn u256_from_db(s: &str) -> OtcServerResult<U256> {
 /// Convert Currency to database fields (chain, token JSON, decimals)
 pub fn currency_to_db(currency: &Currency) -> OtcServerResult<(String, serde_json::Value, u8)> {
     let chain = currency.chain.to_db_string();
-    let token = token_identifier_to_json(&currency.token)?;
+    let token = token_identifier_to_json(&currency.token.normalize())?;
     let decimals = currency.decimals;
     Ok((chain.to_string(), token, decimals))
 }
@@ -54,7 +56,7 @@ pub fn currency_from_db(
 
 pub fn lot_to_db(lot: &Lot) -> OtcServerResult<(String, serde_json::Value, String, u8)> {
     let chain = lot.currency.chain.to_db_string();
-    let token = token_identifier_to_json(&lot.currency.token)?;
+    let token = token_identifier_to_json(&lot.currency.token.normalize())?;
     let amount = u256_to_db(&lot.amount);
     let decimals = lot.currency.decimals;
     Ok((chain.to_string(), token, amount, decimals))

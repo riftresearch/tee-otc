@@ -166,7 +166,7 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
         mode: SwapMode::ExactInput(100_000_000i128 as u64), // 1 cbbtc
         from: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         to: Currency {
@@ -235,7 +235,7 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
                 lot: Lot {
                     currency: Currency {
                         chain: ChainType::Ethereum,
-                        token: TokenIdentifier::Address(
+                        token: TokenIdentifier::address(
                             devnet.ethereum.cbbtc_contract.address().to_string(),
                         ),
                         decimals: swap.quote.from.currency.decimals,

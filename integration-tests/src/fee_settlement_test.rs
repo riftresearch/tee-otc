@@ -69,7 +69,7 @@ async fn execute_btc_to_eth_swap(
         },
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(cbbtc_address.to_string()),
+            token: TokenIdentifier::address(cbbtc_address.to_string()),
             decimals: 8,
         },
         affiliate: None,
@@ -159,7 +159,7 @@ async fn execute_eth_to_btc_swap(
         mode: SwapMode::ExactInput(input_sats),
         from: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(cbbtc_address.to_string()),
+            token: TokenIdentifier::address(cbbtc_address.to_string()),
             decimals: 8,
         },
         to: Currency {
@@ -625,7 +625,7 @@ async fn test_fee_settlement_with_ethereum_swaps(
         },
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(cbbtc_address.clone()),
+            token: TokenIdentifier::address(cbbtc_address.clone()),
             decimals: 8,
         },
         affiliate: None,

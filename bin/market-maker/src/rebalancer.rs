@@ -110,7 +110,7 @@ pub async fn run_inventory_metrics_reporter(
     poll_interval: Duration,
 ) -> Result<()> {
     let btc_token = TokenIdentifier::Native;
-    let cbbtc_token = TokenIdentifier::Address(CB_BTC_CONTRACT_ADDRESS.to_string());
+    let cbbtc_token = TokenIdentifier::address(CB_BTC_CONTRACT_ADDRESS.to_string());
 
     loop {
         counter!("mm_loop_iterations_total").increment(1);
@@ -203,7 +203,7 @@ pub async fn run_rebalancer(
     cbbtc_coinbase_confirmations: u32,
 ) -> Result<()> {
     let btc_token = TokenIdentifier::Native;
-    let cbbtc_token = TokenIdentifier::Address(CB_BTC_CONTRACT_ADDRESS.to_string());
+    let cbbtc_token = TokenIdentifier::address(CB_BTC_CONTRACT_ADDRESS.to_string());
 
     loop {
         // --- balances (u64 sats) ---
@@ -461,7 +461,7 @@ pub async fn convert_cbbtc_to_btc(
     }
     
 
-    let cbbtc = TokenIdentifier::Address(CB_BTC_CONTRACT_ADDRESS.to_string());
+    let cbbtc = TokenIdentifier::address(CB_BTC_CONTRACT_ADDRESS.to_string());
 
     // check if the sender wallet can fill the lot
     let lot = Lot {

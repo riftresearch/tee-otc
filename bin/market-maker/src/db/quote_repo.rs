@@ -257,7 +257,7 @@ impl QuoteRepository {
     ) -> QuoteRepositoryResult<(String, serde_json::Value, i16)> {
         let chain = currency.chain.to_db_string();
 
-        let token = match &currency.token {
+        let token = match &currency.token.normalize() {
             TokenIdentifier::Native => serde_json::json!({"type": "Native"}),
             TokenIdentifier::Address(addr) => {
                 serde_json::json!({"type": "Address", "data": addr})
@@ -366,7 +366,7 @@ impl QuoteRepository {
                 Some("Native") => TokenIdentifier::Native,
                 Some("Address") => {
                     if let Some(addr) = token.get("data").and_then(|v| v.as_str()) {
-                        TokenIdentifier::Address(addr.to_string())
+                        TokenIdentifier::address(addr.to_string()).normalize()
                     } else {
                         return InvalidTokenIdentifierSnafu.fail();
                     }

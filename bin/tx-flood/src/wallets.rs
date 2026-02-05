@@ -1321,7 +1321,7 @@ async fn fund_evm_wallets_dedicated(
 
     let cbbtc_currency = Currency {
         chain,
-        token: TokenIdentifier::Address("0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string()),
+        token: TokenIdentifier::address("0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string()),
         decimals: 8,
     };
 

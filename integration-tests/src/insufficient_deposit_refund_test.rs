@@ -166,7 +166,7 @@ async fn test_insufficient_bitcoin_deposit_refund(
         },
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         affiliate: None,
@@ -475,7 +475,7 @@ async fn test_insufficient_evm_deposit_refund(
         mode: SwapMode::ExactInput(one_cbbtc.to::<u64>()),
         from: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         to: Currency {

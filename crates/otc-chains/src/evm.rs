@@ -487,7 +487,7 @@ impl ChainOperations for EvmChain {
         let lot = Lot {
             currency: Currency {
                 chain: self.chain_type,
-                token: TokenIdentifier::Address(token_address.to_string()),
+                token: TokenIdentifier::address(token_address.to_string()),
                 decimals: 8,
             },
             amount: token_balance,

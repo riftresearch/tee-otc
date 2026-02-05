@@ -276,7 +276,7 @@ impl LiquidityCache {
         };
         let cbbtc = Currency {
             chain: evm_chain,
-            token: TokenIdentifier::Address(CB_BTC_CONTRACT_ADDRESS.to_string()),
+            token: TokenIdentifier::address(CB_BTC_CONTRACT_ADDRESS.to_string()),
             decimals: 8,
         };
 

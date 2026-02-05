@@ -54,7 +54,7 @@ async fn execute_user_swap(
         mode: SwapMode::ExactInput(SWAP_AMOUNT_SATS),
         from: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(cbbtc_address.clone()),
+            token: TokenIdentifier::address(cbbtc_address.clone()),
             decimals: 8,
         },
         to: Currency {

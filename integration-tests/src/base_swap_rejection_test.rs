@@ -135,7 +135,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
         mode: SwapMode::ExactInput(10_000_000), // 0.1 cbBTC on Base
         from: Currency {
             chain: ChainType::Base,
-            token: TokenIdentifier::Address(devnet.base.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.base.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         to: Currency {
@@ -198,7 +198,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
         },
         to: Currency {
             chain: ChainType::Base,
-            token: TokenIdentifier::Address(devnet.base.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.base.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         affiliate: None,
@@ -252,7 +252,7 @@ async fn test_base_btc_swap_rejected_when_mm_configured_for_ethereum(
         },
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         affiliate: None,

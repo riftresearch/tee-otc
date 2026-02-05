@@ -210,7 +210,7 @@ mod tests {
             to: Lot {
                 currency: Currency {
                     chain: ChainType::Ethereum,
-                    token: TokenIdentifier::Address(
+                    token: TokenIdentifier::address(
                         "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
                     ),
                     decimals: 8,

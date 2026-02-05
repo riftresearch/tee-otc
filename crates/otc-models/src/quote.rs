@@ -13,6 +13,12 @@ pub enum TokenIdentifier {
 }
 
 impl TokenIdentifier {
+    /// Construct an address token identifier, normalizing to lowercase.
+    #[must_use]
+    pub fn address(addr: impl Into<String>) -> Self {
+        Self::Address(addr.into().to_lowercase())
+    }
+
     /// Normalize the token identifier to lowercase for case-insensitive comparisons.
     ///
     /// Ethereum addresses can be represented in different cases (checksummed, lowercase, uppercase),
@@ -21,7 +27,7 @@ impl TokenIdentifier {
     pub fn normalize(&self) -> Self {
         match self {
             Self::Native => Self::Native,
-            Self::Address(addr) => Self::Address(addr.to_lowercase()),
+            Self::Address(addr) => Self::address(addr),
         }
     }
 }

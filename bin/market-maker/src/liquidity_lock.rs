@@ -253,7 +253,7 @@ impl LiquidityLockManager {
         let normalized_token = match &currency.token {
             otc_models::TokenIdentifier::Native => otc_models::TokenIdentifier::Native,
             otc_models::TokenIdentifier::Address(addr) => {
-                otc_models::TokenIdentifier::Address(addr.to_lowercase())
+                otc_models::TokenIdentifier::address(addr.to_lowercase())
             }
         };
         
@@ -407,7 +407,7 @@ mod tests {
         };
         let to_checksummed = Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address("0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string()),
+            token: TokenIdentifier::address("0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string()),
             decimals: 8,
         };
         let amount = U256::from(1000u64);
@@ -424,7 +424,7 @@ mod tests {
         // Query with lowercase address - should match
         let to_lowercase = Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address("0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf".to_string()),
+            token: TokenIdentifier::address("0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf".to_string()),
             decimals: 8,
         };
 
@@ -434,7 +434,7 @@ mod tests {
         // Query with uppercase address - should also match
         let to_uppercase = Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address("0xCBB7C0000AB88B473B1F5AFD9EF808440EED33BF".to_string()),
+            token: TokenIdentifier::address("0xCBB7C0000AB88B473B1F5AFD9EF808440EED33BF".to_string()),
             decimals: 8,
         };
 

@@ -195,7 +195,7 @@ async fn test_refund_to_taproot_address(
         },
         to: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         affiliate: None,
@@ -503,7 +503,7 @@ async fn test_swap_to_taproot_destination(
         mode: SwapMode::ExactInput(100_000_000), // 1 cbBTC
         from: Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::Address(devnet.ethereum.cbbtc_contract.address().to_string()),
+            token: TokenIdentifier::address(devnet.ethereum.cbbtc_contract.address().to_string()),
             decimals: 8,
         },
         to: Currency {
@@ -573,7 +573,7 @@ async fn test_swap_to_taproot_destination(
                 lot: Lot {
                     currency: Currency {
                         chain: ChainType::Ethereum,
-                        token: TokenIdentifier::Address(
+                        token: TokenIdentifier::address(
                             devnet.ethereum.cbbtc_contract.address().to_string(),
                         ),
                         decimals: swap.quote.from.currency.decimals,

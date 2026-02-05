@@ -81,7 +81,7 @@ impl DepositRepository {
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string();
-                    otc_models::TokenIdentifier::Address(addr)
+                    otc_models::TokenIdentifier::address(addr).normalize()
                 }
                 _ => otc_models::TokenIdentifier::Native,
             }
