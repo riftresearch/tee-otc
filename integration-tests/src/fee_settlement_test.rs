@@ -506,8 +506,8 @@ async fn test_fee_settlement_with_ethereum_swaps(
     tokio::time::sleep(Duration::from_secs(10)).await;
 
     // Calculate expected fees upfront so we know what to wait for
-    // Protocol fee = ceil(deposited * 10 / 10000) for each swap
-    let protocol_fee_bps: u64 = 10;
+    // Protocol fee = ceil(deposited * 8 / 10000) for each swap
+    let protocol_fee_bps: u64 = 8;
     let mut expected_fees: u64 = 0;
     for swap in &swaps {
         let amount = swap.deposited_amount.to::<u64>();

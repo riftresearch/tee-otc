@@ -25,15 +25,13 @@ use uuid::Uuid;
 const QUOTE_EXPIRATION_TIME: Duration = Duration::from_secs(60 * 5);
 const FEE_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
 
-/// Default protocol fee in basis points (0.10%) when no affiliate is specified
-/// or the affiliate is not in the fee map.
-pub const DEFAULT_PROTOCOL_FEE_BPS: u64 = 10;
+/// Default protocol fee in basis points (0.08%).
+pub const DEFAULT_PROTOCOL_FEE_BPS: u64 = 8;
 
-/// Affiliate-specific protocol fee configuration.
-/// Maps affiliate identifiers to their protocol fee in basis points.
+/// Protocol fee configuration.
+/// Affiliate-specific overrides are intentionally disabled for now.
 #[derive(Debug, Clone)]
 pub struct AffiliateFeeConfig {
-    fees: HashMap<String, u64>,
     default_bps: u64,
 }
 
@@ -47,19 +45,14 @@ impl AffiliateFeeConfig {
     /// Creates a new config with the given default fee.
     #[must_use]
     pub fn new(default_bps: u64) -> Self {
-        Self {
-            fees: [("coinbase".to_string(), 4)].into_iter().collect(),
-            default_bps,
-        }
+        Self { default_bps }
     }
 
-    /// Gets the protocol fee for the given affiliate, or the default if not found.
+    /// Gets the protocol fee for the given affiliate.
+    /// Affiliate overrides are currently disabled, so this always returns the default.
     #[must_use]
-    pub fn get_fee_bps(&self, affiliate: Option<&str>) -> u64 {
-        affiliate
-            .and_then(|a| self.fees.get(a))
-            .copied()
-            .unwrap_or(self.default_bps)
+    pub fn get_fee_bps(&self, _affiliate: Option<&str>) -> u64 {
+        self.default_bps
     }
 }
 
@@ -289,7 +282,7 @@ impl WrappedBitcoinQuoter {
             }
         };
 
-        // Get the protocol fee based on affiliate
+        // Get the protocol fee (affiliate overrides currently disabled)
         let protocol_fee_bps = self
             .affiliate_fee_config
             .get_fee_bps(quote_request.affiliate.as_deref());
