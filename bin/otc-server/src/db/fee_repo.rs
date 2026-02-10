@@ -120,8 +120,15 @@ impl FeeRepository {
     }
 
     /// Returns `true` iff the MM is in good standing.
-    pub async fn is_good_standing(&self, market_maker_id: Uuid, now: DateTime<Utc>) -> OtcServerResult<bool> {
-        tracing::info!("Checking good standing for market maker {}", market_maker_id);
+    pub async fn is_good_standing(
+        &self,
+        market_maker_id: Uuid,
+        now: DateTime<Utc>,
+    ) -> OtcServerResult<bool> {
+        tracing::info!(
+            "Checking good standing for market maker {}",
+            market_maker_id
+        );
         let row = sqlx::query(
             r#"
             SELECT debt_sats, over_threshold_since
@@ -134,7 +141,10 @@ impl FeeRepository {
         .await?;
 
         let Some(row) = row else {
-            tracing::info!("No debt state yet for market maker {}, treating as good standing", market_maker_id);
+            tracing::info!(
+                "No debt state yet for market maker {}, treating as good standing",
+                market_maker_id
+            );
             // No debt state yet => treat as good standing.
             return Ok(true);
         };
@@ -143,19 +153,34 @@ impl FeeRepository {
         let over_threshold_since: Option<DateTime<Utc>> = row.try_get("over_threshold_since")?;
 
         if debt_sats <= GOOD_STANDING_THRESHOLD_SATS {
-            tracing::info!("Debt below threshold for market maker {}, treating as good standing", market_maker_id);
+            tracing::info!(
+                "Debt below threshold for market maker {}, treating as good standing",
+                market_maker_id
+            );
             return Ok(true);
         }
 
         let Some(since) = over_threshold_since else {
-            tracing::info!("No over threshold since for market maker {}, treating as bad standing", market_maker_id);
+            tracing::info!(
+                "No over threshold since for market maker {}, treating as bad standing",
+                market_maker_id
+            );
             // Defensive: if state is inconsistent, fail closed.
             return Ok(false);
         };
 
         let is_good = now - since <= GOOD_STANDING_WINDOW;
-        tracing::info!("Now: {}, Since: {}, Good standing window: {}", now, since, GOOD_STANDING_WINDOW);
-        tracing::info!("Market maker {} final standing: {}", market_maker_id, is_good);
+        tracing::info!(
+            "Now: {}, Since: {}, Good standing window: {}",
+            now,
+            since,
+            GOOD_STANDING_WINDOW
+        );
+        tracing::info!(
+            "Market maker {} final standing: {}",
+            market_maker_id,
+            is_good
+        );
 
         Ok(is_good)
     }
@@ -367,4 +392,3 @@ impl FeeRepository {
         Ok(out)
     }
 }
-

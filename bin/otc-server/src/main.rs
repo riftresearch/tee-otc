@@ -10,7 +10,7 @@ async fn main() -> Result<()> {
     // Build the tracing subscriber with multiple layers
     // Create env filter for stdout
     let fmt_env_filter = EnvFilter::new(&args.log_level);
-    
+
     // 1. Standard fmt layer for stdout logging
     let fmt_layer = tracing_subscriber::fmt::layer()
         .with_target(true)
@@ -23,7 +23,7 @@ async fn main() -> Result<()> {
             Ok(url) => {
                 // Create a separate env filter for Loki (same config as fmt)
                 let loki_env_filter = EnvFilter::new(&args.log_level);
-                
+
                 match tracing_loki::builder()
                     .label("service", "otc-server")
                     .and_then(|builder| builder.build_url(url))
@@ -31,24 +31,25 @@ async fn main() -> Result<()> {
                     Ok((loki_layer, task)) => {
                         // Apply the same filter to Loki layer
                         let filtered_loki_layer = loki_layer.with_filter(loki_env_filter);
-                        
+
                         // Initialize subscriber with all layers
                         tracing_subscriber::registry()
                             .with(fmt_layer)
                             .with(filtered_loki_layer)
                             .init();
-                        
+
                         // Spawn the Loki background task
                         tokio::spawn(task);
                         tracing::info!("Loki logging enabled, shipping logs to {}", loki_url);
                         true
                     }
                     Err(e) => {
-                        eprintln!("Failed to initialize Loki layer: {}, continuing without Loki", e);
+                        eprintln!(
+                            "Failed to initialize Loki layer: {}, continuing without Loki",
+                            e
+                        );
                         // Initialize without Loki layer
-                        tracing_subscriber::registry()
-                            .with(fmt_layer)
-                            .init();
+                        tracing_subscriber::registry().with(fmt_layer).init();
                         false
                     }
                 }
@@ -56,20 +57,16 @@ async fn main() -> Result<()> {
             Err(e) => {
                 eprintln!("Invalid LOKI_URL: {}, continuing without Loki", e);
                 // Initialize without Loki layer
-                tracing_subscriber::registry()
-                    .with(fmt_layer)
-                    .init();
+                tracing_subscriber::registry().with(fmt_layer).init();
                 false
             }
         }
     } else {
         // No Loki URL provided, initialize without Loki layer
-        tracing_subscriber::registry()
-            .with(fmt_layer)
-            .init();
+        tracing_subscriber::registry().with(fmt_layer).init();
         false
     };
-    
+
     if !loki_task {
         tracing::info!("Loki logging not configured (set LOKI_URL to enable)");
     }

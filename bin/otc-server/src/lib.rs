@@ -112,7 +112,11 @@ pub struct OtcServerArgs {
     pub untrusted_ethereum_mainnet_token_indexer_url: String,
 
     /// Ethereum Allowed Token Address
-    #[arg(long, env = "ETHEREUM_ALLOWED_TOKEN", default_value = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf")]
+    #[arg(
+        long,
+        env = "ETHEREUM_ALLOWED_TOKEN",
+        default_value = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+    )]
     pub ethereum_allowed_token: String,
 
     /// Base RPC URL
@@ -124,7 +128,11 @@ pub struct OtcServerArgs {
     pub untrusted_base_token_indexer_url: String,
 
     /// Base Allowed Token Address
-    #[arg(long, env = "BASE_ALLOWED_TOKEN", default_value = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf")]
+    #[arg(
+        long,
+        env = "BASE_ALLOWED_TOKEN",
+        default_value = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+    )]
     pub base_allowed_token: String,
 
     /// Bitcoin RPC URL

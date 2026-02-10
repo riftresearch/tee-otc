@@ -440,8 +440,8 @@ impl SwapRepository {
 
             // Get realized swap to extract mm_output
             let realized_json: serde_json::Value = row.try_get("realized_swap")?;
-            let realized: RealizedSwap = serde_json::from_value(realized_json)
-                .map_err(|e| OtcServerError::InvalidData {
+            let realized: RealizedSwap =
+                serde_json::from_value(realized_json).map_err(|e| OtcServerError::InvalidData {
                     message: format!("Failed to deserialize realized_swap: {e}"),
                 })?;
 
@@ -505,7 +505,10 @@ impl SwapRepository {
         )
         .bind(market_maker_id)
         .bind(SwapStatus::Settled)
-        .bind(last_seen_settlement_timestamp.unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap()))
+        .bind(
+            last_seen_settlement_timestamp
+                .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap()),
+        )
         .fetch_all(&self.pool)
         .await?;
 
@@ -521,9 +524,10 @@ impl SwapRepository {
             deposit_vault_salt.copy_from_slice(&salt_vec);
 
             let from_chain: String = row.try_get("from_chain")?;
-            let deposit_chain = ChainType::from_db_string(&from_chain).ok_or(OtcServerError::InvalidData {
-                message: format!("Invalid chain type: {from_chain}"),
-            })?;
+            let deposit_chain =
+                ChainType::from_db_string(&from_chain).ok_or(OtcServerError::InvalidData {
+                    message: format!("Invalid chain type: {from_chain}"),
+                })?;
 
             let deposit_status_json: serde_json::Value = row.try_get("user_deposit_status")?;
             let deposit_status = user_deposit_status_from_json(deposit_status_json)?;
@@ -615,7 +619,11 @@ impl SwapRepository {
     }
 
     /// Update entire swap record
-    pub async fn update(&self, swap: &Swap, expected_status: Option<SwapStatus>) -> OtcServerResult<()> {
+    pub async fn update(
+        &self,
+        swap: &Swap,
+        expected_status: Option<SwapStatus>,
+    ) -> OtcServerResult<()> {
         let user_deposit_json = swap
             .user_deposit_status
             .as_ref()
@@ -641,7 +649,7 @@ impl SwapRepository {
             .as_ref()
             .map(realized_swap_to_json)
             .transpose()?;
-        
+
         let result = match expected_status {
             Some(expected) => {
                 sqlx::query(
@@ -801,7 +809,7 @@ impl SwapRepository {
             message: format!("State transition failed: {e}"),
         })?;
 
-        // Update the database, allowing update from either WaitingUserDepositInitiated 
+        // Update the database, allowing update from either WaitingUserDepositInitiated
         // or WaitingUserDepositConfirmed (for transaction replacement scenarios)
         let expected_status = match original_status {
             SwapStatus::WaitingUserDepositInitiated | SwapStatus::WaitingUserDepositConfirmed => {
@@ -823,7 +831,11 @@ impl SwapRepository {
     /// Atomically transition a swap to RefundingUser status from an expected status.
     /// This prevents race conditions where the swap could be progressing through states
     /// while a refund is being processed.
-    pub async fn mark_swap_as_refunding_user(&self, swap_id: Uuid, expected_status: SwapStatus) -> OtcServerResult<()> {
+    pub async fn mark_swap_as_refunding_user(
+        &self,
+        swap_id: Uuid,
+        expected_status: SwapStatus,
+    ) -> OtcServerResult<()> {
         let mut swap = self.get(swap_id).await?;
         swap.status = SwapStatus::RefundingUser;
         // Atomic check will prevent concurrent updates from other threads
@@ -846,7 +858,7 @@ impl SwapRepository {
         let mut swaps = self.get_swaps(&swap_ids).await?;
 
         // Store original status for optimistic locking
-        let original_statuses: HashMap<Uuid, SwapStatus> = 
+        let original_statuses: HashMap<Uuid, SwapStatus> =
             swaps.iter().map(|s| (s.id, s.status)).collect();
 
         // Apply state transitions to each swap
@@ -893,11 +905,12 @@ impl SwapRepository {
                 .map(latest_refund_to_json)
                 .transpose()?;
 
-            let original_status = original_statuses.get(&swap.id).ok_or_else(|| {
-                OtcServerError::InvalidState {
-                    message: format!("Missing original status for swap {}", swap.id),
-                }
-            })?;
+            let original_status =
+                original_statuses
+                    .get(&swap.id)
+                    .ok_or_else(|| OtcServerError::InvalidState {
+                        message: format!("Missing original status for swap {}", swap.id),
+                    })?;
 
             let result = sqlx::query(
                 r"
@@ -1032,7 +1045,10 @@ impl SwapRepository {
     }
 
     /// Mark multiple swaps as MM deposit confirmed (settled) in a batch
-    pub async fn batch_mm_deposit_confirmed(&self, swap_ids: &[Uuid]) -> OtcServerResult<DateTime<Utc>> {
+    pub async fn batch_mm_deposit_confirmed(
+        &self,
+        swap_ids: &[Uuid],
+    ) -> OtcServerResult<DateTime<Utc>> {
         if swap_ids.is_empty() {
             return Ok(utc::now());
         }
@@ -1041,7 +1057,7 @@ impl SwapRepository {
         let mut swaps = self.get_swaps(swap_ids).await?;
 
         // Store original status for optimistic locking
-        let original_statuses: HashMap<Uuid, SwapStatus> = 
+        let original_statuses: HashMap<Uuid, SwapStatus> =
             swaps.iter().map(|s| (s.id, s.status)).collect();
 
         let swap_settlement_timestamp = utc::now();
@@ -1079,11 +1095,12 @@ impl SwapRepository {
                 .map(latest_refund_to_json)
                 .transpose()?;
 
-            let original_status = original_statuses.get(&swap.id).ok_or_else(|| {
-                OtcServerError::InvalidState {
-                    message: format!("Missing original status for swap {}", swap.id),
-                }
-            })?;
+            let original_status =
+                original_statuses
+                    .get(&swap.id)
+                    .ok_or_else(|| OtcServerError::InvalidState {
+                        message: format!("Missing original status for swap {}", swap.id),
+                    })?;
 
             let result = sqlx::query(
                 r"
@@ -1157,7 +1174,8 @@ impl SwapRepository {
                 message: format!("State transition failed: {e}"),
             })?;
         // only transition to WaitingMMDepositInitiated if the swap is in WaitingUserDepositConfirmed (prevent refund race condition @ pg level)
-        self.update(&swap, Some(SwapStatus::WaitingUserDepositConfirmed)).await?;
+        self.update(&swap, Some(SwapStatus::WaitingUserDepositConfirmed))
+            .await?;
         Ok(swap
             .user_deposit_status
             .as_ref()
@@ -1357,10 +1375,7 @@ mod tests {
             retrieved_swap.user_destination_address,
             original_swap.user_destination_address
         );
-        assert_eq!(
-            retrieved_swap.refund_address,
-            original_swap.refund_address
-        );
+        assert_eq!(retrieved_swap.refund_address, original_swap.refund_address);
         assert_eq!(retrieved_swap.status, original_swap.status);
 
         Ok(())
@@ -1380,8 +1395,7 @@ mod tests {
         let mut original_swap = create_test_swap(quote.clone());
         original_swap.status = SwapStatus::WaitingMMDepositConfirmed;
         original_swap.user_deposit_status = Some(UserDepositStatus {
-            tx_hash: "7d865e959b2466918c9863afca942d0fb89d7c9ac0c99bafc3749504ded97730"
-                .to_string(),
+            tx_hash: "7d865e959b2466918c9863afca942d0fb89d7c9ac0c99bafc3749504ded97730".to_string(),
             amount: U256::from(2000000u64),
             deposit_detected_at: now,
             confirmed_at: None,

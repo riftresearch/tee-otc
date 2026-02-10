@@ -1,8 +1,8 @@
 use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
-use otc_models::Lot;
 use otc_models::ChainType;
+use otc_models::Lot;
 use otc_protocols::mm::{MMRequest, ProtocolMessage};
 use snafu::Snafu;
 use std::sync::Arc;
@@ -94,9 +94,12 @@ impl MMRegistry {
     /// Returns true if the connection was removed, false if it didn't match or wasn't found
     pub fn unregister(&self, market_maker_id: Uuid, connection_id: Uuid) -> bool {
         // Use remove_if to atomically check and remove only if connection_id matches
-        let removed = self.connections.remove_if(&market_maker_id, |_, conn| {
-            conn.connection_id == connection_id
-        }).is_some();
+        let removed = self
+            .connections
+            .remove_if(&market_maker_id, |_, conn| {
+                conn.connection_id == connection_id
+            })
+            .is_some();
 
         if removed {
             info!(
@@ -450,23 +453,26 @@ mod tests {
     async fn test_unregister_race_condition() {
         let registry = MMRegistry::new();
         let mm_id = Uuid::now_v7();
-        
+
         // Connection A registers
         let (tx_a, _rx_a) = mpsc::channel(10);
         let conn_id_a = Uuid::now_v7();
         registry.register(mm_id, conn_id_a, tx_a, "1.0.0".to_string());
         assert!(registry.is_connected(mm_id));
-        
+
         // Connection B registers (overwrites A)
         let (tx_b, _rx_b) = mpsc::channel(10);
         let conn_id_b = Uuid::now_v7();
         registry.register(mm_id, conn_id_b, tx_b, "1.0.0".to_string());
         assert!(registry.is_connected(mm_id));
-        
+
         // Connection A tries to unregister - should NOT remove connection B
         assert!(!registry.unregister(mm_id, conn_id_a));
-        assert!(registry.is_connected(mm_id), "Connection B should still be registered");
-        
+        assert!(
+            registry.is_connected(mm_id),
+            "Connection B should still be registered"
+        );
+
         // Connection B unregisters - should succeed
         assert!(registry.unregister(mm_id, conn_id_b));
         assert!(!registry.is_connected(mm_id));

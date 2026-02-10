@@ -6,8 +6,8 @@ use uuid::Uuid;
 
 use super::conversions::{
     currency_from_db, latest_refund_from_json, metadata_from_json, mm_deposit_status_from_json,
-    realized_swap_from_json, settlement_status_from_json, swap_rates_from_db,
-    u256_from_db, user_deposit_status_from_json,
+    realized_swap_from_json, settlement_status_from_json, swap_rates_from_db, u256_from_db,
+    user_deposit_status_from_json,
 };
 use crate::error::{OtcServerError, OtcServerResult};
 
@@ -18,14 +18,14 @@ pub trait FromRow<'r>: Sized {
 impl<'r> FromRow<'r> for Quote {
     fn from_row(row: &'r PgRow) -> OtcServerResult<Self> {
         let id: Uuid = row.try_get("id")?;
-        
+
         // From lot
         let from_chain: String = row.try_get("from_chain")?;
         let from_token: serde_json::Value = row.try_get("from_token")?;
         let from_decimals: i16 = row.try_get("from_decimals")?;
         let from_amount_str: String = row.try_get("from_amount")?;
         let from_amount = u256_from_db(&from_amount_str)?;
-        
+
         // To lot
         let to_chain: String = row.try_get("to_chain")?;
         let to_token: serde_json::Value = row.try_get("to_token")?;
@@ -116,14 +116,14 @@ impl<'r> FromRow<'r> for Swap {
 
         // Get the embedded quote fields
         let quote_id: Uuid = row.try_get("quote_id")?;
-        
+
         // From lot
         let from_chain: String = row.try_get("from_chain")?;
         let from_token: serde_json::Value = row.try_get("from_token")?;
         let from_decimals: i16 = row.try_get("from_decimals")?;
         let from_amount_str: String = row.try_get("from_amount")?;
         let from_amount = u256_from_db(&from_amount_str)?;
-        
+
         // To lot
         let to_chain: String = row.try_get("to_chain")?;
         let to_token: serde_json::Value = row.try_get("to_token")?;

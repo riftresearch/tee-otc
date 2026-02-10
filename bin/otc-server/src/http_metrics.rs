@@ -3,11 +3,7 @@
 //! Provides per-route latency histograms (for P95/P99 calculations) and request counters (for RPS).
 
 use axum::{
-    body::Body,
-    extract::MatchedPath,
-    http::Request,
-    middleware::Next,
-    response::IntoResponse,
+    body::Body, extract::MatchedPath, http::Request, middleware::Next, response::IntoResponse,
 };
 use metrics::{counter, histogram};
 use std::time::Instant;
@@ -66,5 +62,3 @@ pub async fn track_http_metrics(request: Request<Body>, next: Next) -> impl Into
 
     response
 }
-
-

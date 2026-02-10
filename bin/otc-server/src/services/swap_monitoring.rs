@@ -4,11 +4,13 @@ use crate::{config::Settings, services::mm_registry};
 use metrics::{gauge, histogram};
 use otc_chains::traits::{MarketMakerQueuedPayment, MarketMakerQueuedPaymentExt};
 use otc_chains::ChainRegistry;
-use otc_models::{Lot, MMDepositStatus, RealizedSwap, Swap, SwapStatus, TxStatus, UserDepositStatus};
+use otc_models::{
+    Lot, MMDepositStatus, RealizedSwap, Swap, SwapStatus, TxStatus, UserDepositStatus,
+};
 use snafu::{location, prelude::*, Location};
 use std::collections::HashMap;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Semaphore;
 use tokio::time;
@@ -121,7 +123,8 @@ impl SwapMonitoringService {
     }
 
     pub fn last_monitor_pass(&self) -> u64 {
-        self.last_monitor_pass.load(std::sync::atomic::Ordering::Relaxed)
+        self.last_monitor_pass
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// Start the monitoring service
@@ -137,9 +140,7 @@ impl SwapMonitoringService {
 
         loop {
             let service = Arc::clone(&self);
-            let handle = tokio::spawn(async move {
-                service.monitor_all_swaps().await
-            });
+            let handle = tokio::spawn(async move { service.monitor_all_swaps().await });
 
             // Add timeout to prevent indefinite hanging on monitor
             let timeout_duration = Duration::from_secs(300); // 5 minutes
@@ -166,7 +167,7 @@ impl SwapMonitoringService {
             // Update the last monitor pass time
             self.last_monitor_pass.store(
                 utc::now().timestamp() as u64,
-                std::sync::atomic::Ordering::Relaxed
+                std::sync::atomic::Ordering::Relaxed,
             );
 
             interval.tick().await;
@@ -220,7 +221,10 @@ impl SwapMonitoringService {
             let permit = match semaphore.clone().acquire_owned().await {
                 Ok(permit) => permit,
                 Err(e) => {
-                    error!("Failed to acquire semaphore permit for swap {}: {}", swap.id, e);
+                    error!(
+                        "Failed to acquire semaphore permit for swap {}: {}",
+                        swap.id, e
+                    );
                     continue;
                 }
             };
@@ -238,7 +242,10 @@ impl SwapMonitoringService {
             let permit = match semaphore.clone().acquire_owned().await {
                 Ok(permit) => permit,
                 Err(e) => {
-                    error!("Failed to acquire semaphore permit for batch {}: {}", mm_tx_hash, e);
+                    error!(
+                        "Failed to acquire semaphore permit for batch {}: {}",
+                        mm_tx_hash, e
+                    );
                     continue;
                 }
             };
@@ -314,7 +321,11 @@ impl SwapMonitoringService {
     }
 
     /// Check for user deposit
-    async fn check_user_deposit(&self, swap: &Swap, existent_tx_hash: Option<String>) -> MonitoringResult<()> {
+    async fn check_user_deposit(
+        &self,
+        swap: &Swap,
+        existent_tx_hash: Option<String>,
+    ) -> MonitoringResult<()> {
         // Get the quote to know what token/chain to check
         let quote = &swap.quote;
 
@@ -333,7 +344,6 @@ impl SwapMonitoringService {
             .derive_wallet(&self.settings.master_key_bytes(), &swap.deposit_vault_salt)
             .context(ChainOperationSnafu)?;
 
-
         // Check for deposit from the user's wallet (any amount)
         let deposit_info = chain_ops
             .search_for_transfer(&user_wallet.address, &quote.from.currency, None)
@@ -348,7 +358,10 @@ impl SwapMonitoringService {
 
             if let Some(existing_hash) = existent_tx_hash {
                 if existing_hash == deposit.tx_hash {
-                    info!("User deposit tx {} for swap {} already detected, skipping", deposit.tx_hash, swap.id);
+                    info!(
+                        "User deposit tx {} for swap {} already detected, skipping",
+                        deposit.tx_hash, swap.id
+                    );
                     return Ok(());
                 }
             }
@@ -518,9 +531,10 @@ impl SwapMonitoringService {
                     "User deposit tx {} for swap {} not found on chain {:?}",
                     user_deposit.tx_hash, swap.id, quote.from.currency.chain
                 );
-                // If it's not found, it's possible the user deposit was replaced with a different tx, 
+                // If it's not found, it's possible the user deposit was replaced with a different tx,
                 // so we need to check for a new deposit
-                self.check_user_deposit(swap, Some(user_deposit.tx_hash.clone())).await?;
+                self.check_user_deposit(swap, Some(user_deposit.tx_hash.clone()))
+                    .await?;
             }
         }
 
@@ -759,7 +773,8 @@ impl SwapMonitoringService {
 
                     // Transition all swaps to settled state atomically
                     let now = utc::now();
-                    let swap_settlement_timestamp = self.db
+                    let swap_settlement_timestamp = self
+                        .db
                         .swaps()
                         .batch_mm_deposit_confirmed(&swap_ids)
                         .await
@@ -820,11 +835,15 @@ impl SwapMonitoringService {
                         let private_key = user_wallet.private_key().to_string();
                         let user_deposit_tx_hash =
                             swap.user_deposit_status.as_ref().unwrap().tx_hash.clone();
-                        
+
                         // Build the actual deposit lot from user_deposit_status.amount
                         let actual_deposit_lot = Lot {
                             currency: swap.quote.from.currency.clone(),
-                            amount: swap.user_deposit_status.as_ref().expect("user deposit status should be some").amount,
+                            amount: swap
+                                .user_deposit_status
+                                .as_ref()
+                                .expect("user deposit status should be some")
+                                .amount,
                         };
 
                         tokio::spawn(async move {

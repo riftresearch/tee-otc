@@ -105,10 +105,7 @@ impl SwapManager {
         }
     }
 
-    pub async fn refund_swap(
-        &self,
-        swap_id: Uuid,
-    ) -> SwapResult<RefundSwapResponse> {
+    pub async fn refund_swap(&self, swap_id: Uuid) -> SwapResult<RefundSwapResponse> {
         let swap = self.db.swaps().get(swap_id).await.context(DatabaseSnafu)?;
 
         match swap.can_be_refunded() {
@@ -116,8 +113,12 @@ impl SwapManager {
                 // Atomically set the swap to RefundingUser before proceeding. This prevents the
                 // monitoring service from progressing the swap to further states during the refund.
                 // If the swap is already RefundingUser (from a previous refund attempt), skip this step.
-                if !matches!(swap.status, SwapStatus::RefundingUser) { 
-                    self.db.swaps().mark_swap_as_refunding_user(swap_id, swap.status).await.context(DatabaseSnafu)?;
+                if !matches!(swap.status, SwapStatus::RefundingUser) {
+                    self.db
+                        .swaps()
+                        .mark_swap_as_refunding_user(swap_id, swap.status)
+                        .await
+                        .context(DatabaseSnafu)?;
                 }
                 let deposit_chain = self
                     .chain_registry
@@ -130,12 +131,15 @@ impl SwapManager {
                     .derive_wallet(&self.settings.master_key_bytes(), &swap.deposit_vault_salt)
                     .map_err(|e| SwapError::WalletDerivation { source: e })?;
 
-
-                let fee = match swap.quote.from.currency.chain { 
-                    ChainType::Bitcoin => { 
-                        let esplora = deposit_chain.esplora_client().ok_or(SwapError::BadRefundRequest {
-                            reason: "Esplora client not available for Bitcoin chain".to_string(),
-                        })?;
+                let fee = match swap.quote.from.currency.chain {
+                    ChainType::Bitcoin => {
+                        let esplora =
+                            deposit_chain
+                                .esplora_client()
+                                .ok_or(SwapError::BadRefundRequest {
+                                    reason: "Esplora client not available for Bitcoin chain"
+                                        .to_string(),
+                                })?;
 
                         let next_block_fee_rate = esplora
                             .get_mempool_fee_estimate_next_block()
@@ -149,7 +153,7 @@ impl SwapManager {
                         // - Overhead: ~10 vbytes
                         // Using 125 vbytes to safely cover all output types including Taproot
                         (next_block_fee_rate * 125.0).ceil() as u64
-                    },
+                    }
                     ChainType::Ethereum => 0,
                     ChainType::Base => 0,
                 };

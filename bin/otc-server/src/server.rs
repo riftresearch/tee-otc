@@ -3,8 +3,7 @@ use crate::{
     config::Settings,
     db::{
         swap_repo::{SWAP_FEES_TOTAL_METRIC, SWAP_VOLUME_TOTAL_METRIC},
-        Database, GOOD_STANDING_THRESHOLD_SATS, GOOD_STANDING_WINDOW,
-        MM_FEE_DEBT_SATS_METRIC,
+        Database, GOOD_STANDING_THRESHOLD_SATS, GOOD_STANDING_WINDOW, MM_FEE_DEBT_SATS_METRIC,
     },
     http_metrics::{track_http_metrics, HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION_SECONDS},
     services::{
@@ -283,7 +282,10 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         .route("/api/v2/chains/bitcoin/tip", get(get_best_bitcoin_hash))
         .route("/api/v2/chains/ethereum/tip", get(get_best_ethereum_hash))
         .route("/api/v2/chains/base/tip", get(get_best_base_hash))
-        .route("/api/v2/market-makers/suspended", get(get_suspended_market_makers))
+        .route(
+            "/api/v2/market-makers/suspended",
+            get(get_suspended_market_makers),
+        )
         .route("/api/v1/tdx/quote", get(get_tdx_quote))
         .route("/api/v1/tdx/info", get(get_tdx_info))
         .layer(axum::middleware::from_fn(track_http_metrics))
@@ -633,11 +635,7 @@ async fn get_suspended_market_makers(
     State(state): State<AppState>,
 ) -> Result<Json<SuspendedMarketMakersResponse>, crate::error::OtcServerError> {
     let now = utc::now();
-    let market_maker_ids = state
-        .db
-        .fees()
-        .list_bad_standing(now)
-        .await?;
+    let market_maker_ids = state.db.fees().list_bad_standing(now).await?;
     Ok(Json(SuspendedMarketMakersResponse { market_maker_ids }))
 }
 
@@ -787,9 +785,10 @@ impl MessageHandler for OTCMessageHandler {
                                                 continue;
                                             };
 
-                                            let wallet = match chain_ops
-                                                .derive_wallet(&master_key, &swap.deposit_vault_salt)
-                                            {
+                                            let wallet = match chain_ops.derive_wallet(
+                                                &master_key,
+                                                &swap.deposit_vault_salt,
+                                            ) {
                                                 Ok(wallet) => wallet,
                                                 Err(err) => {
                                                     error!(
@@ -893,12 +892,7 @@ impl MessageHandler for OTCMessageHandler {
                             };
                             let accept = || {
                                 mm_registry.notify_fee_settlement_ack(
-                                    &mm_id,
-                                    request_id,
-                                    chain,
-                                    &tx_hash,
-                                    true,
-                                    None,
+                                    &mm_id, request_id, chain, &tx_hash, true, None,
                                 )
                             };
 
@@ -962,7 +956,8 @@ impl MessageHandler for OTCMessageHandler {
                                 .iter()
                                 .map(|b| b.payment_verification.aggregated_fee.to::<u64>())
                                 .sum();
-                            let referenced_fee_sats: i64 = match referenced_fee_sats_u64.try_into() {
+                            let referenced_fee_sats: i64 = match referenced_fee_sats_u64.try_into()
+                            {
                                 Ok(v) => v,
                                 Err(_) => {
                                     error!(
@@ -1095,22 +1090,18 @@ impl MessageHandler for OTCMessageHandler {
                     }
                     MMResponse::FeeStandingStatusRequest { request_id, .. } => {
                         let now = utc::now();
-                        let (debt_sats, over_threshold_since) = match self
-                            .db
-                            .fees()
-                            .get_fee_state(mm_id)
-                            .await
-                        {
-                            Ok(v) => v,
-                            Err(e) => {
-                                error!(
-                                    market_maker_id = %mm_id,
-                                    error = %e,
-                                    "Failed to load fee standing state"
-                                );
-                                return None;
-                            }
-                        };
+                        let (debt_sats, over_threshold_since) =
+                            match self.db.fees().get_fee_state(mm_id).await {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    error!(
+                                        market_maker_id = %mm_id,
+                                        error = %e,
+                                        "Failed to load fee standing state"
+                                    );
+                                    return None;
+                                }
+                            };
 
                         let response = ProtocolMessage {
                             version: msg.version.clone(),

@@ -247,27 +247,60 @@ mod tests {
 
         // Validate all fields match
         assert_eq!(retrieved_quote.id, original_quote.id);
-        assert_eq!(retrieved_quote.market_maker_id, original_quote.market_maker_id);
+        assert_eq!(
+            retrieved_quote.market_maker_id,
+            original_quote.market_maker_id
+        );
 
         // Validate from lot
-        assert_eq!(retrieved_quote.from.currency.chain, original_quote.from.currency.chain);
-        assert_eq!(retrieved_quote.from.currency.token, original_quote.from.currency.token);
+        assert_eq!(
+            retrieved_quote.from.currency.chain,
+            original_quote.from.currency.chain
+        );
+        assert_eq!(
+            retrieved_quote.from.currency.token,
+            original_quote.from.currency.token
+        );
         assert_eq!(retrieved_quote.from.amount, original_quote.from.amount);
 
         // Validate to lot
-        assert_eq!(retrieved_quote.to.currency.chain, original_quote.to.currency.chain);
-        assert_eq!(retrieved_quote.to.currency.token, original_quote.to.currency.token);
+        assert_eq!(
+            retrieved_quote.to.currency.chain,
+            original_quote.to.currency.chain
+        );
+        assert_eq!(
+            retrieved_quote.to.currency.token,
+            original_quote.to.currency.token
+        );
         assert_eq!(retrieved_quote.to.amount, original_quote.to.amount);
 
         // Validate rates
-        assert_eq!(retrieved_quote.rates.liquidity_fee_bps, original_quote.rates.liquidity_fee_bps);
-        assert_eq!(retrieved_quote.rates.protocol_fee_bps, original_quote.rates.protocol_fee_bps);
-        assert_eq!(retrieved_quote.rates.network_fee_sats, original_quote.rates.network_fee_sats);
+        assert_eq!(
+            retrieved_quote.rates.liquidity_fee_bps,
+            original_quote.rates.liquidity_fee_bps
+        );
+        assert_eq!(
+            retrieved_quote.rates.protocol_fee_bps,
+            original_quote.rates.protocol_fee_bps
+        );
+        assert_eq!(
+            retrieved_quote.rates.network_fee_sats,
+            original_quote.rates.network_fee_sats
+        );
 
         // Validate fees
-        assert_eq!(retrieved_quote.fees.liquidity_fee, original_quote.fees.liquidity_fee);
-        assert_eq!(retrieved_quote.fees.protocol_fee, original_quote.fees.protocol_fee);
-        assert_eq!(retrieved_quote.fees.network_fee, original_quote.fees.network_fee);
+        assert_eq!(
+            retrieved_quote.fees.liquidity_fee,
+            original_quote.fees.liquidity_fee
+        );
+        assert_eq!(
+            retrieved_quote.fees.protocol_fee,
+            original_quote.fees.protocol_fee
+        );
+        assert_eq!(
+            retrieved_quote.fees.network_fee,
+            original_quote.fees.network_fee
+        );
 
         // Validate bounds
         assert_eq!(retrieved_quote.min_input, original_quote.min_input);

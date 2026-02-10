@@ -185,14 +185,12 @@ impl BatchRepository {
         let mut out = Vec::with_capacity(rows.len());
         for row in rows {
             let batch_json: serde_json::Value = row.get("full_batch");
-            let batch: MarketMakerBatch = serde_json::from_value(batch_json).map_err(|e| {
-                OtcServerError::InvalidData {
+            let batch: MarketMakerBatch =
+                serde_json::from_value(batch_json).map_err(|e| OtcServerError::InvalidData {
                     message: format!("Failed to deserialize batch: {e}"),
-                }
-            })?;
+                })?;
             out.push(batch);
         }
         Ok(out)
     }
-
 }
