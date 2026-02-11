@@ -19,7 +19,7 @@ use otc_protocols::rfq::RFQResult;
 use snafu::{Location, Snafu};
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
-use tracing::{info, warn};
+use tracing::{debug, warn};
 use uuid::Uuid;
 
 const QUOTE_EXPIRATION_TIME: Duration = Duration::from_secs(60 * 5);
@@ -247,7 +247,7 @@ impl WrappedBitcoinQuoter {
         quote_request: &QuoteRequest,
     ) -> Result<RFQResult<Quote>> {
         if let Some(error_message) = self.is_fillable_request(quote_request) {
-            info!("Unsupported quote request: {:?}", quote_request);
+            debug!("Unsupported quote request: {:?}", quote_request);
             return Ok(RFQResult::Unsupported(error_message));
         }
 
@@ -363,7 +363,7 @@ impl WrappedBitcoinQuoter {
     fn is_fillable_request(&self, quote_request: &QuoteRequest) -> Option<String> {
         // Swaps must be between different chains
         if quote_request.from.chain == quote_request.to.chain {
-            info!("Invalid chain selection: {:?}", quote_request);
+            debug!("Invalid chain selection: {:?}", quote_request);
             return Some("From and to chains cannot be the same".to_string());
         }
 

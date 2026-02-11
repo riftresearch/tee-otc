@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse, RFQResult};
 use std::{sync::Arc, time::Instant};
-use tracing::{error, info};
+use tracing::{debug, error};
 use uuid::Uuid;
 
 use crate::db::QuoteRepository;
@@ -44,7 +44,7 @@ impl RFQMessageHandler {
                 timestamp: _,
             } => {
                 let start = Instant::now();
-                info!(
+                debug!(
                     "Received RFQ quote request: request_id={}, from_chain={:?}, to_chain={:?}, mode={:?}",
                     request_id, request.from.chain, request.to.chain, request.mode
                 );
@@ -80,14 +80,14 @@ impl RFQMessageHandler {
 
                 // TODO: consider deferring the execution of the following to a seperate async task to prevent blocking?
                 if let Some(quote) = quote {
-                    info!(
+                    debug!(
                         "Generated quote: id={}, from_chain={:?}, to_chain={:?}, rates={:?}, min_input={}, max_input={}",
                         quote.id, quote.from.currency.chain, quote.to.currency.chain, quote.rates, quote.min_input, quote.max_input
                     );
                     if let Err(e) = self.quote_repository.store_quote(&quote).await {
                         error!("Failed to store quote {}: {}", quote.id, e);
                     } else {
-                        info!("Stored quote {} in database", quote.id);
+                        debug!("Stored quote {} in database", quote.id);
                         if let Err(e) = self.quote_repository.mark_sent_to_rfq(quote.id).await {
                             error!("Failed to mark quote {} as sent to RFQ: {}", quote.id, e);
                         }
@@ -111,7 +111,7 @@ impl RFQMessageHandler {
                 quote_id,
                 timestamp: _,
             } => {
-                info!(
+                debug!(
                     "Our quote {} was selected! Request ID: {}",
                     quote_id, request_id
                 );
@@ -125,12 +125,12 @@ impl RFQMessageHandler {
                 request_id,
                 timestamp: _,
             } => {
-                info!("Received liquidity request: request_id={}", request_id);
+                debug!("Received liquidity request: request_id={}", request_id);
 
                 // Get liquidity from cache
                 let liquidity = self.liquidity_cache.get_liquidity().await;
 
-                info!(
+                debug!(
                     "Responding with {} trading pairs for liquidity request {}",
                     liquidity.len(),
                     request_id
