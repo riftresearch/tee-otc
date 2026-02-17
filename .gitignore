@@ -19,6 +19,9 @@ target/
 # VS Code
 .vscode/
 
+# Cursor
+.cursor/
+
 # MacOS
 .DS_Store
 
