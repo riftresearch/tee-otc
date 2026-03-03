@@ -39,6 +39,7 @@ pub enum RFQRequest {
     QuoteRequested {
         request_id: Uuid,
         request: QuoteRequest,
+        protocol_fee_bps: u64,
         timestamp: DateTime<Utc>,
     },
 

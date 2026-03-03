@@ -46,7 +46,11 @@ impl QuoteAggregator {
     }
 
     /// Request quotes from all connected market makers and return the best one
-    pub async fn request_quotes(&self, request: QuoteRequest) -> Result<QuoteRequestResult> {
+    pub async fn request_quotes(
+        &self,
+        request: QuoteRequest,
+        protocol_fee_bps: u64,
+    ) -> Result<QuoteRequestResult> {
         let request_id = Uuid::now_v7();
 
         info!(
@@ -54,13 +58,14 @@ impl QuoteAggregator {
             from_chain = ?request.from.chain,
             to_chain = ?request.to.chain,
             mode = ?request.mode,
+            protocol_fee_bps = protocol_fee_bps,
             "Starting quote aggregation"
         );
 
         // Broadcast quote request to all connected MMs
         let receivers = self
             .mm_registry
-            .broadcast_quote_request(&request_id, &request)
+            .broadcast_quote_request(&request_id, &request, protocol_fee_bps)
             .await;
 
         if receivers.is_empty() {
@@ -72,7 +77,7 @@ impl QuoteAggregator {
         // Collect quotes with timeout
         let collection_result = timeout(
             self.timeout_duration,
-            self.collect_quotes(receivers, request_id),
+            self.collect_quotes(receivers, request_id, protocol_fee_bps),
         )
         .await;
 
@@ -149,6 +154,7 @@ impl QuoteAggregator {
         &self,
         receivers: Vec<(Uuid, mpsc::Receiver<RFQResponse>)>,
         _request_id: Uuid,
+        expected_protocol_fee_bps: u64,
     ) -> Vec<RFQResult<Quote>> {
         let mut quotes = Vec::new();
 
@@ -159,6 +165,19 @@ impl QuoteAggregator {
                 match rx.recv().await {
                     Some(response) => match response {
                         RFQResponse::QuoteResponse { quote, .. } => {
+                            if let RFQResult::Success(ref returned_quote) = quote {
+                                if returned_quote.rates.protocol_fee_bps != expected_protocol_fee_bps
+                                {
+                                    warn!(
+                                        market_maker_id = %mm_id,
+                                        quote_id = %returned_quote.id,
+                                        expected_protocol_fee_bps = expected_protocol_fee_bps,
+                                        returned_protocol_fee_bps = returned_quote.rates.protocol_fee_bps,
+                                        "Rejecting quote with mismatched protocol fee bps"
+                                    );
+                                    return None;
+                                }
+                            }
                             // We don't check request_id since each MM gets a unique ID
                             Some((mm_id, quote))
                         }
@@ -236,7 +255,7 @@ mod tests {
             affiliate: None,
         };
 
-        let result = aggregator.request_quotes(request).await;
+        let result = aggregator.request_quotes(request, 8).await;
         assert!(matches!(
             result,
             Err(QuoteAggregatorError::NoMarketMakersConnected)

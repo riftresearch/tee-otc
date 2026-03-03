@@ -110,6 +110,7 @@ impl RfqMMRegistry {
         &self,
         request_id: &Uuid,
         request: &QuoteRequest,
+        protocol_fee_bps: u64,
     ) -> Vec<(Uuid, mpsc::Receiver<RFQResponse>)> {
         let mut receivers = Vec::new();
         let mut skipped_suspended = 0usize;
@@ -141,6 +142,7 @@ impl RfqMMRegistry {
                 payload: RFQRequest::QuoteRequested {
                     request_id: mm_request_id, // Use unique ID per MM
                     request: request.clone(),
+                    protocol_fee_bps,
                     timestamp: utc::now(),
                 },
             };

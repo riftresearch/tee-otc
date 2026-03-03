@@ -24,38 +24,11 @@ use uuid::Uuid;
 
 const QUOTE_EXPIRATION_TIME: Duration = Duration::from_secs(60 * 5);
 const FEE_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
+const MAX_PROTOCOL_FEE_BPS: u64 = 10_000;
 
 /// Default protocol fee in basis points (0.08%).
-pub const DEFAULT_PROTOCOL_FEE_BPS: u64 = 8;
-
-/// Protocol fee configuration.
-/// Affiliate-specific overrides are intentionally disabled for now.
-#[derive(Debug, Clone)]
-pub struct AffiliateFeeConfig {
-    default_bps: u64,
-}
-
-impl Default for AffiliateFeeConfig {
-    fn default() -> Self {
-        Self::new(DEFAULT_PROTOCOL_FEE_BPS)
-    }
-}
-
-impl AffiliateFeeConfig {
-    /// Creates a new config with the given default fee.
-    #[must_use]
-    pub fn new(default_bps: u64) -> Self {
-        Self { default_bps }
-    }
-
-    /// Gets the protocol fee for the given affiliate.
-    /// Affiliate overrides are currently disabled, so this always returns the default.
-    #[must_use]
-    pub fn get_fee_bps(&self, _affiliate: Option<&str>) -> u64 {
-        self.default_bps
-    }
-}
-
+#[cfg(test)]
+const DEFAULT_PROTOCOL_FEE_BPS: u64 = 8;
 
 #[derive(Debug, Snafu)]
 pub enum WrappedBitcoinQuoterError {
@@ -78,7 +51,6 @@ pub struct WrappedBitcoinQuoter {
     fee_map: Arc<RwLock<HashMap<ChainType, u64>>>,
     liquidity_cache: Arc<LiquidityCache>,
     configured_evm_chain: ChainType,
-    affiliate_fee_config: AffiliateFeeConfig,
 }
 
 impl WrappedBitcoinQuoter {
@@ -91,7 +63,6 @@ impl WrappedBitcoinQuoter {
         trade_spread_bps: u64,
         fee_safety_multiplier: f64,
         configured_evm_chain: ChainType,
-        affiliate_fee_config: AffiliateFeeConfig,
         join_set: &mut JoinSet<crate::Result<()>>,
     ) -> Self {
         let fee_map = Arc::new(RwLock::new(HashMap::new()));
@@ -117,7 +88,6 @@ impl WrappedBitcoinQuoter {
             fee_map,
             liquidity_cache,
             configured_evm_chain,
-            affiliate_fee_config,
         }
     }
 
@@ -245,6 +215,7 @@ impl WrappedBitcoinQuoter {
         &self,
         market_maker_id: Uuid,
         quote_request: &QuoteRequest,
+        protocol_fee_bps: u64,
     ) -> Result<RFQResult<Quote>> {
         if let Some(error_message) = self.is_fillable_request(quote_request) {
             debug!("Unsupported quote request: {:?}", quote_request);
@@ -282,10 +253,12 @@ impl WrappedBitcoinQuoter {
             }
         };
 
-        // Get the protocol fee (affiliate overrides currently disabled)
-        let protocol_fee_bps = self
-            .affiliate_fee_config
-            .get_fee_bps(quote_request.affiliate.as_deref());
+        if protocol_fee_bps > MAX_PROTOCOL_FEE_BPS {
+            return Ok(RFQResult::InvalidRequest(format!(
+                "Protocol fee bps {} exceeds max {}",
+                protocol_fee_bps, MAX_PROTOCOL_FEE_BPS
+            )));
+        }
 
         // Build the rates
         let rates = SwapRates::new(self.trade_spread_bps, protocol_fee_bps, network_fee_sats);
@@ -579,4 +552,5 @@ mod tests {
             );
         }
     }
+
 }

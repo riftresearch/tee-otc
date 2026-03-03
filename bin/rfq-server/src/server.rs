@@ -21,7 +21,10 @@ use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
 use metrics::{describe_gauge, gauge};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use mm_websocket_server::{MessageHandler, MessageSender};
-use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
+use otc_auth::{
+    api_keys::{FEE_SET_API_KEY, MARKET_MAKER_API_KEYS},
+    ApiKeyStore,
+};
 use otc_models::{Quote, QuoteRequest};
 use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse, RFQResult};
 use serde::{Deserialize, Serialize};
@@ -35,6 +38,9 @@ use tokio::sync::mpsc;
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
+
+const DEFAULT_PROTOCOL_FEE_BPS: u64 = 8;
+const MAX_PROTOCOL_FEE_BPS: u64 = 10_000;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -72,7 +78,7 @@ pub async fn run_server(args: RfqServerArgs) -> Result<()> {
 
     // Initialize API key store
     let api_key_store = Arc::new(
-        ApiKeyStore::new(API_KEYS.clone())
+        ApiKeyStore::new(MARKET_MAKER_API_KEYS.clone())
             .await
             .map_err(|e| crate::Error::ApiKeyLoad { source: e })?,
     );
@@ -465,7 +471,28 @@ async fn request_quotes(
         }
     }
 
-    match state.quote_aggregator.request_quotes(request).await {
+    // Fee policy:
+    // - Default to 8 bps for unauthenticated quote callers.
+    // - Allow explicit override only for the internal fee-set API key.
+    // - Pass the chosen bps explicitly to market makers via RFQ protocol.
+    let requested_protocol_fee_bps = parse_protocol_fee_bps_header(&headers)?;
+    let effective_protocol_fee_bps = if let Some(bps) = requested_protocol_fee_bps {
+        if !is_fee_override_authorized(&headers) {
+            return Err(RfqServerError::Forbidden {
+                message: "protocol fee override requires valid internal API credentials"
+                    .to_string(),
+            });
+        }
+        bps
+    } else {
+        DEFAULT_PROTOCOL_FEE_BPS
+    };
+
+    match state
+        .quote_aggregator
+        .request_quotes(request, effective_protocol_fee_bps)
+        .await
+    {
         Ok(result) => {
             info!(
                 request_id = %result.request_id,
@@ -496,6 +523,48 @@ async fn request_quotes(
             Err(err)
         }
     }
+}
+
+fn parse_protocol_fee_bps_header(headers: &HeaderMap) -> Result<Option<u64>, RfqServerError> {
+    let Some(raw) = headers
+        .get("x-protocol-fee-bps")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Ok(None);
+    };
+
+    let bps = raw.parse::<u64>().map_err(|_| RfqServerError::BadRequest {
+        message: "x-protocol-fee-bps must be an integer".to_string(),
+    })?;
+
+    if bps > MAX_PROTOCOL_FEE_BPS {
+        return Err(RfqServerError::BadRequest {
+            message: format!(
+                "x-protocol-fee-bps must be between 0 and {}",
+                MAX_PROTOCOL_FEE_BPS
+            ),
+        });
+    }
+
+    Ok(Some(bps))
+}
+
+fn is_fee_override_authorized(headers: &HeaderMap) -> bool {
+    let Some(api_id_raw) = headers.get("x-api-id").and_then(|value| value.to_str().ok()) else {
+        return false;
+    };
+    let Some(api_secret) = headers
+        .get("x-api-secret")
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+
+    let Ok(api_id) = Uuid::parse_str(api_id_raw) else {
+        return false;
+    };
+
+    api_id == FEE_SET_API_KEY.id && FEE_SET_API_KEY.verify(api_secret)
 }
 
 async fn get_liquidity(

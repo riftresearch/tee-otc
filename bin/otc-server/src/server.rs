@@ -31,7 +31,7 @@ use dstack_sdk::dstack_client::{DstackClient, GetQuoteResponse, InfoResponse};
 use metrics::{describe_counter, describe_gauge, describe_histogram, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use mm_websocket_server::{MessageHandler, MessageSender};
-use otc_auth::{api_keys::API_KEYS, ApiKeyStore};
+use otc_auth::{api_keys::MARKET_MAKER_API_KEYS, ApiKeyStore};
 use otc_chains::{bitcoin::BitcoinChain, evm::EvmChain, ChainRegistry};
 use otc_protocols::mm::{MMRequest, MMResponse, ProtocolMessage};
 use serde::{Deserialize, Serialize};
@@ -152,7 +152,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
 
     info!("Initializing services...");
 
-    let api_key_store = Arc::new(ApiKeyStore::new(API_KEYS.clone()).await?);
+    let api_key_store = Arc::new(ApiKeyStore::new(MARKET_MAKER_API_KEYS.clone()).await?);
 
     let mm_registry = Arc::new(MMRegistry::new());
 

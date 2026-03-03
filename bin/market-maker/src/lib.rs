@@ -548,7 +548,6 @@ pub async fn run_market_maker(
         args.trade_spread_bps,
         args.fee_safety_multiplier,
         args.evm_chain,
-        wrapped_bitcoin_quoter::AffiliateFeeConfig::default(),
         &mut join_set,
     ));
 

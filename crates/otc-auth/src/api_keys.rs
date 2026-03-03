@@ -2,7 +2,7 @@ use otc_models::PublicApiKeyRecord;
 use std::sync::LazyLock;
 
 // TODO: implement this as a proper API that can be used to add/remove API keys
-pub static API_KEYS: LazyLock<Vec<PublicApiKeyRecord>> = LazyLock::new(|| {
+pub static MARKET_MAKER_API_KEYS: LazyLock<Vec<PublicApiKeyRecord>> = LazyLock::new(|| {
     vec![
         // the integration tests use hardcoded API keys for the test market makers
         // we don't want these to exist in production, so hide them behind the
@@ -41,4 +41,12 @@ pub static API_KEYS: LazyLock<Vec<PublicApiKeyRecord>> = LazyLock::new(|| {
         }
 
     ]
+});
+
+pub static FEE_SET_API_KEY: LazyLock<PublicApiKeyRecord> = LazyLock::new(|| {
+    PublicApiKeyRecord {
+        id: "019cb0dc-ab53-7340-89ae-59a242e31857".parse().unwrap(),
+        tag: "rift-api-fee-master".to_string(),
+        hash: "$argon2id$v=19$m=19456,t=2,p=1$6+VxTESZo5x9nChdI1KBqQ$tYH4aBg6WGcGVwC8YSjSPmP+aLaaCjeBI+2+bVtUBlU".to_string(),
+    }
 });

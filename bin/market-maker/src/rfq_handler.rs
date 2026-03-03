@@ -41,6 +41,7 @@ impl RFQMessageHandler {
             RFQRequest::QuoteRequested {
                 request_id,
                 request,
+                protocol_fee_bps,
                 timestamp: _,
             } => {
                 let start = Instant::now();
@@ -51,7 +52,7 @@ impl RFQMessageHandler {
 
                 let quote = self
                     .wrapped_bitcoin_quoter
-                    .compute_quote(self.market_maker_id, request)
+                    .compute_quote(self.market_maker_id, request, *protocol_fee_bps)
                     .await;
                 let rfq_result = match quote {
                     Ok(quote) => quote,

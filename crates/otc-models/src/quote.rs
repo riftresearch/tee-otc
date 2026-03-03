@@ -114,7 +114,7 @@ pub struct Quote {
     #[serde(with = "u256_decimal")]
     pub max_input: U256,
 
-    /// Optional affiliate identifier that determined the protocol fee rate
+    /// Optional affiliate identifier used for attribution/reporting
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub affiliate: Option<String>,
 
@@ -129,7 +129,7 @@ pub struct QuoteRequest {
     pub to: Currency,
     /// Swap mode: ExactInput or ExactOutput with the specified amount
     pub mode: SwapMode,
-    /// Optional affiliate identifier for custom protocol fee rates
+    /// Optional affiliate identifier for attribution/reporting
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub affiliate: Option<String>,
 }
