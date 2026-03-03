@@ -43,6 +43,17 @@ pub static MARKET_MAKER_API_KEYS: LazyLock<Vec<PublicApiKeyRecord>> = LazyLock::
     ]
 });
 
+#[cfg(feature = "test-market-makers")]
+pub static FEE_SET_API_KEY: LazyLock<PublicApiKeyRecord> = LazyLock::new(|| {
+    PublicApiKeyRecord {
+        id: "d6af4f76-2b2f-4a5d-bfd8-2c1652ed6c46".parse().unwrap(),
+        tag: "test-fee-set".to_string(),
+        // Secret value for integration tests: `Bt7nDfOLlstMLLMvj3dlY3kFozxHk6An`
+        hash: "$argon2id$v=19$m=19456,t=2,p=1$xtwHECDisKE9Vpp71a0XdA$Q+d1QhDH5UGIKaFhLycFPSh7fV7bVbqR1NkKqo+W5jI".to_string(),
+    }
+});
+
+#[cfg(not(feature = "test-market-makers"))]
 pub static FEE_SET_API_KEY: LazyLock<PublicApiKeyRecord> = LazyLock::new(|| {
     PublicApiKeyRecord {
         id: "019cb0dc-ab53-7340-89ae-59a242e31857".parse().unwrap(),

@@ -62,6 +62,7 @@ pub const TEST_MARKET_MAKER_API_SECRET: &str = "Bt7nDfOLlstMLLMvj3dlY3kFozxHk6An
 pub const TEST_BASE_MARKET_MAKER_TAG: &str = "test-mm-base";
 pub const TEST_BASE_MARKET_MAKER_API_ID: &str = "f901369b-84d7-4c03-8799-f504c22125f9";
 pub const TEST_BASE_MARKET_MAKER_API_SECRET: &str = "5iAlXNoDVsGvjwiEjqhbLBVOpAN0wFZ8";
+pub const TEST_FEE_SET_API_SECRET: &str = "Bt7nDfOLlstMLLMvj3dlY3kFozxHk6An";
 
 pub const TEST_MM_WHITELIST_FILE: &str =
     "integration-tests/src/utils/test_whitelisted_market_makers.json";

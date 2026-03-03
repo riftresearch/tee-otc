@@ -24,6 +24,9 @@ mod bitcoin_wallet_test;
 mod rfq_flow_test;
 
 #[cfg(test)]
+mod rfq_fee_override_test;
+
+#[cfg(test)]
 mod price_oracle_test;
 
 #[cfg(test)]
