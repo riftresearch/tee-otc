@@ -479,7 +479,7 @@ async fn request_quotes(
     let effective_protocol_fee_bps = if let Some(bps) = requested_protocol_fee_bps {
         if !is_fee_override_authorized(&headers) {
             return Err(RfqServerError::Forbidden {
-                message: "protocol fee override requires valid internal API credentials"
+                message: "protocol fee override requires valid internal fee-set API key"
                     .to_string(),
             });
         }
@@ -550,21 +550,15 @@ fn parse_protocol_fee_bps_header(headers: &HeaderMap) -> Result<Option<u64>, Rfq
 }
 
 fn is_fee_override_authorized(headers: &HeaderMap) -> bool {
-    let Some(api_id_raw) = headers.get("x-api-id").and_then(|value| value.to_str().ok()) else {
-        return false;
-    };
-    let Some(api_secret) = headers
+    let api_key = headers
         .get("x-api-secret")
-        .and_then(|value| value.to_str().ok())
-    else {
+        .and_then(|value| value.to_str().ok());
+
+    let Some(api_key) = api_key else {
         return false;
     };
 
-    let Ok(api_id) = Uuid::parse_str(api_id_raw) else {
-        return false;
-    };
-
-    api_id == FEE_SET_API_KEY.id && FEE_SET_API_KEY.verify(api_secret)
+    FEE_SET_API_KEY.verify(api_key)
 }
 
 async fn get_liquidity(
