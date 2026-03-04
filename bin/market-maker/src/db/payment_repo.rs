@@ -230,6 +230,7 @@ impl PaymentRepository {
             FROM mm_batches
             WHERE status = 'confirmed'
               AND fee_settlement_txid IS NULL
+              AND aggregated_fee_sats > 0
             ORDER BY created_at ASC
             LIMIT $1
             "#,
@@ -566,5 +567,55 @@ fn batch_status_from_db(value: &str) -> PaymentRepositoryResult<BatchStatus> {
         other => Err(PaymentRepositoryError::UnknownBatchStatus {
             value: other.to_string(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use otc_models::ChainType;
+
+    #[sqlx::test]
+    async fn test_get_confirmed_unsettled_batches_excludes_zero_fee(
+        pool: sqlx::PgPool,
+    ) -> sqlx::Result<()> {
+        let db = crate::db::Database::from_pool(pool).await.unwrap();
+        let repo = db.payments();
+
+        let zero_fee_txid = "batch-zero-fee";
+        repo.set_batch_payment(
+            vec![Uuid::now_v7()],
+            zero_fee_txid,
+            ChainType::Bitcoin,
+            [1u8; 32],
+            0,
+        )
+        .await
+        .unwrap();
+        repo.update_batch_status(zero_fee_txid, BatchStatus::Confirmed)
+            .await
+            .unwrap();
+
+        let fee_bearing_txid = "batch-fee-bearing";
+        repo.set_batch_payment(
+            vec![Uuid::now_v7()],
+            fee_bearing_txid,
+            ChainType::Bitcoin,
+            [2u8; 32],
+            42,
+        )
+        .await
+        .unwrap();
+        repo.update_batch_status(fee_bearing_txid, BatchStatus::Confirmed)
+            .await
+            .unwrap();
+
+        let batches = repo.get_confirmed_unsettled_batches(100).await.unwrap();
+
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].txid, fee_bearing_txid);
+        assert_eq!(batches[0].aggregated_fee_sats, 42);
+
+        Ok(())
     }
 }
