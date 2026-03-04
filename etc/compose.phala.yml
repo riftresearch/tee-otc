@@ -2455,6 +2455,7 @@ services:
 
   postgres:
     image: postgres:16-alpine
+    restart: unless-stopped
     container_name: tee-otc-postgres
     environment:
       # Superuser (also used by the application)
@@ -2513,6 +2514,7 @@ services:
 
   bitcoin-core:
     container_name: tee-bitcoin-core
+    restart: unless-stopped
     build:
       context: .
       platforms:
