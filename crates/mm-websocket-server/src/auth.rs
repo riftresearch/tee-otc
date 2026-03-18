@@ -73,4 +73,3 @@ pub fn extract_auth_headers(headers: &HeaderMap) -> Result<(String, String)> {
 
     Ok((api_id, api_secret))
 }
-

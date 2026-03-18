@@ -1,9 +1,9 @@
-use async_trait::async_trait;
 use crate::db::{Deposit, DepositRepository, DepositStore, PaymentRepository, QuoteRepository};
+use crate::fee_settlement::{FeeStandingStatus, StandingRequestRegistry};
 use crate::liquidity_lock::{LiquidityLockManager, LockedLiquidity};
 use crate::payment_manager::PaymentManager;
 use crate::websocket_client::MessageHandler;
-use crate::fee_settlement::{FeeStandingStatus, StandingRequestRegistry};
+use async_trait::async_trait;
 use otc_protocols::mm::{MMRequest, MMResponse, NetworkBatch, ProtocolMessage};
 use std::sync::Arc;
 use tracing::{error, info, warn};
@@ -48,25 +48,28 @@ impl OTCMessageHandler {
                 ..
             } => {
                 info!(
-                    "Received new batches request for newest batch timestamp {:#?}", newest_batch_timestamp,
+                    "Received new batches request for newest batch timestamp {:#?}",
+                    newest_batch_timestamp,
                 );
 
-                let response = match self.payment_repository.list_batches(*newest_batch_timestamp).await { 
-                    Ok(batches) => {
-                        MMResponse::Batches {
-                            request_id: *request_id,
-                            batches: batches.into_iter().map(|batch| NetworkBatch {
+                let response = match self
+                    .payment_repository
+                    .list_batches(*newest_batch_timestamp)
+                    .await
+                {
+                    Ok(batches) => MMResponse::Batches {
+                        request_id: *request_id,
+                        batches: batches
+                            .into_iter()
+                            .map(|batch| NetworkBatch {
                                 tx_hash: batch.txid,
                                 swap_ids: batch.swap_ids,
                                 batch_nonce_digest: batch.batch_nonce_digest,
-                            }).collect(),
-                        }
-                    }
+                            })
+                            .collect(),
+                    },
                     Err(e) => {
-                        error!(
-                            "Failed to list batches: {}",
-                            e
-                        );
+                        error!("Failed to list batches: {}", e);
                         MMResponse::Error {
                             request_id: *request_id,
                             error_code: otc_protocols::mm::MMErrorCode::InternalError,
@@ -77,7 +80,7 @@ impl OTCMessageHandler {
                 };
                 Some(ProtocolMessage {
                     version: msg.version.clone(),
-                    sequence: msg.sequence + 1, 
+                    sequence: msg.sequence + 1,
                     payload: response,
                 })
             }
@@ -138,12 +141,7 @@ impl OTCMessageHandler {
                 let now = utc::now();
                 let res = self
                     .payment_repository
-                    .mark_fee_settlement_ack(
-                        tx_hash,
-                        *accepted,
-                        rejection_reason.as_deref(),
-                        now,
-                    )
+                    .mark_fee_settlement_ack(tx_hash, *accepted, rejection_reason.as_deref(), now)
                     .await;
 
                 if let Err(e) = res {
@@ -157,27 +155,22 @@ impl OTCMessageHandler {
 
                 None
             }
-            MMRequest::LatestDepositVaultTimestamp {
-                request_id,
-                ..
-            } => {
-                info!(
-                    "Received latest deposit vault timestamp request",
-                );
-                let swap_settlement_timestamp_res = self.deposit_repository.get_latest_deposit_vault_timestamp().await;
+            MMRequest::LatestDepositVaultTimestamp { request_id, .. } => {
+                info!("Received latest deposit vault timestamp request",);
+                let swap_settlement_timestamp_res = self
+                    .deposit_repository
+                    .get_latest_deposit_vault_timestamp()
+                    .await;
                 let response = match swap_settlement_timestamp_res {
                     Ok(swap_settlement_timestamp) => {
-                        MMResponse::LatestDepositVaultTimestampResponse  {
+                        MMResponse::LatestDepositVaultTimestampResponse {
                             request_id: *request_id,
                             swap_settlement_timestamp,
                             timestamp: utc::now(),
                         }
                     }
                     Err(e) => {
-                        error!(
-                            "Failed to get latest deposit vault timestamp: {}",
-                            e
-                        );
+                        error!("Failed to get latest deposit vault timestamp: {}", e);
                         MMResponse::Error {
                             request_id: *request_id,
                             error_code: otc_protocols::mm::MMErrorCode::InternalError,
@@ -378,11 +371,15 @@ impl OTCMessageHandler {
 
                 match self
                     .deposit_repository
-                    .store_deposit(&Deposit {
-                        private_key: user_deposit_private_key.to_string(),
-                        holdings: lot.clone(),
-                        funding_tx_hash: user_deposit_tx_hash.to_string(),
-                    }, *swap_settlement_timestamp, *swap_id)
+                    .store_deposit(
+                        &Deposit {
+                            private_key: user_deposit_private_key.to_string(),
+                            holdings: lot.clone(),
+                            funding_tx_hash: user_deposit_tx_hash.to_string(),
+                        },
+                        *swap_settlement_timestamp,
+                        *swap_id,
+                    )
                     .await
                 {
                     Ok(_) => {}

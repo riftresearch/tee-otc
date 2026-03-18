@@ -140,7 +140,10 @@ impl QuoteRepository {
         self.deserialize_quote(&row)
     }
 
-    pub async fn get_active_quotes(&self, market_maker_id: Uuid) -> QuoteRepositoryResult<Vec<Quote>> {
+    pub async fn get_active_quotes(
+        &self,
+        market_maker_id: Uuid,
+    ) -> QuoteRepositoryResult<Vec<Quote>> {
         let now = utc::now();
 
         let rows = sqlx::query(

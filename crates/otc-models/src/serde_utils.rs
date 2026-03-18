@@ -51,4 +51,3 @@ pub mod option_u256_decimal {
         }
     }
 }
-

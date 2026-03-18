@@ -88,8 +88,12 @@ pub fn compute_fees(mode: SwapMode, rates: &SwapRates) -> Option<FeeBreakdown> {
 ///
 /// Returns `None` if the output would be below `MIN_VIABLE_OUTPUT_SATS`.
 pub fn compute_fees_exact_input(input: u64, rates: &SwapRates) -> Option<FeeBreakdown> {
-    let liquidity_fee = input.saturating_mul(rates.liquidity_fee_bps).div_ceil(BPS_DENOM);
-    let protocol_fee = input.saturating_mul(rates.protocol_fee_bps).div_ceil(BPS_DENOM);
+    let liquidity_fee = input
+        .saturating_mul(rates.liquidity_fee_bps)
+        .div_ceil(BPS_DENOM);
+    let protocol_fee = input
+        .saturating_mul(rates.protocol_fee_bps)
+        .div_ceil(BPS_DENOM);
     let network_fee = rates.network_fee_sats;
 
     let total_fees = liquidity_fee
@@ -133,8 +137,12 @@ pub fn compute_fees_exact_output(desired_output: u64, rates: &SwapRates) -> Opti
     }
 
     // Compute pure bps-based fees (ceiling)
-    let liquidity_fee = input.saturating_mul(rates.liquidity_fee_bps).div_ceil(BPS_DENOM);
-    let protocol_fee = input.saturating_mul(rates.protocol_fee_bps).div_ceil(BPS_DENOM);
+    let liquidity_fee = input
+        .saturating_mul(rates.liquidity_fee_bps)
+        .div_ceil(BPS_DENOM);
+    let protocol_fee = input
+        .saturating_mul(rates.protocol_fee_bps)
+        .div_ceil(BPS_DENOM);
 
     // Compute what output would be with base network fee
     let base_network_fee = rates.network_fee_sats;
@@ -296,17 +304,14 @@ mod tests {
             // boundary / dust-adjacent
             MIN_VIABLE_OUTPUT_SATS,
             MIN_VIABLE_OUTPUT_SATS + 1,
-
             // small human-ish values (end in 5 / multiples of 10)
             1_000,
             1_005,
             1_010,
-
             // small primes
             997,
             1_003,
             1_009,
-
             // primes near 10^4 + human-ish
             9_970,
             9_975,
@@ -316,7 +321,6 @@ mod tests {
             10_005,
             10_010,
             10_007,
-
             // primes near 10^5 + human-ish
             99_990,
             99_995,
@@ -324,7 +328,6 @@ mod tests {
             100_005,
             99_991,
             100_003,
-
             // primes near 10^6 + human-ish
             999_980,
             999_985,
@@ -332,7 +335,6 @@ mod tests {
             1_000_005,
             999_983,
             1_000_003,
-
             // larger primes + human-ish
             10_000_000,
             10_000_005,
@@ -340,7 +342,6 @@ mod tests {
             99_999_930,
             99_999_935,
             99_999_937,
-
             // very large primes + human-ish
             1_000_000_000,
             1_000_000_005,
@@ -364,17 +365,14 @@ mod tests {
             // degenerate / boundary
             0,
             1,
-
             // small multiples of 10 + ending in 5
             500,
             505,
             510,
-
             // small primes
             499,
             503,
             509,
-
             // dust-adjacent values (end in 5 + primes nearby)
             1_490,
             1_495,
@@ -382,7 +380,6 @@ mod tests {
             1_493,
             1_499,
             1_503,
-
             // primes near 10^4 + human-ish
             9_970,
             9_975,
@@ -391,7 +388,6 @@ mod tests {
             10_010,
             9_973,
             10_007,
-
             // primes near 10^5 + human-ish
             99_990,
             99_995,
@@ -399,7 +395,6 @@ mod tests {
             100_005,
             99_991,
             100_003,
-
             // primes near 10^6 + human-ish
             999_980,
             999_985,
@@ -407,7 +402,6 @@ mod tests {
             1_000_005,
             999_983,
             1_000_003,
-
             // large primes + human-ish
             10_000_000,
             10_000_005,
@@ -415,7 +409,6 @@ mod tests {
             99_999_930,
             99_999_935,
             99_999_937,
-
             // very large primes + human-ish
             1_000_000_000,
             1_000_000_005,
@@ -496,8 +489,7 @@ mod tests {
                     assert_eq!(
                         bd.network_fee, rates.network_fee_sats,
                         "ExactInput should not bump network fee: {:?} rates={:?}",
-                        bd,
-                        rates
+                        bd, rates
                     );
                 }
             }
@@ -514,9 +506,7 @@ mod tests {
                 assert_eq!(
                     bd.output, desired_output,
                     "ExactOutput not exact: desired={} got={:?} rates={:?}",
-                    desired_output,
-                    bd,
-                    rates
+                    desired_output, bd, rates
                 );
 
                 assert_breakdown_sane(bd, rates);

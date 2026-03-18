@@ -89,10 +89,10 @@ async fn run_batch_processor(
     // Timers for each chain
     let mut ethereum_timer = interval(ethereum_interval);
     ethereum_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    
+
     let mut base_timer = interval(base_interval);
     base_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
-    
+
     let mut bitcoin_timer = interval(bitcoin_interval);
     bitcoin_timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -183,11 +183,7 @@ async fn run_batch_processor(
 }
 
 /// Processes a batch of payments for a specific chain
-async fn process_batch(
-    wallets: PaymentWallets,
-    batch: Vec<PaymentRequest>,
-    chain: ChainType,
-) {
+async fn process_batch(wallets: PaymentWallets, batch: Vec<PaymentRequest>, chain: ChainType) {
     let batch_size = batch.len();
     info!(chain = ?chain, size = batch_size, "processing payment batch");
 
@@ -198,7 +194,10 @@ async fn process_batch(
     let result = wallets
         .create_batch_payment(
             &batch.iter().map(|r| &r.lot).collect::<Vec<_>>(),
-            &batch.iter().map(|r| r.recipient.as_str()).collect::<Vec<_>>(),
+            &batch
+                .iter()
+                .map(|r| r.recipient.as_str())
+                .collect::<Vec<_>>(),
         )
         .await;
 
@@ -238,4 +237,3 @@ async fn process_batch(
         }
     }
 }
-

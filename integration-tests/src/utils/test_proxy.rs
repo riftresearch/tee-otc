@@ -64,8 +64,7 @@ impl TestProxy {
             .context(BindListenerSnafu)?;
         let listen_addr = listener.local_addr().context(LocalAddrSnafu)?;
 
-        let conns: Arc<Mutex<HashMap<ConnId, ConnControl>>> =
-            Arc::new(Mutex::new(HashMap::new()));
+        let conns: Arc<Mutex<HashMap<ConnId, ConnControl>>> = Arc::new(Mutex::new(HashMap::new()));
         let conns_accept = conns.clone();
         let next_id = Arc::new(Mutex::new(1u64));
         let next_id_accept = next_id.clone();
@@ -267,15 +266,12 @@ mod tests {
         // give the echo server a moment to be ready
         tokio::time::sleep(std::time::Duration::from_millis(10)).await;
 
-
         // spawn proxy
         let proxy = TestProxy::spawn(server_addr).await?;
         let proxy_addr = proxy.listen_addr;
 
         // connect client to proxy
-        let mut client = TcpStream::connect(proxy_addr)
-            .await
-            .context(ConnectSnafu)?;
+        let mut client = TcpStream::connect(proxy_addr).await.context(ConnectSnafu)?;
         client.write_all(b"ping").await.context(WriteSnafu)?;
         let mut buf = [0u8; 16];
         let n = client.read(&mut buf).await.context(ReadSnafu)?;
@@ -314,9 +310,7 @@ mod tests {
         let proxy_addr = proxy.listen_addr;
 
         // connect client to proxy
-        let mut client = TcpStream::connect(proxy_addr)
-            .await
-            .context(ConnectSnafu)?;
+        let mut client = TcpStream::connect(proxy_addr).await.context(ConnectSnafu)?;
         client.write_all(b"ping").await.context(WriteSnafu)?;
         let mut buf = [0u8; 16];
         let n = client.read(&mut buf).await.context(ReadSnafu)?;
@@ -351,5 +345,4 @@ mod tests {
 
         Ok(())
     }
-
 }

@@ -2,7 +2,9 @@ use alloy::signers::local::PrivateKeySigner;
 use alloy::{primitives::U256, providers::ext::AnvilApi};
 use devnet::{MultichainAccount, RiftDevnet, WithdrawalProcessingMode};
 use market_maker::{run_market_maker, wallet::Wallet, MarketMakerArgs};
-use otc_models::{Swap, SwapStatus, SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{
+    ChainType, Currency, Lot, QuoteRequest, Swap, SwapMode, SwapStatus, TokenIdentifier,
+};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::CreateSwapRequest;
 use reqwest::StatusCode;

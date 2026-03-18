@@ -12,7 +12,7 @@ use bitcoincore_rpc_async::RpcApi;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::evm_wallet::transaction_broadcaster::EVMTransactionBroadcaster;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, wallet::Wallet};
-use otc_models::{Swap, SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, Lot, QuoteRequest, Swap, SwapMode, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::{swaps::RefundSwapResponse, CreateSwapRequest};
 use reqwest::StatusCode;
@@ -539,7 +539,9 @@ async fn test_refund_from_evm_user_deposit(
     // Transfer exactly the expected amount to the deposit address
     user_token_contract
         .transfer(
-            swap.deposit_vault_address.parse().expect("valid deposit address"),
+            swap.deposit_vault_address
+                .parse()
+                .expect("valid deposit address"),
             swap.quote.min_input,
         )
         .send()

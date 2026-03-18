@@ -34,10 +34,24 @@ pub type DepositRepositoryResult<T, E = DepositRepositoryError> = std::result::R
 #[allow(async_fn_in_trait)]
 pub trait DepositStore {
     async fn balance(&self, currency: &Currency) -> DepositRepositoryResult<U256>;
-    async fn take_deposits_that_fill_lot(&self, lot: &Lot, max_deposits: Option<usize>) -> DepositRepositoryResult<FillStatus>;
-    async fn store_deposit(&self, deposit: &Deposit, swap_settlement_timestamp: DateTime<Utc>, associated_swap_id: Uuid) -> DepositRepositoryResult<()>;
-    async fn get_latest_deposit_vault_timestamp(&self) -> DepositRepositoryResult<Option<DateTime<Utc>>>;
-    async fn peek_all_available_deposits(&self, chain: Option<String>) -> DepositRepositoryResult<Vec<Deposit>>;
+    async fn take_deposits_that_fill_lot(
+        &self,
+        lot: &Lot,
+        max_deposits: Option<usize>,
+    ) -> DepositRepositoryResult<FillStatus>;
+    async fn store_deposit(
+        &self,
+        deposit: &Deposit,
+        swap_settlement_timestamp: DateTime<Utc>,
+        associated_swap_id: Uuid,
+    ) -> DepositRepositoryResult<()>;
+    async fn get_latest_deposit_vault_timestamp(
+        &self,
+    ) -> DepositRepositoryResult<Option<DateTime<Utc>>>;
+    async fn peek_all_available_deposits(
+        &self,
+        chain: Option<String>,
+    ) -> DepositRepositoryResult<Vec<Deposit>>;
     async fn unreserve_deposits(&self, private_keys: &[String]) -> DepositRepositoryResult<usize>;
 }
 
@@ -155,7 +169,9 @@ impl DepositStore for DepositRepository {
         Ok(amount)
     }
 
-    async fn get_latest_deposit_vault_timestamp(&self) -> DepositRepositoryResult<Option<DateTime<Utc>>> {
+    async fn get_latest_deposit_vault_timestamp(
+        &self,
+    ) -> DepositRepositoryResult<Option<DateTime<Utc>>> {
         let row: Option<(Option<DateTime<Utc>>,)> = sqlx::query_as(
             r#"
             SELECT MAX(created_at)
@@ -163,12 +179,17 @@ impl DepositStore for DepositRepository {
             "#,
         )
         .fetch_optional(&self.pool)
-        .await.context(DatabaseSnafu)?;
+        .await
+        .context(DatabaseSnafu)?;
 
         Ok(row.and_then(|t| t.0))
     }
 
-    async fn take_deposits_that_fill_lot(&self, lot: &Lot, max_deposits: Option<usize>) -> DepositRepositoryResult<FillStatus> {
+    async fn take_deposits_that_fill_lot(
+        &self,
+        lot: &Lot,
+        max_deposits: Option<usize>,
+    ) -> DepositRepositoryResult<FillStatus> {
         let (chain, token, decimals) = Self::serialize_currency(&lot.currency);
         let target = lot.amount.to_string();
         let reservation_id = Uuid::now_v7();
@@ -305,7 +326,12 @@ impl DepositStore for DepositRepository {
         }
     }
 
-    async fn store_deposit(&self, deposit: &Deposit, swap_settlement_timestamp: DateTime<Utc>, associated_swap_id: Uuid) -> DepositRepositoryResult<()> {
+    async fn store_deposit(
+        &self,
+        deposit: &Deposit,
+        swap_settlement_timestamp: DateTime<Utc>,
+        associated_swap_id: Uuid,
+    ) -> DepositRepositoryResult<()> {
         let (chain, token, decimals) = Self::serialize_currency(&deposit.holdings.currency);
         let amount = deposit.holdings.amount.to_string();
         let created_at = swap_settlement_timestamp;
@@ -333,7 +359,10 @@ impl DepositStore for DepositRepository {
         Ok(())
     }
 
-    async fn peek_all_available_deposits(&self, chain: Option<String>) -> DepositRepositoryResult<Vec<Deposit>> {
+    async fn peek_all_available_deposits(
+        &self,
+        chain: Option<String>,
+    ) -> DepositRepositoryResult<Vec<Deposit>> {
         let rows: Vec<PgRow> = if let Some(chain_filter) = chain {
             sqlx::query(
                 r#"
@@ -363,7 +392,7 @@ impl DepositStore for DepositRepository {
         };
 
         let mut deposits = Vec::with_capacity(rows.len());
-        
+
         for row in rows {
             let private_key: String = row.get("private_key");
             let chain: String = row.get("chain");
@@ -379,10 +408,7 @@ impl DepositStore for DepositRepository {
 
             deposits.push(Deposit {
                 private_key,
-                holdings: Lot {
-                    currency,
-                    amount,
-                },
+                holdings: Lot { currency, amount },
                 funding_tx_hash,
             });
         }

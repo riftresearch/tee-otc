@@ -12,12 +12,9 @@ use market_maker::{
     bitcoin_wallet::BitcoinWallet, evm_wallet::EVMWallet, run_market_maker, wallet::Wallet,
 };
 use otc_chains::traits::Payment;
-use otc_models::{Swap, SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, Lot, QuoteRequest, Swap, SwapMode, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
-use otc_server::{
-    api::CreateSwapRequest,
-    server::run_server,
-};
+use otc_server::{api::CreateSwapRequest, server::run_server};
 use reqwest::StatusCode;
 use sqlx::PgPool;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};

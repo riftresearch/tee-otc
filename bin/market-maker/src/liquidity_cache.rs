@@ -53,7 +53,7 @@ impl LiquidityCache {
     ) -> Self {
         let cached_data = Arc::new(RwLock::new(Vec::new()));
         let balance_map = Arc::new(RwLock::new(HashMap::new()));
-        
+
         let balance_map_task = balance_map.clone();
         let wallet_manager_task = wallet_manager.clone();
 
@@ -212,13 +212,13 @@ impl LiquidityCache {
         to: &Currency,
     ) -> Option<U256> {
         let balance = self.get_cached_balance(to.chain, &to.token).await?;
-        
+
         // Get fresh lock data for this trading pair
         let locked_amount = self.lock_manager.get_locked_amount(from, to).await;
-        
+
         // Calculate available balance (what's actually available for new quotes)
         let available_balance = balance.total_balance.saturating_sub(locked_amount);
-        
+
         Some(available_balance)
     }
 
@@ -226,11 +226,7 @@ impl LiquidityCache {
     ///
     /// This is consistent with what the liquidity endpoint reports.
     /// Returns `None` if the balance is not cached or not available.
-    pub async fn get_max_output_for_pair(
-        &self,
-        from: &Currency,
-        to: &Currency,
-    ) -> Option<U256> {
+    pub async fn get_max_output_for_pair(&self, from: &Currency, to: &Currency) -> Option<U256> {
         let available_balance = self.get_available_balance_for_pair(from, to).await?;
         Some(self.balance_strategy.max_output_amount(available_balance))
     }
@@ -247,15 +243,16 @@ impl LiquidityCache {
         let Some(available_balance) = self.get_available_balance_for_pair(from, to).await else {
             return false;
         };
-        
-        self.balance_strategy.can_fill_quote(quote_amount, available_balance)
+
+        self.balance_strategy
+            .can_fill_quote(quote_amount, available_balance)
     }
 
     /// Compute liquidity for the two supported trading pairs: BTC->cbBTC and cbBTC->BTC.
     ///
     /// This is used by the background task and doesn't require `&self`.
     /// Uses cached balances from balance_map instead of calling wallet.balance() directly.
-    /// 
+    ///
     /// # Arguments
     /// * `evm_chain` - The EVM chain (Ethereum or Base) to use for cbBTC
     /// * `emit_metrics` - If true, emits Prometheus metrics. Set to false to reduce metric update frequency.

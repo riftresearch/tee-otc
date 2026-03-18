@@ -1,7 +1,7 @@
 use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
-use otc_models::Lot;
 use otc_models::ChainType;
+use otc_models::Lot;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -71,12 +71,10 @@ pub enum MMRequest {
     },
 
     /// Ask the MM to tell us the swap_settlement_timestamp of their newest deposit vault
-    LatestDepositVaultTimestamp { 
-        request_id: Uuid,
-    },
+    LatestDepositVaultTimestamp { request_id: Uuid },
 
     /// Ask the MM for any batches they have that are newer than the newest batch we've seen
-    NewBatches { 
+    NewBatches {
         request_id: Uuid,
         newest_batch_timestamp: Option<DateTime<Utc>>,
     },
@@ -108,7 +106,7 @@ pub enum MMRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NetworkBatch { 
+pub struct NetworkBatch {
     pub tx_hash: String,
     pub swap_ids: Vec<Uuid>,
     pub batch_nonce_digest: [u8; 32],
@@ -128,7 +126,7 @@ pub enum MMResponse {
         rejection_reason: Option<String>,
         timestamp: DateTime<Utc>,
     },
-    
+
     /// Response to `LatestDepositVaultTimestamp`
     /// Will give us the swap_settlement_timestamp of their newest deposit vault
     LatestDepositVaultTimestampResponse {

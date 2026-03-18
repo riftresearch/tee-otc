@@ -166,7 +166,8 @@ impl QuoteAggregator {
                     Some(response) => match response {
                         RFQResponse::QuoteResponse { quote, .. } => {
                             if let RFQResult::Success(ref returned_quote) = quote {
-                                if returned_quote.rates.protocol_fee_bps != expected_protocol_fee_bps
+                                if returned_quote.rates.protocol_fee_bps
+                                    != expected_protocol_fee_bps
                                 {
                                     warn!(
                                         market_maker_id = %mm_id,

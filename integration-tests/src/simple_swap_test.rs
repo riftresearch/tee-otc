@@ -13,13 +13,9 @@ use market_maker::evm_wallet::EVMWallet;
 use market_maker::wallet::Wallet;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, MarketMakerArgs};
 use otc_chains::traits::Payment;
-use otc_models::{Swap, SwapMode, ChainType, Currency, Lot, Quote, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, Lot, Quote, QuoteRequest, Swap, SwapMode, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
-use otc_server::{
-    api::CreateSwapRequest,
-    server::run_server,
-    OtcServerArgs,
-};
+use otc_server::{api::CreateSwapRequest, server::run_server, OtcServerArgs};
 use reqwest::StatusCode;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::time::{Duration, Instant};

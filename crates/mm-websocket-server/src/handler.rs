@@ -88,4 +88,3 @@ impl MessageSender {
             .map_err(|_| MessageError::ChannelClosed)
     }
 }
-

@@ -9,12 +9,12 @@ use alloy::eips::BlockNumberOrTag;
 use alloy::providers::DynProvider;
 use alloy::{primitives::U256, providers::Provider};
 use blockchain_utils::MempoolEsploraFeeExt;
+#[cfg(test)]
+use otc_models::MIN_VIABLE_OUTPUT_SATS;
 use otc_models::{
     compute_fees, compute_max_input_for_output, compute_min_viable_input, constants, ChainType,
     Fees, Lot, Quote, QuoteRequest, SwapRates, TokenIdentifier,
 };
-#[cfg(test)]
-use otc_models::MIN_VIABLE_OUTPUT_SATS;
 use otc_protocols::rfq::RFQResult;
 use snafu::{Location, Snafu};
 use tokio::sync::RwLock;
@@ -150,9 +150,7 @@ impl WrappedBitcoinQuoter {
             {
                 Some(mid_priority_wei) => mid_priority_wei,
                 None => {
-                    warn!(
-                        "Failed to get mid priority fee from fee_history, trying again later..."
-                    );
+                    warn!("Failed to get mid priority fee from fee_history, trying again later...");
                     tokio::time::sleep(FEE_UPDATE_INTERVAL).await;
                     continue;
                 }
@@ -243,7 +241,12 @@ impl WrappedBitcoinQuoter {
         }
 
         // Get network fee for the destination chain (where MM sends funds)
-        let network_fee_sats = match self.fee_map.read().await.get(&quote_request.to.chain).cloned()
+        let network_fee_sats = match self
+            .fee_map
+            .read()
+            .await
+            .get(&quote_request.to.chain)
+            .cloned()
         {
             Some(fee) => fee,
             None => {
@@ -552,5 +555,4 @@ mod tests {
             );
         }
     }
-
 }

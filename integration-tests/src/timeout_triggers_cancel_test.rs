@@ -13,13 +13,9 @@ use market_maker::wallet::Wallet;
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, MarketMakerArgs};
 use mock_instant::global::MockClock;
 use otc_chains::traits::Payment;
-use otc_models::{Swap, SwapMode, ChainType, Currency, Lot, Quote, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, Lot, Quote, QuoteRequest, Swap, SwapMode, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
-use otc_server::{
-    api::CreateSwapRequest,
-    server::run_server,
-    OtcServerArgs,
-};
+use otc_server::{api::CreateSwapRequest, server::run_server, OtcServerArgs};
 use reqwest::StatusCode;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::str::FromStr;
@@ -269,13 +265,8 @@ async fn test_swap_from_ethereum_to_bitcoin_mm_timeout_triggers_cancel(
         .unwrap();
 
     info!("Tx status: {:#?}", get_tx_status);
-    let swap_result = wait_for_swap_status(
-        &client,
-        otc_port,
-        swap.id,
-        "WaitingMMDepositConfirmed",
-    )
-    .await;
+    let swap_result =
+        wait_for_swap_status(&client, otc_port, swap.id, "WaitingMMDepositConfirmed").await;
 
     let mm_deposit_tx = swap_result
         .mm_deposit_status

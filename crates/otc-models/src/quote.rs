@@ -1,8 +1,8 @@
 use crate::{serde_utils::u256_decimal, ChainType, SwapMode, SwapRates};
 use alloy::primitives::{keccak256, U256};
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize, Serializer};
 use serde::de::Deserializer;
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 

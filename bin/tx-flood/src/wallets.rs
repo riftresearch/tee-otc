@@ -153,10 +153,7 @@ impl PaymentWallets {
         }
     }
 
-    fn dedicated(
-        funding_wallet: SinglePaymentWallet,
-        dedicated: DedicatedWallets,
-    ) -> Self {
+    fn dedicated(funding_wallet: SinglePaymentWallet, dedicated: DedicatedWallets) -> Self {
         Self {
             mode: Arc::new(PaymentWalletMode::Dedicated {
                 _funding_wallet: funding_wallet,
@@ -208,19 +205,25 @@ impl PaymentWallets {
                 ..
             } => match lot.currency.chain {
                 ChainType::Bitcoin => {
-                    let (wallet, sender_address) = bitcoin.as_ref().context("missing bitcoin wallet")?;
-                    let tx_hash =
-                        create_bitcoin_payment_with_retry(wallet, lot, recipient).await?;
+                    let (wallet, sender_address) =
+                        bitcoin.as_ref().context("missing bitcoin wallet")?;
+                    let tx_hash = create_bitcoin_payment_with_retry(wallet, lot, recipient).await?;
                     Ok((tx_hash, sender_address.clone()))
                 }
                 ChainType::Ethereum => {
-                    let (wallet, provider) = ethereum.as_ref().context("missing ethereum wallet")?;
-                    let wallet = SinglePaymentWallet::Evm(wallet.clone(), provider.clone(), ChainType::Ethereum);
+                    let (wallet, provider) =
+                        ethereum.as_ref().context("missing ethereum wallet")?;
+                    let wallet = SinglePaymentWallet::Evm(
+                        wallet.clone(),
+                        provider.clone(),
+                        ChainType::Ethereum,
+                    );
                     wallet.create_payment(lot, recipient).await
                 }
                 ChainType::Base => {
                     let (wallet, provider) = base.as_ref().context("missing base wallet")?;
-                    let wallet = SinglePaymentWallet::Evm(wallet.clone(), provider.clone(), ChainType::Base);
+                    let wallet =
+                        SinglePaymentWallet::Evm(wallet.clone(), provider.clone(), ChainType::Base);
                     wallet.create_payment(lot, recipient).await
                 }
             },
@@ -239,16 +242,24 @@ impl PaymentWallets {
 
                 match chain {
                     ChainType::Bitcoin => {
-                        bitcoin.as_ref().context("missing dedicated bitcoin wallets")?
-                            .create_payment(*wallet_index, lot, recipient).await
+                        bitcoin
+                            .as_ref()
+                            .context("missing dedicated bitcoin wallets")?
+                            .create_payment(*wallet_index, lot, recipient)
+                            .await
                     }
                     ChainType::Ethereum => {
-                        ethereum.as_ref().context("missing dedicated ethereum wallets")?
-                            .create_payment(*wallet_index, lot, recipient).await
+                        ethereum
+                            .as_ref()
+                            .context("missing dedicated ethereum wallets")?
+                            .create_payment(*wallet_index, lot, recipient)
+                            .await
                     }
                     ChainType::Base => {
-                        base.as_ref().context("missing dedicated base wallets")?
-                            .create_payment(*wallet_index, lot, recipient).await
+                        base.as_ref()
+                            .context("missing dedicated base wallets")?
+                            .create_payment(*wallet_index, lot, recipient)
+                            .await
                     }
                 }
             }
@@ -262,9 +273,11 @@ impl PaymentWallets {
         recipients: &[&str],
     ) -> Result<(String, String)> {
         if lots.is_empty() {
-            return Err(anyhow::anyhow!("cannot create batch payment with zero lots"));
+            return Err(anyhow::anyhow!(
+                "cannot create batch payment with zero lots"
+            ));
         }
-        
+
         if lots.len() != recipients.len() {
             return Err(anyhow::anyhow!(
                 "lots and recipients length mismatch: {} vs {}",
@@ -295,23 +308,26 @@ impl PaymentWallets {
                 ..
             } => match chain {
                 ChainType::Bitcoin => {
-                    let (wallet, sender_address) = bitcoin.as_ref().context("missing bitcoin wallet")?;
-                    self.create_batch_payment_bitcoin(wallet, sender_address, lots, recipients).await
+                    let (wallet, sender_address) =
+                        bitcoin.as_ref().context("missing bitcoin wallet")?;
+                    self.create_batch_payment_bitcoin(wallet, sender_address, lots, recipients)
+                        .await
                 }
                 ChainType::Ethereum => {
-                    let (wallet, provider) = ethereum.as_ref().context("missing ethereum wallet")?;
-                    self.create_batch_payment_evm(wallet, provider, lots, recipients).await
+                    let (wallet, provider) =
+                        ethereum.as_ref().context("missing ethereum wallet")?;
+                    self.create_batch_payment_evm(wallet, provider, lots, recipients)
+                        .await
                 }
                 ChainType::Base => {
                     let (wallet, provider) = base.as_ref().context("missing base wallet")?;
-                    self.create_batch_payment_evm(wallet, provider, lots, recipients).await
+                    self.create_batch_payment_evm(wallet, provider, lots, recipients)
+                        .await
                 }
             },
-            PaymentWalletMode::Dedicated { .. } | PaymentWalletMode::MultiDedicated { .. } => {
-                Err(anyhow::anyhow!(
-                    "batch payments are not supported with dedicated wallets"
-                ))
-            }
+            PaymentWalletMode::Dedicated { .. } | PaymentWalletMode::MultiDedicated { .. } => Err(
+                anyhow::anyhow!("batch payments are not supported with dedicated wallets"),
+            ),
         }
     }
 
@@ -408,12 +424,8 @@ impl PaymentWallets {
         let payment_executions =
             create_payment_executions(&token_contract, &sender, &recipient_addresses, &amounts);
 
-        let transaction_request = build_transaction_with_validation(
-            &sender,
-            provider.clone(),
-            payment_executions,
-            None,
-        )?;
+        let transaction_request =
+            build_transaction_with_validation(&sender, provider.clone(), payment_executions, None)?;
 
         let wallet_result = broadcaster
             .broadcast_transaction(transaction_request, PreflightCheck::Simulate)
@@ -431,15 +443,20 @@ impl PaymentWallets {
     }
 
     /// Get the EVM account address that should control this swap
-    pub fn get_evm_account_address(&self, swap_index: usize, recipient_evm_address: &str) -> Result<Address> {
+    pub fn get_evm_account_address(
+        &self,
+        swap_index: usize,
+        recipient_evm_address: &str,
+    ) -> Result<Address> {
         match self.mode.as_ref() {
             PaymentWalletMode::Shared(wallet) => {
                 match wallet {
                     SinglePaymentWallet::Evm(broadcaster, _, _) => Ok(broadcaster.sender),
                     SinglePaymentWallet::Bitcoin(_, _) => {
                         // BtcStart shared mode: use the recipient_evm_address from config
-                        recipient_evm_address.parse::<Address>()
-                            .with_context(|| format!("invalid recipient EVM address: {}", recipient_evm_address))
+                        recipient_evm_address.parse::<Address>().with_context(|| {
+                            format!("invalid recipient EVM address: {}", recipient_evm_address)
+                        })
                     }
                 }
             }
@@ -450,25 +467,24 @@ impl PaymentWallets {
                 recipient_evm_address,
                 ..
             } => {
-                let source_chain = source_chain_mapping.get(swap_index).copied().unwrap_or(ChainType::Bitcoin);
+                let source_chain = source_chain_mapping
+                    .get(swap_index)
+                    .copied()
+                    .unwrap_or(ChainType::Bitcoin);
                 match source_chain {
                     ChainType::Ethereum => {
-                        let (broadcaster, _) = ethereum.as_ref().context("missing ethereum wallet")?;
+                        let (broadcaster, _) =
+                            ethereum.as_ref().context("missing ethereum wallet")?;
                         Ok(broadcaster.sender)
                     }
                     ChainType::Base => {
                         let (broadcaster, _) = base.as_ref().context("missing base wallet")?;
                         Ok(broadcaster.sender)
                     }
-                    ChainType::Bitcoin => {
-                        Ok(*recipient_evm_address)
-                    }
+                    ChainType::Bitcoin => Ok(*recipient_evm_address),
                 }
             }
-            PaymentWalletMode::Dedicated {
-                dedicated,
-                ..
-            } => {
+            PaymentWalletMode::Dedicated { dedicated, .. } => {
                 match dedicated {
                     DedicatedWallets::Evm(wallets, _) => {
                         // EthStart/BaseStart dedicated: use the dedicated wallet address
@@ -488,8 +504,9 @@ impl PaymentWallets {
                         // For now, using recipient_evm_address as per generic logic, or we should re-add random addresses if strictly needed.
                         // Re-reading original code: BtcStart dedicated used `random_evm_addresses`.
                         // I'll assume we can just use the recipient address for simplicity in this refactor unless needed.
-                        recipient_evm_address.parse::<Address>()
-                            .with_context(|| format!("invalid recipient EVM address: {}", recipient_evm_address))
+                        recipient_evm_address.parse::<Address>().with_context(|| {
+                            format!("invalid recipient EVM address: {}", recipient_evm_address)
+                        })
                     }
                 }
             }
@@ -504,20 +521,22 @@ impl PaymentWallets {
                     .ok_or_else(|| anyhow::anyhow!("no wallet mapping for swap {}", swap_index))?;
 
                 match source_chain {
-                    ChainType::Ethereum => {
-                        ethereum.as_ref().context("missing ethereum dedicated wallets")?
-                            .wallets
-                            .get(*wallet_index)
-                            .map(|w| w.address())
-                            .ok_or_else(|| anyhow::anyhow!("no EVM wallet for index {}", wallet_index))
-                    }
-                    ChainType::Base => {
-                        base.as_ref().context("missing base dedicated wallets")?
-                            .wallets
-                            .get(*wallet_index)
-                            .map(|w| w.address())
-                            .ok_or_else(|| anyhow::anyhow!("no Base wallet for index {}", wallet_index))
-                    }
+                    ChainType::Ethereum => ethereum
+                        .as_ref()
+                        .context("missing ethereum dedicated wallets")?
+                        .wallets
+                        .get(*wallet_index)
+                        .map(|w| w.address())
+                        .ok_or_else(|| anyhow::anyhow!("no EVM wallet for index {}", wallet_index)),
+                    ChainType::Base => base
+                        .as_ref()
+                        .context("missing base dedicated wallets")?
+                        .wallets
+                        .get(*wallet_index)
+                        .map(|w| w.address())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!("no Base wallet for index {}", wallet_index)
+                        }),
                     ChainType::Bitcoin => {
                         // For Bitcoin swaps, we need an EVM address to receive funds.
                         // In RandStart, we might be receiving on Eth or Base.
@@ -532,8 +551,8 @@ impl PaymentWallets {
                         // Or better, since `RandStart` creates wallets for ALL swaps, we can just use `wallet_index` into either?
                         // Wait, `RandStart` logic in `args.rs` generates separate counts.
                         // In `setup_wallets`, we should create dedicated wallets for ALL needed slots.
-                        
-                        // Let's fallback to recipient_evm_address for now if we can't easily decide, 
+
+                        // Let's fallback to recipient_evm_address for now if we can't easily decide,
                         // OR use the `wallet_index` to pick from `ethereum` or `base` depending on which is available?
                         // Actually, for `BtcStart`, we are receiving. If `dedicated_wallets` is on, we probably want to receive into a unique address.
                         // Let's use the `ethereum` wallet at `wallet_index` if available, else `base`.
@@ -547,8 +566,9 @@ impl PaymentWallets {
                                 return Ok(w.address());
                             }
                         }
-                         recipient_evm_address.parse::<Address>()
-                            .with_context(|| format!("invalid recipient EVM address: {}", recipient_evm_address))
+                        recipient_evm_address.parse::<Address>().with_context(|| {
+                            format!("invalid recipient EVM address: {}", recipient_evm_address)
+                        })
                     }
                 }
             }
@@ -648,7 +668,10 @@ async fn create_bitcoin_payment_with_retry_batch(
         {
             Ok(txid) => {
                 if attempt > 1 {
-                    debug!(attempt = attempt, "bitcoin batch payment succeeded after retry");
+                    debug!(
+                        attempt = attempt,
+                        "bitcoin batch payment succeeded after retry"
+                    );
                 }
                 return Ok(txid);
             }
@@ -885,9 +908,17 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
 
     let payment_wallets = match &config.mode {
         SwapMode::EthToBtc => {
-            let evm_cfg = config.evm.as_ref().context("missing Ethereum wallet configuration")?;
-            let (broadcaster, provider, _) = create_evm_funding_wallet(evm_cfg, ChainType::Ethereum, &mut join_set).await?;
-            let funding_wallet = SinglePaymentWallet::Evm(broadcaster.clone(), provider.clone(), ChainType::Ethereum);
+            let evm_cfg = config
+                .evm
+                .as_ref()
+                .context("missing Ethereum wallet configuration")?;
+            let (broadcaster, provider, _) =
+                create_evm_funding_wallet(evm_cfg, ChainType::Ethereum, &mut join_set).await?;
+            let funding_wallet = SinglePaymentWallet::Evm(
+                broadcaster.clone(),
+                provider.clone(),
+                ChainType::Ethereum,
+            );
 
             if config.dedicated_wallets.enabled {
                 let dedicated = create_dedicated_wallets(&funding_wallet, config).await?;
@@ -898,9 +929,14 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
             }
         }
         SwapMode::BaseToBtc => {
-            let base_cfg = config.base.as_ref().context("missing Base wallet configuration")?;
-            let (broadcaster, provider, _) = create_evm_funding_wallet(base_cfg, ChainType::Base, &mut join_set).await?;
-            let funding_wallet = SinglePaymentWallet::Evm(broadcaster.clone(), provider.clone(), ChainType::Base);
+            let base_cfg = config
+                .base
+                .as_ref()
+                .context("missing Base wallet configuration")?;
+            let (broadcaster, provider, _) =
+                create_evm_funding_wallet(base_cfg, ChainType::Base, &mut join_set).await?;
+            let funding_wallet =
+                SinglePaymentWallet::Evm(broadcaster.clone(), provider.clone(), ChainType::Base);
 
             if config.dedicated_wallets.enabled {
                 let dedicated = create_dedicated_wallets(&funding_wallet, config).await?;
@@ -911,7 +947,10 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
             }
         }
         SwapMode::BtcToEth => {
-            let btc_cfg = config.bitcoin.as_ref().context("missing Bitcoin wallet configuration")?;
+            let btc_cfg = config
+                .bitcoin
+                .as_ref()
+                .context("missing Bitcoin wallet configuration")?;
             let (broadcaster, address) = create_btc_funding_wallet(btc_cfg, &mut join_set).await?;
             let funding_wallet = SinglePaymentWallet::Bitcoin(broadcaster.clone(), address);
 
@@ -924,7 +963,10 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
             }
         }
         SwapMode::BtcToBase => {
-            let btc_cfg = config.bitcoin.as_ref().context("missing Bitcoin wallet configuration")?;
+            let btc_cfg = config
+                .bitcoin
+                .as_ref()
+                .context("missing Bitcoin wallet configuration")?;
             let (broadcaster, address) = create_btc_funding_wallet(btc_cfg, &mut join_set).await?;
             let funding_wallet = SinglePaymentWallet::Bitcoin(broadcaster.clone(), address);
 
@@ -947,7 +989,8 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
 
             let ethereum = if config.evm.is_some() {
                 let cfg = config.evm.as_ref().unwrap();
-                let (b, p, _) = create_evm_funding_wallet(cfg, ChainType::Ethereum, &mut join_set).await?;
+                let (b, p, _) =
+                    create_evm_funding_wallet(cfg, ChainType::Ethereum, &mut join_set).await?;
                 Some((b, p))
             } else {
                 None
@@ -955,14 +998,19 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
 
             let base = if config.base.is_some() {
                 let cfg = config.base.as_ref().unwrap();
-                let (b, p, _) = create_evm_funding_wallet(cfg, ChainType::Base, &mut join_set).await?;
+                let (b, p, _) =
+                    create_evm_funding_wallet(cfg, ChainType::Base, &mut join_set).await?;
                 Some((b, p))
             } else {
                 None
             };
 
-            let source_chain_mapping: Vec<ChainType> = directions.iter().map(|d| d.from_currency.chain).collect();
-            let recipient_evm_address = config.recipient_evm_address.parse::<Address>().context("invalid recipient EVM address")?;
+            let source_chain_mapping: Vec<ChainType> =
+                directions.iter().map(|d| d.from_currency.chain).collect();
+            let recipient_evm_address = config
+                .recipient_evm_address
+                .parse::<Address>()
+                .context("invalid recipient EVM address")?;
 
             if config.dedicated_wallets.enabled {
                 // Determine how many dedicated wallets of each type we need
@@ -990,10 +1038,13 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
                 }
 
                 let bitcoin_dedicated = if btc_index > 0 {
-                    let cfg = config.bitcoin.as_ref().context("missing bitcoin config for dedicated wallets")?;
+                    let cfg = config
+                        .bitcoin
+                        .as_ref()
+                        .context("missing bitcoin config for dedicated wallets")?;
                     let wallets = create_bitcoin_dedicated_wallets_count(cfg, btc_index).await?;
                     if let Some((broadcaster, _)) = &bitcoin {
-                         fund_bitcoin_wallets_dedicated(broadcaster, config, &wallets).await?;
+                        fund_bitcoin_wallets_dedicated(broadcaster, config, &wallets).await?;
                     }
                     Some(wallets)
                 } else {
@@ -1001,10 +1052,20 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
                 };
 
                 let ethereum_dedicated = if eth_index > 0 {
-                    let cfg = config.evm.as_ref().context("missing ethereum config for dedicated wallets")?;
+                    let cfg = config
+                        .evm
+                        .as_ref()
+                        .context("missing ethereum config for dedicated wallets")?;
                     let wallets = create_evm_dedicated_wallets_count(cfg, eth_index).await?;
                     if let Some((broadcaster, provider)) = &ethereum {
-                        fund_evm_wallets_dedicated(broadcaster, provider.clone(), config, &wallets, ChainType::Ethereum).await?;
+                        fund_evm_wallets_dedicated(
+                            broadcaster,
+                            provider.clone(),
+                            config,
+                            &wallets,
+                            ChainType::Ethereum,
+                        )
+                        .await?;
                     }
                     Some(wallets)
                 } else {
@@ -1012,10 +1073,20 @@ pub async fn setup_wallets(config: &Config) -> Result<WalletResources> {
                 };
 
                 let base_dedicated = if base_index > 0 {
-                    let cfg = config.base.as_ref().context("missing base config for dedicated wallets")?;
+                    let cfg = config
+                        .base
+                        .as_ref()
+                        .context("missing base config for dedicated wallets")?;
                     let wallets = create_evm_dedicated_wallets_count(cfg, base_index).await?;
                     if let Some((broadcaster, provider)) = &base {
-                        fund_evm_wallets_dedicated(broadcaster, provider.clone(), config, &wallets, ChainType::Base).await?;
+                        fund_evm_wallets_dedicated(
+                            broadcaster,
+                            provider.clone(),
+                            config,
+                            &wallets,
+                            ChainType::Base,
+                        )
+                        .await?;
                     }
                     Some(wallets)
                 } else {
@@ -1116,14 +1187,26 @@ async fn create_dedicated_wallets(
         }
         SinglePaymentWallet::Evm(broadcaster, provider, chain) => {
             let evm_cfg = match chain {
-                ChainType::Ethereum => config.evm.as_ref().context("missing Ethereum wallet configuration")?,
-                ChainType::Base => config.base.as_ref().context("missing Base wallet configuration")?,
+                ChainType::Ethereum => config
+                    .evm
+                    .as_ref()
+                    .context("missing Ethereum wallet configuration")?,
+                ChainType::Base => config
+                    .base
+                    .as_ref()
+                    .context("missing Base wallet configuration")?,
                 _ => bail!("unsupported EVM chain for dedicated wallets: {:?}", chain),
             };
             let dedicated_wallets =
                 create_evm_dedicated_wallets_count(evm_cfg, config.total_swaps).await?;
-            fund_evm_wallets_dedicated(broadcaster, provider.clone(), config, &dedicated_wallets, *chain)
-                .await?;
+            fund_evm_wallets_dedicated(
+                broadcaster,
+                provider.clone(),
+                config,
+                &dedicated_wallets,
+                *chain,
+            )
+            .await?;
             Ok(DedicatedWallets::Evm(dedicated_wallets, *chain))
         }
     }

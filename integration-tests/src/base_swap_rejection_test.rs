@@ -2,7 +2,7 @@ use alloy::primitives::U256;
 use bitcoincore_rpc_async::RpcApi;
 use devnet::{bitcoin_devnet::MiningMode, MultichainAccount, RiftDevnet};
 use market_maker::run_market_maker;
-use otc_models::{SwapMode, ChainType, Currency, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, QuoteRequest, SwapMode, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::server::run_server;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};

@@ -301,7 +301,7 @@ impl Args {
                 "min_amount must be less than or equal to max_amount"
             ));
         }
-        
+
         // Invariant: batching and dedicated wallets are mutually exclusive
         if enable_batching && dedicated_wallets {
             return Err(anyhow!(

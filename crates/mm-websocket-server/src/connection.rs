@@ -13,7 +13,9 @@ use uuid::Uuid;
 #[derive(Debug, Snafu)]
 pub enum ConnectionError {
     #[snafu(display("Handler error: {}", source))]
-    HandlerError { source: crate::handler::MessageError },
+    HandlerError {
+        source: crate::handler::MessageError,
+    },
 
     #[snafu(display("WebSocket error: {}", message))]
     WebSocketError { message: String },
@@ -71,7 +73,10 @@ pub async fn handle_mm_connection<H: MessageHandler>(
     tasks.spawn(async move {
         while let Some(msg) = outgoing_rx.recv().await {
             if sender_tx_clone.send(msg).await.is_err() {
-                error!("Failed to forward message from registry for MM {}", mm_id_clone);
+                error!(
+                    "Failed to forward message from registry for MM {}",
+                    mm_id_clone
+                );
                 break;
             }
         }
@@ -154,4 +159,3 @@ pub async fn handle_mm_connection<H: MessageHandler>(
 
     Ok(())
 }
-

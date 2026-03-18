@@ -15,13 +15,13 @@ use alloy::providers::Provider;
 use alloy::signers::local::PrivateKeySigner;
 use devnet::bitcoin_devnet::MiningMode;
 use devnet::{MultichainAccount, RiftDevnet};
-use mock_instant::global::MockClock;
 use eip3009_erc20_contract::GenericEIP3009ERC20::GenericEIP3009ERC20Instance;
 use market_maker::bitcoin_wallet::BitcoinWallet;
 use market_maker::run_market_maker;
 use market_maker::wallet::Wallet;
+use mock_instant::global::MockClock;
 use otc_chains::traits::Payment;
-use otc_models::{Swap, SwapMode, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, Lot, QuoteRequest, Swap, SwapMode, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::CreateSwapRequest;
 use otc_server::server::run_server;
@@ -360,7 +360,9 @@ async fn test_fee_settlement_with_ethereum_swaps(
     let otc_port = get_free_port().await;
     let otc_args = build_otc_server_test_args(otc_port, &devnet, &connect_options).await;
     service_join_set.spawn(async move {
-        run_server(otc_args).await.expect("OTC server should not crash");
+        run_server(otc_args)
+            .await
+            .expect("OTC server should not crash");
     });
 
     tokio::select! {
@@ -484,7 +486,10 @@ async fn test_fee_settlement_with_ethereum_swaps(
     // Wait for all swaps to settle
     info!("Waiting for all {} swaps to settle...", swaps.len());
     for swap in &swaps {
-        info!("Waiting for {} swap {} to settle", swap.direction, swap.swap_id);
+        info!(
+            "Waiting for {} swap {} to settle",
+            swap.direction, swap.swap_id
+        );
         wait_for_swap_to_be_settled(otc_port, swap.swap_id).await;
         info!("Swap {} settled!", swap.swap_id);
     }

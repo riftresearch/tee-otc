@@ -50,8 +50,14 @@ impl EthDevnet {
         port: Option<u16>,
         token_indexer_port: Option<u16>,
     ) -> Result<Self> {
-        let (anvil, anvil_datadir, anvil_dump_path) =
-            spawn_anvil(interactive, deploy_mode.clone(), devnet_cache.clone(), chain_id, port).await?;
+        let (anvil, anvil_datadir, anvil_dump_path) = spawn_anvil(
+            interactive,
+            deploy_mode.clone(),
+            devnet_cache.clone(),
+            chain_id,
+            port,
+        )
+        .await?;
         info!(
             "Anvil spawned at {}, chain_id={}",
             anvil.endpoint(),
@@ -113,7 +119,8 @@ impl EthDevnet {
     }
 
     pub async fn mint_cbbtc(&self, address: Address, amount: U256) -> Result<String> {
-        let receipt = self.cbbtc_contract
+        let receipt = self
+            .cbbtc_contract
             .mint(address, amount)
             .send()
             .await?
@@ -249,23 +256,21 @@ async fn spawn_anvil(
     // Create or load anvil datafile
     let anvil_datadir = if devnet_cache.is_some() {
         let cache_start = Instant::now();
-        let datadir = Some(
-            if chain_id == 8453 {
-                // Base chain
-                devnet_cache
-                    .as_ref()
-                    .unwrap()
-                    .create_anvil_base_datadir()
-                    .await?
-            } else {
-                // Ethereum or other chains
-                devnet_cache
-                    .as_ref()
-                    .unwrap()
-                    .create_anvil_datadir()
-                    .await?
-            }
-        );
+        let datadir = Some(if chain_id == 8453 {
+            // Base chain
+            devnet_cache
+                .as_ref()
+                .unwrap()
+                .create_anvil_base_datadir()
+                .await?
+        } else {
+            // Ethereum or other chains
+            devnet_cache
+                .as_ref()
+                .unwrap()
+                .create_anvil_datadir()
+                .await?
+        });
         info!(
             "[Anvil] Created anvil datadir from cache in {:?}",
             cache_start.elapsed()

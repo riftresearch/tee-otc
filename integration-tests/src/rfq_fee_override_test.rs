@@ -15,11 +15,11 @@ use std::time::Duration;
 use tokio::task::JoinSet;
 
 use crate::utils::{
-    TEST_FEE_SET_API_SECRET, PgConnectOptionsExt, build_bitcoin_wallet_descriptor,
-    build_mm_test_args, build_otc_server_test_args, build_rfq_server_test_args,
-    build_tmp_bitcoin_wallet_db_file, get_free_port,
+    build_bitcoin_wallet_descriptor, build_mm_test_args, build_otc_server_test_args,
+    build_rfq_server_test_args, build_tmp_bitcoin_wallet_db_file, get_free_port,
     wait_for_market_maker_to_connect_to_rfq_server, wait_for_otc_server_to_be_ready,
-    wait_for_rfq_server_to_be_ready, wait_for_swap_to_be_settled,
+    wait_for_rfq_server_to_be_ready, wait_for_swap_to_be_settled, PgConnectOptionsExt,
+    TEST_FEE_SET_API_SECRET,
 };
 
 #[sqlx::test]
@@ -68,7 +68,10 @@ async fn test_privileged_quote_protocol_fee_override(
         .unwrap();
     devnet
         .ethereum
-        .mint_cbbtc(market_maker_account.ethereum_address, U256::from(100_000_000))
+        .mint_cbbtc(
+            market_maker_account.ethereum_address,
+            U256::from(100_000_000),
+        )
         .await
         .unwrap();
 
@@ -109,12 +112,13 @@ async fn test_privileged_quote_protocol_fee_override(
 
     assert_eq!(response.status(), 200, "Quote request should succeed");
 
-    let quote_response: rfq_server::server::QuoteResponse = response
-        .json()
-        .await
-        .expect("Should parse quote response");
+    let quote_response: rfq_server::server::QuoteResponse =
+        response.json().await.expect("Should parse quote response");
 
-    let quote = match quote_response.quote.expect("Quote response should be present") {
+    let quote = match quote_response
+        .quote
+        .expect("Quote response should be present")
+    {
         RFQResult::Success(quote) => quote,
         other => panic!("Expected successful quote, got: {other:?}"),
     };
@@ -194,7 +198,9 @@ async fn test_privileged_fee_override_end_to_end_btc_to_cbbtc(
     let otc_port = get_free_port().await;
     let otc_args = build_otc_server_test_args(otc_port, &devnet, &connect_options).await;
     service_join_set.spawn(async move {
-        run_server(otc_args).await.expect("OTC server should not crash");
+        run_server(otc_args)
+            .await
+            .expect("OTC server should not crash");
     });
     wait_for_otc_server_to_be_ready(otc_port).await;
 

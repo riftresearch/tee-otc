@@ -12,7 +12,6 @@ pub const MM_NEVER_DEPOSITS_TIMEOUT: Duration = Duration::minutes(60 * 24); // 2
 pub const MM_DEPOSIT_NEVER_CONFIRMED_TIMEOUT: Duration = Duration::minutes(60 * 24); // 24 hours
 pub const MM_DEPOSIT_RISK_WINDOW: Duration = Duration::minutes(10); // if one of the refund cases is within this window the market maker should consider this risky
 
-
 /// Computed amounts when user deposit is detected and validated.
 /// These represent the exact amounts for this specific swap based on the
 /// actual deposited amount and the quote's rates.
@@ -589,7 +588,11 @@ pub struct SettlementStatus {
     pub broadcast_at: DateTime<Utc>,
     pub confirmations: u64,
     pub completed_at: Option<DateTime<Utc>>,
-    #[serde(default, skip_serializing_if = "Option::is_none", with = "option_u256_decimal")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        with = "option_u256_decimal"
+    )]
     pub fee: Option<U256>,
 }
 

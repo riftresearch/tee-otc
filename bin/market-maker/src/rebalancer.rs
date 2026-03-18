@@ -1,19 +1,17 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use alloy::primitives::U256;
 use alloy::primitives::utils::format_units;
+use alloy::primitives::U256;
 use otc_chains::traits::Payment;
-use otc_models::{CB_BTC_CONTRACT_ADDRESS, ChainType, Currency, Lot, TokenIdentifier};
+use otc_models::{ChainType, Currency, Lot, TokenIdentifier, CB_BTC_CONTRACT_ADDRESS};
 use snafu::{Location, ResultExt};
 use tokio::time::sleep;
 use tracing::{debug, error, info, instrument, warn};
 
 use metrics::{counter, gauge, histogram};
 
-use coinbase_exchange_client::{
-    CoinbaseClient, CoinbaseExchangeClientError, WithdrawalStatus
-};
+use coinbase_exchange_client::{CoinbaseClient, CoinbaseExchangeClientError, WithdrawalStatus};
 
 use crate::wallet::{Wallet, WalletError};
 
@@ -35,7 +33,11 @@ pub enum RebalancerError {
         loc: Location,
     },
 
-    #[snafu(display("Insufficient balance: requested {}, available {}", requested_amount, available_amount))]
+    #[snafu(display(
+        "Insufficient balance: requested {}, available {}",
+        requested_amount,
+        available_amount
+    ))]
     InsufficientBalance {
         requested_amount: U256,
         available_amount: U256,
@@ -315,9 +317,18 @@ pub async fn run_rebalancer(
     }
 }
 
-
 /// Send BTC from the sender's bitcoin wallet
-#[instrument(name = "convert_btc_to_cbbtc", skip(coinbase_client, sender_wallet, amount_sats, recipient_address, confirmation_poll_interval, btc_coinbase_confirmations))]
+#[instrument(
+    name = "convert_btc_to_cbbtc",
+    skip(
+        coinbase_client,
+        sender_wallet,
+        amount_sats,
+        recipient_address,
+        confirmation_poll_interval,
+        btc_coinbase_confirmations
+    )
+)]
 pub async fn convert_btc_to_cbbtc(
     evm_chain: ChainType,
     coinbase_client: &CoinbaseClient,
@@ -361,22 +372,36 @@ pub async fn convert_btc_to_cbbtc(
 
     info!("Consolidating bitcoin deposits before rebalance");
     let t0 = Instant::now();
-    let consolidation_summary = sender_wallet.consolidate(&Lot {
-        currency: Currency {
-            chain: ChainType::Bitcoin,
-            token: TokenIdentifier::Native,
-            decimals: 8,
-        },
-        amount: U256::MAX,
-    }, 100).await.context(WalletSnafu)?;
-    info!("Consolidation summary during rebalance: {:?}, duration: {:?}", consolidation_summary, t0.elapsed());
+    let consolidation_summary = sender_wallet
+        .consolidate(
+            &Lot {
+                currency: Currency {
+                    chain: ChainType::Bitcoin,
+                    token: TokenIdentifier::Native,
+                    decimals: 8,
+                },
+                amount: U256::MAX,
+            },
+            100,
+        )
+        .await
+        .context(WalletSnafu)?;
+    info!(
+        "Consolidation summary during rebalance: {:?}, duration: {:?}",
+        consolidation_summary,
+        t0.elapsed()
+    );
 
-    let btc_account_id = coinbase_client.get_btc_account_id().await.context(CoinbaseExchangeClientSnafu)?;
+    let btc_account_id = coinbase_client
+        .get_btc_account_id()
+        .await
+        .context(CoinbaseExchangeClientSnafu)?;
 
     // get btc deposit address
     let btc_deposit_address = coinbase_client
         .get_btc_deposit_address(&btc_account_id, ChainType::Bitcoin)
-        .await.context(CoinbaseExchangeClientSnafu)?;
+        .await
+        .context(CoinbaseExchangeClientSnafu)?;
     info!("Got btc deposit address: {}", btc_deposit_address);
 
     // send the btc to the deposit address
@@ -389,21 +414,35 @@ pub async fn convert_btc_to_cbbtc(
         .create_batch_payment(payments, None)
         .await
         .context(WalletSnafu)?;
-    info!("Created batch payment for btc: {}, duration: {:?}", btc_tx_hash, t0.elapsed());
+    info!(
+        "Created batch payment for btc: {}, duration: {:?}",
+        btc_tx_hash,
+        t0.elapsed()
+    );
     let t0 = Instant::now();
     // wait for the btc to be confirmed
     sender_wallet
-        .guarantee_confirmations(&btc_tx_hash, btc_coinbase_confirmations as u64, confirmation_poll_interval)
+        .guarantee_confirmations(
+            &btc_tx_hash,
+            btc_coinbase_confirmations as u64,
+            confirmation_poll_interval,
+        )
         .await
         .context(WalletSnafu)?;
-    info!("Guaranteed {} confirmations for btc tx hash: {}, duration: {:?}", btc_coinbase_confirmations, btc_tx_hash, t0.elapsed());
+    info!(
+        "Guaranteed {} confirmations for btc tx hash: {}, duration: {:?}",
+        btc_coinbase_confirmations,
+        btc_tx_hash,
+        t0.elapsed()
+    );
     // at this point, the btc is confirmed and should be credited to our coinbase btc account
     // now we can send the btc to eth which will implicitly convert it to cbbtc
     let t0 = Instant::now();
     let withdrawal_id = loop {
         let withdrawal_id = coinbase_client
             .withdraw_bitcoin(recipient_address, &amount_sats, evm_chain)
-            .await.context(CoinbaseExchangeClientSnafu);
+            .await
+            .context(CoinbaseExchangeClientSnafu);
         if let Ok(withdrawal_id) = withdrawal_id {
             break withdrawal_id;
         } else {
@@ -412,15 +451,24 @@ pub async fn convert_btc_to_cbbtc(
             error!("Retrying withdrawal...");
         }
     };
-    info!("Withdraw cbbtc request submitted successfully: {}, duration: {:?}", withdrawal_id, t0.elapsed());
+    info!(
+        "Withdraw cbbtc request submitted successfully: {}, duration: {:?}",
+        withdrawal_id,
+        t0.elapsed()
+    );
     let start_time = Instant::now();
     loop {
         let withdrawal_status = coinbase_client
             .get_withdrawal_status(&withdrawal_id)
-            .await.context(CoinbaseExchangeClientSnafu)?;
+            .await
+            .context(CoinbaseExchangeClientSnafu)?;
         match withdrawal_status {
             WithdrawalStatus::Completed(tx_hash) => {
-                info!("Withdrew cbbtc complete! tx hash: {}, duration: {:?}", tx_hash, start_time.elapsed());
+                info!(
+                    "Withdrew cbbtc complete! tx hash: {}, duration: {:?}",
+                    tx_hash,
+                    start_time.elapsed()
+                );
                 return Ok(tx_hash);
             }
             WithdrawalStatus::Pending => {
@@ -442,7 +490,17 @@ pub async fn convert_btc_to_cbbtc(
     }
 }
 
-#[instrument(name = "convert_cbbtc_to_btc", skip(coinbase_client, sender_wallet, amount_sats, recipient_address, confirmation_poll_interval, cbbtc_coinbase_confirmations))]
+#[instrument(
+    name = "convert_cbbtc_to_btc",
+    skip(
+        coinbase_client,
+        sender_wallet,
+        amount_sats,
+        recipient_address,
+        confirmation_poll_interval,
+        cbbtc_coinbase_confirmations
+    )
+)]
 pub async fn convert_cbbtc_to_btc(
     evm_chain: ChainType,
     coinbase_client: &CoinbaseClient,
@@ -459,7 +517,6 @@ pub async fn convert_cbbtc_to_btc(
         }
         .fail();
     }
-    
 
     let cbbtc = TokenIdentifier::address(CB_BTC_CONTRACT_ADDRESS.to_string());
 
@@ -479,7 +536,11 @@ pub async fn convert_cbbtc_to_btc(
         .await
         .context(WalletSnafu)?
         .total_balance;
-    info!("Got cbbtc balance: {}, duration: {:?}", available_balance, t0.elapsed());
+    info!(
+        "Got cbbtc balance: {}, duration: {:?}",
+        available_balance,
+        t0.elapsed()
+    );
     if available_balance < lot.amount {
         return InsufficientBalanceSnafu {
             requested_amount: lot.amount,
@@ -490,24 +551,46 @@ pub async fn convert_cbbtc_to_btc(
 
     info!("Consolidating cbbtc deposits before rebalance");
     let t0 = Instant::now();
-    let consolidation_summary = sender_wallet.consolidate(&Lot {
-        currency: Currency {
-            chain: evm_chain,
-            token: cbbtc.clone(),
-            decimals: 8,
-        },
-        amount: U256::MAX,
-    }, 200).await.context(WalletSnafu)?;
-    info!("Consolidation summary during rebalance: {:?}, duration: {:?}", consolidation_summary, t0.elapsed());
+    let consolidation_summary = sender_wallet
+        .consolidate(
+            &Lot {
+                currency: Currency {
+                    chain: evm_chain,
+                    token: cbbtc.clone(),
+                    decimals: 8,
+                },
+                amount: U256::MAX,
+            },
+            200,
+        )
+        .await
+        .context(WalletSnafu)?;
+    info!(
+        "Consolidation summary during rebalance: {:?}, duration: {:?}",
+        consolidation_summary,
+        t0.elapsed()
+    );
     let t0 = Instant::now();
-    let btc_account_id = coinbase_client.get_btc_account_id().await.context(CoinbaseExchangeClientSnafu)?;
-    info!("Got btc account id: {}, duration: {:?}", btc_account_id, t0.elapsed());
+    let btc_account_id = coinbase_client
+        .get_btc_account_id()
+        .await
+        .context(CoinbaseExchangeClientSnafu)?;
+    info!(
+        "Got btc account id: {}, duration: {:?}",
+        btc_account_id,
+        t0.elapsed()
+    );
 
     // get the cbbtc deposit address
     let cbbtc_deposit_address = coinbase_client
         .get_btc_deposit_address(&btc_account_id, evm_chain)
-        .await.context(CoinbaseExchangeClientSnafu)?;
-    info!("Got cbbtc deposit address: {}, duration: {:?}", cbbtc_deposit_address, t0.elapsed());
+        .await
+        .context(CoinbaseExchangeClientSnafu)?;
+    info!(
+        "Got cbbtc deposit address: {}, duration: {:?}",
+        cbbtc_deposit_address,
+        t0.elapsed()
+    );
     // send the cbbtc to the deposit address
     let payments = vec![Payment {
         lot: lot.clone(),
@@ -518,21 +601,35 @@ pub async fn convert_cbbtc_to_btc(
         .create_batch_payment(payments, None)
         .await
         .context(WalletSnafu)?;
-    info!("Created batch payment for cbbtc: {}, duration: {:?}", cbbtc_tx_hash, t0.elapsed());
+    info!(
+        "Created batch payment for cbbtc: {}, duration: {:?}",
+        cbbtc_tx_hash,
+        t0.elapsed()
+    );
     let t0 = Instant::now();
     // wait for the cbbtc to be confirmed
     sender_wallet
-        .guarantee_confirmations(&cbbtc_tx_hash, cbbtc_coinbase_confirmations as u64, confirmation_poll_interval)
+        .guarantee_confirmations(
+            &cbbtc_tx_hash,
+            cbbtc_coinbase_confirmations as u64,
+            confirmation_poll_interval,
+        )
         .await
         .context(WalletSnafu)?;
-    info!("Guaranteed {} confirmations for cbbtc tx hash: {}, duration: {:?}", cbbtc_coinbase_confirmations, cbbtc_tx_hash, t0.elapsed());
+    info!(
+        "Guaranteed {} confirmations for cbbtc tx hash: {}, duration: {:?}",
+        cbbtc_coinbase_confirmations,
+        cbbtc_tx_hash,
+        t0.elapsed()
+    );
     // at this point, the cbbtc is confirmed and should be credited to our coinbase btc account
     // now we can send the btc to eth which will implicitly convert it to cbbtc
     let t0 = Instant::now();
-    let withdrawal_id = loop { 
+    let withdrawal_id = loop {
         let withdrawal_id = coinbase_client
             .withdraw_bitcoin(recipient_address, &amount_sats, ChainType::Bitcoin)
-            .await.context(CoinbaseExchangeClientSnafu);
+            .await
+            .context(CoinbaseExchangeClientSnafu);
         if let Ok(withdrawal_id) = withdrawal_id {
             break withdrawal_id;
         } else {
@@ -541,15 +638,24 @@ pub async fn convert_cbbtc_to_btc(
             error!("Retrying withdrawal...");
         }
     };
-    info!("Withdraw btc request submitted successfully: {}, duration: {:?}", withdrawal_id, t0.elapsed());
+    info!(
+        "Withdraw btc request submitted successfully: {}, duration: {:?}",
+        withdrawal_id,
+        t0.elapsed()
+    );
     let start_time = Instant::now();
     loop {
         let withdrawal_status = coinbase_client
             .get_withdrawal_status(&withdrawal_id)
-            .await.context(CoinbaseExchangeClientSnafu)?;
+            .await
+            .context(CoinbaseExchangeClientSnafu)?;
         match withdrawal_status {
             WithdrawalStatus::Completed(tx_hash) => {
-                info!("Withdrew btc complete! tx hash: {}, duration: {:?}", tx_hash, start_time.elapsed());
+                info!(
+                    "Withdrew btc complete! tx hash: {}, duration: {:?}",
+                    tx_hash,
+                    start_time.elapsed()
+                );
                 return Ok(tx_hash);
             }
             WithdrawalStatus::Pending => {
@@ -571,5 +677,3 @@ pub async fn convert_cbbtc_to_btc(
         }
     }
 }
-
-

@@ -1,7 +1,7 @@
 use alloy::primitives::U256;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::run_market_maker;
-use otc_models::{SwapMode, ChainType, Currency, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, QuoteRequest, SwapMode, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};
 use std::time::Duration;

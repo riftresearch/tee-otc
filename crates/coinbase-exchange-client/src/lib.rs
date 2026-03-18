@@ -477,4 +477,3 @@ console.log("message:", message);
         assert!(output.status.success(), "JavaScript execution failed");
     }
 }
-

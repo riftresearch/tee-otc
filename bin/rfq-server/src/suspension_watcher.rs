@@ -6,11 +6,7 @@
 
 use reqwest::Client;
 use serde::Deserialize;
-use std::{
-    collections::HashSet,
-    sync::Arc,
-    time::Duration,
-};
+use std::{collections::HashSet, sync::Arc, time::Duration};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use url::Url;
@@ -101,10 +97,7 @@ async fn fetch_and_update(client: &Client, endpoint: &Url, suspended: &Arc<RwLoc
     }
 }
 
-async fn fetch_suspended(
-    client: &Client,
-    endpoint: &Url,
-) -> Result<HashSet<Uuid>, reqwest::Error> {
+async fn fetch_suspended(client: &Client, endpoint: &Url) -> Result<HashSet<Uuid>, reqwest::Error> {
     let response = client
         .get(endpoint.as_str())
         .send()
@@ -112,7 +105,7 @@ async fn fetch_suspended(
         .error_for_status()?;
 
     let body: SuspendedMarketMakersResponse = response.json().await?;
-    
+
     if !body.market_maker_ids.is_empty() {
         info!(
             count = body.market_maker_ids.len(),
@@ -153,4 +146,3 @@ mod tests {
         assert!(!watcher.is_suspended(Uuid::now_v7()).await);
     }
 }
-

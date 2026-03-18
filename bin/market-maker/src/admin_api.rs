@@ -79,11 +79,8 @@ async fn consolidate_handler(
                 .await
             }
             "ethereum" => {
-                consolidate_ethereum(
-                    state.deposit_repository.clone(),
-                    state.evm_wallet.clone(),
-                )
-                .await
+                consolidate_ethereum(state.deposit_repository.clone(), state.evm_wallet.clone())
+                    .await
             }
             _ => ChainConsolidationResult {
                 chain: chain.clone(),

@@ -8,7 +8,9 @@ use devnet::bitcoin_devnet::MiningMode;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::run_market_maker;
 use otc_chains::traits::Payment;
-use otc_models::{Swap, SwapStatus, ChainType, Currency, Lot, Quote, QuoteRequest, SwapMode, TokenIdentifier};
+use otc_models::{
+    ChainType, Currency, Lot, Quote, QuoteRequest, Swap, SwapMode, SwapStatus, TokenIdentifier,
+};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::CreateSwapRequest;
 use reqwest::StatusCode;
@@ -378,7 +380,7 @@ async fn test_quote_modes_exact_output_min_max_deposits(
 
     // Abort the devnet's internal mining task before cleanup
     devnet.join_set.abort_all();
-    
+
     // Drop devnet in a blocking task with a timeout to avoid blocking the async runtime.
     // The corepc-node bitcoind wrapper's Drop can hang waiting for the process to exit
     // when using a persistent datadir, so we use a timeout to avoid test hangs.

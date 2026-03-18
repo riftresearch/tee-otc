@@ -413,4 +413,3 @@ mod tests {
         assert_eq!(digest_sorted, digest_sorted2);
     }
 }
-

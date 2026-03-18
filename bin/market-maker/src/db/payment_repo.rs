@@ -258,8 +258,10 @@ impl PaymentRepository {
         let created_at = utc::now();
 
         let settlement_digest: Vec<u8> = settlement_digest.to_vec();
-        let batch_nonce_digests: Vec<Vec<u8>> =
-            batch_nonce_digests.into_iter().map(|d| d.to_vec()).collect();
+        let batch_nonce_digests: Vec<Vec<u8>> = batch_nonce_digests
+            .into_iter()
+            .map(|d| d.to_vec())
+            .collect();
 
         sqlx::query(
             r#"
@@ -383,8 +385,9 @@ impl PaymentRepository {
             let batch_nonce_digests_raw: Vec<Vec<u8>> =
                 row.try_get("batch_nonce_digests").context(DatabaseSnafu)?;
             let ack_s: String = row.try_get("otc_ack_status").context(DatabaseSnafu)?;
-            let otc_last_submitted_at: Option<DateTime<Utc>> =
-                row.try_get("otc_last_submitted_at").context(DatabaseSnafu)?;
+            let otc_last_submitted_at: Option<DateTime<Utc>> = row
+                .try_get("otc_last_submitted_at")
+                .context(DatabaseSnafu)?;
 
             let rail = match rail_s.as_str() {
                 "evm" => crate::FeeSettlementRail::Evm,
@@ -494,7 +497,10 @@ impl PaymentRepository {
         Ok(())
     }
 
-    pub async fn list_batches(&self, newest_seen_batch_timestamp: Option<DateTime<Utc>>) -> PaymentRepositoryResult<Vec<StoredBatch>> {
+    pub async fn list_batches(
+        &self,
+        newest_seen_batch_timestamp: Option<DateTime<Utc>>,
+    ) -> PaymentRepositoryResult<Vec<StoredBatch>> {
         let rows = sqlx::query(
             r#"
             SELECT txid, chain, swap_ids, batch_nonce_digest, aggregated_fee_sats, fee_settlement_txid, created_at, status
@@ -521,9 +527,11 @@ impl PaymentRepository {
             let chain: String = row.try_get("chain").context(DatabaseSnafu)?;
             let swap_ids: Vec<Uuid> = row.try_get("swap_ids").context(DatabaseSnafu)?;
             let digest: Vec<u8> = row.try_get("batch_nonce_digest").context(DatabaseSnafu)?;
-            let aggregated_fee_sats: i64 = row.try_get("aggregated_fee_sats").context(DatabaseSnafu)?;
+            let aggregated_fee_sats: i64 =
+                row.try_get("aggregated_fee_sats").context(DatabaseSnafu)?;
             let aggregated_fee_sats = aggregated_fee_sats as u64;
-            let fee_settlement_txid: Option<String> = row.try_get("fee_settlement_txid").context(DatabaseSnafu)?;
+            let fee_settlement_txid: Option<String> =
+                row.try_get("fee_settlement_txid").context(DatabaseSnafu)?;
             let created_at: DateTime<Utc> = row.try_get("created_at").context(DatabaseSnafu)?;
             let status: String = row.try_get("status").context(DatabaseSnafu)?;
 
@@ -535,7 +543,8 @@ impl PaymentRepository {
 
             batches.push(StoredBatch {
                 txid,
-                chain: ChainType::from_db_string(&chain).ok_or(PaymentRepositoryError::UnknownChain { value: chain })?,
+                chain: ChainType::from_db_string(&chain)
+                    .ok_or(PaymentRepositoryError::UnknownChain { value: chain })?,
                 swap_ids,
                 batch_nonce_digest,
                 aggregated_fee_sats,
@@ -548,8 +557,6 @@ impl PaymentRepository {
         Ok(batches)
     }
 }
-
-
 
 fn batch_status_to_db(status: &BatchStatus) -> &'static str {
     match status {

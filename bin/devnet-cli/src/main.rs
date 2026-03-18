@@ -41,7 +41,8 @@ enum Commands {
 
 #[tokio::main]
 async fn main() -> Result<(), Whatever> {
-    init_logger("info", None::<console_subscriber::ConsoleLayer>).whatever_context("Failed to initialize logger")?;
+    init_logger("info", None::<console_subscriber::ConsoleLayer>)
+        .whatever_context("Failed to initialize logger")?;
 
     let cli = Cli::parse();
 
@@ -79,7 +80,9 @@ async fn run_server(
     let mut devnet_builder = RiftDevnet::builder()
         .interactive(true)
         .using_esplora(true)
-        .with_coinbase_mock_server(devnet::WithdrawalProcessingMode::Fixed(Duration::from_secs(30)))
+        .with_coinbase_mock_server(devnet::WithdrawalProcessingMode::Fixed(
+            Duration::from_secs(30),
+        ))
         .bitcoin_mining_mode(MiningMode::Interval(5));
 
     for address in fund_address {

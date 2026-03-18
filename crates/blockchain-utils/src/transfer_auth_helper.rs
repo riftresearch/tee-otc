@@ -62,7 +62,11 @@ pub async fn create_transfer_with_authorization_execution(
     // nonce, mostly zeroed to save on calldata
     let mut nonce: [u8; 32] = [0; 32];
     // 64 bits of randomness to inject into the nonce
-    nonce[..8].copy_from_slice(&bitcoin::key::rand::thread_rng().gen_range(0..=u64::MAX).to_le_bytes());
+    nonce[..8].copy_from_slice(
+        &bitcoin::key::rand::thread_rng()
+            .gen_range(0..=u64::MAX)
+            .to_le_bytes(),
+    );
     let nonce = nonce.into();
 
     /*
@@ -92,12 +96,12 @@ pub async fn create_transfer_with_authorization_execution(
     */
     let message_value = DynSolValue::Tuple(vec![
         DynSolValue::FixedBytes(transfer_with_authorization_typehash, 32), // transfer_with_authorization_typehash
-        DynSolValue::Address(from),                                       // from
-        DynSolValue::Address(to),                                         // to
-        DynSolValue::Uint(value, 256),                                    // value
-        DynSolValue::Uint(valid_after, 256),                              // validAfter
-        DynSolValue::Uint(valid_before, 256),                             // validBefore
-        DynSolValue::FixedBytes(nonce, 32), 
+        DynSolValue::Address(from),                                        // from
+        DynSolValue::Address(to),                                          // to
+        DynSolValue::Uint(value, 256),                                     // value
+        DynSolValue::Uint(valid_after, 256),                               // validAfter
+        DynSolValue::Uint(valid_before, 256),                              // validBefore
+        DynSolValue::FixedBytes(nonce, 32),
     ]);
 
     let encoded_message = message_value.abi_encode();

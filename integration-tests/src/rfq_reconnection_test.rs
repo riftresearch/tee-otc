@@ -1,6 +1,6 @@
 use alloy::primitives::U256;
 use market_maker::run_market_maker;
-use otc_models::{SwapMode, ChainType, Currency, QuoteRequest, TokenIdentifier};
+use otc_models::{ChainType, Currency, QuoteRequest, SwapMode, TokenIdentifier};
 use otc_protocols::rfq::RFQResult;
 use rfq_server::server::run_server as run_rfq_server;
 use sqlx::{pool::PoolOptions, postgres::PgConnectOptions};

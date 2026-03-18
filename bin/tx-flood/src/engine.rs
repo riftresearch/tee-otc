@@ -2,11 +2,11 @@ use std::{error::Error as StdError, sync::Arc, time::Instant};
 
 use alloy::primitives::U256;
 use anyhow::{anyhow, Context, Result};
+use otc_models::Swap;
 use otc_models::{
     ChainType, Currency, Lot, Quote, QuoteRequest, SwapMode as OtcSwapMode, TokenIdentifier,
 };
 use otc_protocols::rfq::RFQResult;
-use otc_models::Swap;
 use otc_server::api::swaps::CreateSwapRequest;
 use rand::Rng;
 use reqwest::{Client, Url};
@@ -239,24 +239,24 @@ async fn run_single_swap(ctx: SwapContext) -> Result<()> {
 
     let refund_address = match deposit_chain {
         ChainType::Bitcoin => config.recipient_bitcoin_address.clone(),
-        ChainType::Ethereum | ChainType::Base => match wallets
-            .get_evm_account_address(index, &config.recipient_evm_address)
-        {
-            Ok(addr) => addr.to_string(),
-            Err(err) => {
-                send_update(
-                    &update_tx,
-                    SwapUpdate::new(
-                        index,
-                        SwapStage::FinishedWithError {
-                            swap_id: None,
-                            reason: format!("failed to get EVM refund address: {err}"),
-                        },
-                    ),
-                );
-                return Err(err);
+        ChainType::Ethereum | ChainType::Base => {
+            match wallets.get_evm_account_address(index, &config.recipient_evm_address) {
+                Ok(addr) => addr.to_string(),
+                Err(err) => {
+                    send_update(
+                        &update_tx,
+                        SwapUpdate::new(
+                            index,
+                            SwapStage::FinishedWithError {
+                                swap_id: None,
+                                reason: format!("failed to get EVM refund address: {err}"),
+                            },
+                        ),
+                    );
+                    return Err(err);
+                }
             }
-        },
+        }
     };
 
     let create_swap_request = CreateSwapRequest {
@@ -453,18 +453,14 @@ async fn request_quote(client: &Client, url: &Url, request: &QuoteRequest) -> Re
         Some(RFQResult::InvalidRequest(reason)) => {
             Err(anyhow!("quote request rejected as invalid: {reason}"))
         }
-        Some(RFQResult::Unsupported(reason)) => {
-            Err(anyhow!("quote request not supported by market maker: {reason}"))
-        }
+        Some(RFQResult::Unsupported(reason)) => Err(anyhow!(
+            "quote request not supported by market maker: {reason}"
+        )),
         None => Err(anyhow!("quote response did not include a quote")),
     }
 }
 
-async fn create_swap(
-    client: &Client,
-    url: &Url,
-    request: &CreateSwapRequest,
-) -> Result<Swap> {
+async fn create_swap(client: &Client, url: &Url, request: &CreateSwapRequest) -> Result<Swap> {
     tracing::info!(request = ?request, "creating swap");
     let response = client
         .post(url.clone())
@@ -509,7 +505,9 @@ fn lot_from_swap(swap: &Swap, deposit_amount: U256) -> Result<Lot> {
     let chain = swap.quote.from.currency.chain;
     let token = swap.quote.from.currency.token.clone();
 
-    if (chain == ChainType::Ethereum || chain == ChainType::Base) && matches!(token, TokenIdentifier::Native) {
+    if (chain == ChainType::Ethereum || chain == ChainType::Base)
+        && matches!(token, TokenIdentifier::Native)
+    {
         return Err(anyhow!(
             "native EVM deposits are not currently supported by the load tester"
         ));
@@ -519,7 +517,9 @@ fn lot_from_swap(swap: &Swap, deposit_amount: U256) -> Result<Lot> {
     if deposit_amount < swap.quote.min_input || deposit_amount > swap.quote.max_input {
         return Err(anyhow!(
             "deposit amount {} is outside allowed range [{}, {}]",
-            deposit_amount, swap.quote.min_input, swap.quote.max_input
+            deposit_amount,
+            swap.quote.min_input,
+            swap.quote.max_input
         ));
     }
 

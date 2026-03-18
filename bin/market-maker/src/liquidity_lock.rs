@@ -112,14 +112,13 @@ impl LiquidityLockManager {
         }
     }
 
-
     /// Lock liquidity for a swap
     ///
     /// If a lock already exists for this swap_id, it will be replaced.
     pub async fn lock(&self, swap_id: Uuid, locked: LockedLiquidity) {
         let now = utc::now();
         let mut locks = self.locks.write().await;
-        
+
         // If replacing an existing lock, subtract the old amount from cache
         if let Some(old_lock) = locks.get(&swap_id) {
             if now.signed_duration_since(old_lock.created_at) <= self.ttl {
@@ -134,7 +133,7 @@ impl LiquidityLockManager {
                 }
             }
         }
-        
+
         // Extract data needed for cache update before moving locked
         let should_cache = now.signed_duration_since(locked.created_at) <= self.ttl;
         let pair_key = if should_cache {
@@ -143,12 +142,12 @@ impl LiquidityLockManager {
             None
         };
         let amount = locked.amount;
-        
+
         locks.insert(swap_id, locked);
-        
+
         // Release the locks write lock before updating cache to avoid deadlock potential
         drop(locks);
-        
+
         // Add the new lock amount to cache if not expired
         if let Some(key) = pair_key {
             let mut sums = self.cached_sums.write().await;
@@ -163,7 +162,7 @@ impl LiquidityLockManager {
     pub async fn unlock(&self, swap_id: Uuid) -> Option<LockedLiquidity> {
         let now = utc::now();
         let mut locks = self.locks.write().await;
-        
+
         if let Some(removed_lock) = locks.remove(&swap_id) {
             // Update cache if the lock wasn't expired
             if now.signed_duration_since(removed_lock.created_at) <= self.ttl {
@@ -205,10 +204,10 @@ impl LiquidityLockManager {
         let now = utc::now();
         let mut locks = self.locks.write().await;
         let initial_len = locks.len();
-        
+
         // Collect expired locks with their amounts for cache updates
         let mut expired_pairs: Vec<(NormalizedPair, U256)> = Vec::new();
-        
+
         locks.retain(|_, lock| {
             let is_expired = now.signed_duration_since(lock.created_at) > self.ttl;
             if is_expired {
@@ -217,9 +216,9 @@ impl LiquidityLockManager {
             }
             !is_expired
         });
-        
+
         drop(locks);
-        
+
         // Update cache by subtracting expired lock amounts
         if !expired_pairs.is_empty() {
             let mut sums = self.cached_sums.write().await;
@@ -232,7 +231,7 @@ impl LiquidityLockManager {
                 }
             }
         }
-        
+
         initial_len - self.locks.read().await.len()
     }
 
@@ -256,14 +255,13 @@ impl LiquidityLockManager {
                 otc_models::TokenIdentifier::address(addr.to_lowercase())
             }
         };
-        
+
         Currency {
             chain: currency.chain,
             token: normalized_token,
             decimals: currency.decimals,
         }
     }
-
 }
 
 // Note: Default impl removed because new() now requires join_set parameter
@@ -360,10 +358,14 @@ mod tests {
         manager.lock(Uuid::now_v7(), eth_to_btc.clone()).await;
 
         // Query should only return matching pair
-        let btc_eth_locked = manager.get_locked_amount(&btc_to_eth.from, &btc_to_eth.to).await;
+        let btc_eth_locked = manager
+            .get_locked_amount(&btc_to_eth.from, &btc_to_eth.to)
+            .await;
         assert_eq!(btc_eth_locked, U256::from(1000u64));
 
-        let eth_btc_locked = manager.get_locked_amount(&eth_to_btc.from, &eth_to_btc.to).await;
+        let eth_btc_locked = manager
+            .get_locked_amount(&eth_to_btc.from, &eth_to_btc.to)
+            .await;
         assert_eq!(eth_btc_locked, U256::from(2000u64));
     }
 
@@ -407,7 +409,9 @@ mod tests {
         };
         let to_checksummed = Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::address("0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string()),
+            token: TokenIdentifier::address(
+                "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf".to_string(),
+            ),
             decimals: 8,
         };
         let amount = U256::from(1000u64);
@@ -424,22 +428,31 @@ mod tests {
         // Query with lowercase address - should match
         let to_lowercase = Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::address("0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf".to_string()),
+            token: TokenIdentifier::address(
+                "0xcbb7c0000ab88b473b1f5afd9ef808440eed33bf".to_string(),
+            ),
             decimals: 8,
         };
 
         let locked_amount = manager.get_locked_amount(&from, &to_lowercase).await;
-        assert_eq!(locked_amount, amount, "Should match addresses regardless of case");
+        assert_eq!(
+            locked_amount, amount,
+            "Should match addresses regardless of case"
+        );
 
         // Query with uppercase address - should also match
         let to_uppercase = Currency {
             chain: ChainType::Ethereum,
-            token: TokenIdentifier::address("0xCBB7C0000AB88B473B1F5AFD9EF808440EED33BF".to_string()),
+            token: TokenIdentifier::address(
+                "0xCBB7C0000AB88B473B1F5AFD9EF808440EED33BF".to_string(),
+            ),
             decimals: 8,
         };
 
         let locked_amount = manager.get_locked_amount(&from, &to_uppercase).await;
-        assert_eq!(locked_amount, amount, "Should match addresses regardless of case");
+        assert_eq!(
+            locked_amount, amount,
+            "Should match addresses regardless of case"
+        );
     }
 }
-

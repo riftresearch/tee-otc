@@ -20,7 +20,7 @@ pub enum WebSocketError {
 pub type Result<T, E = WebSocketError> = std::result::Result<T, E>;
 
 /// Generic trait for handling WebSocket protocol messages
-/// 
+///
 /// The handler receives raw JSON text and returns optional JSON response text.
 /// This allows each implementation to work with their own ProtocolMessage type.
 #[async_trait]
@@ -66,14 +66,17 @@ impl<H: MessageHandler> WebSocketClient<H> {
     /// Connect to the WebSocket server and return a handle and future
     pub async fn connect(
         &self,
-    ) -> Result<(WebSocketHandle, impl std::future::Future<Output = Result<()>>)> {
+    ) -> Result<(
+        WebSocketHandle,
+        impl std::future::Future<Output = Result<()>>,
+    )> {
         // Validate URL
         let _ = url::Url::parse(&self.url).context(UrlParseSnafu)?;
-        
+
         info!("Connecting to WebSocket at {}", self.url);
 
         let mut config = ClientConfig::new(self.url.as_str());
-        
+
         // Add authentication headers
         config = config
             .header("X-API-ID", &self.api_key_id)
@@ -131,7 +134,10 @@ where
 impl ezsockets::ClientExt for EzSocketAdapter {
     type Call = String;
 
-    async fn on_text(&mut self, text: ezsockets::Utf8Bytes) -> std::result::Result<(), ezsockets::Error> {
+    async fn on_text(
+        &mut self,
+        text: ezsockets::Utf8Bytes,
+    ) -> std::result::Result<(), ezsockets::Error> {
         let handler = self.handler.clone();
         let client = self.client.clone();
         tokio::spawn(async move {
@@ -146,7 +152,10 @@ impl ezsockets::ClientExt for EzSocketAdapter {
         Ok(())
     }
 
-    async fn on_binary(&mut self, _bytes: ezsockets::Bytes) -> std::result::Result<(), ezsockets::Error> {
+    async fn on_binary(
+        &mut self,
+        _bytes: ezsockets::Bytes,
+    ) -> std::result::Result<(), ezsockets::Error> {
         warn!("Received unexpected binary message");
         Ok(())
     }
@@ -162,4 +171,3 @@ impl ezsockets::ClientExt for EzSocketAdapter {
         Ok(())
     }
 }
-

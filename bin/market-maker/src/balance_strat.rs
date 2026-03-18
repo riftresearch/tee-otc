@@ -54,7 +54,7 @@ impl QuoteBalanceStrategy {
 
         // Calculate theoretical max: (balance × threshold) / BPS
         let theoretical_max = mul_div(balance, self.utilization_threshold_bps, U256::from(BPS));
-        
+
         if theoretical_max == U256::ZERO {
             return U256::ZERO;
         }
@@ -64,8 +64,12 @@ impl QuoteBalanceStrategy {
         // This is necessary because with large numbers and BPS resolution, many consecutive
         // values round to the same utilization_bps.
         let margin = mul_div(theoretical_max, U256::from(10), U256::from(BPS));
-        let margin = if margin == U256::ZERO { U256::from(1) } else { margin };
-        
+        let margin = if margin == U256::ZERO {
+            U256::from(1)
+        } else {
+            margin
+        };
+
         if theoretical_max > margin {
             theoretical_max - margin
         } else {
@@ -125,7 +129,7 @@ mod tests {
 
         // max_amount + 1 should pass (500 is exactly at threshold)
         assert!(strategy.can_fill_quote(max_amount + U256::from(1), balance));
-        
+
         // max_amount + 2 should fail
         assert!(!strategy.can_fill_quote(max_amount + U256::from(2), balance));
 

@@ -26,4 +26,3 @@ pub use handler::{MessageHandler, MessageSender};
 /// Re-export common types
 pub use axum::extract::ws::{Message, WebSocket};
 pub use uuid::Uuid;
-

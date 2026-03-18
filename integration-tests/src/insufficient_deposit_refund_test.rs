@@ -7,7 +7,9 @@ use bitcoincore_rpc_async::RpcApi;
 use devnet::{MultichainAccount, RiftDevnet};
 use market_maker::{bitcoin_wallet::BitcoinWallet, run_market_maker, wallet::Wallet};
 use otc_chains::traits::Payment;
-use otc_models::{Swap, SwapMode, SwapStatus, ChainType, Currency, Lot, QuoteRequest, TokenIdentifier};
+use otc_models::{
+    ChainType, Currency, Lot, QuoteRequest, Swap, SwapMode, SwapStatus, TokenIdentifier,
+};
 use otc_protocols::rfq::RFQResult;
 use otc_server::api::{swaps::RefundSwapResponse, CreateSwapRequest};
 use reqwest::StatusCode;
@@ -257,7 +259,8 @@ async fn test_insufficient_bitcoin_deposit_refund(
 
     info!("Swap status after insufficient deposit: {:?}", swap.status);
     assert_eq!(
-        swap.status, SwapStatus::WaitingUserDepositInitiated,
+        swap.status,
+        SwapStatus::WaitingUserDepositInitiated,
         "Swap should remain in WaitingUserDepositInitiated due to insufficient deposit"
     );
 
@@ -343,7 +346,8 @@ async fn test_insufficient_bitcoin_deposit_refund(
         .unwrap();
 
     assert_eq!(
-        final_swap.status, SwapStatus::RefundingUser,
+        final_swap.status,
+        SwapStatus::RefundingUser,
         "Swap should be in RefundingUser status"
     );
 
@@ -553,7 +557,10 @@ async fn test_insufficient_evm_deposit_refund(
     // Transfer insufficient amount to deposit address
     user_token_contract
         .transfer(
-            created_swap.deposit_vault_address.parse().expect("valid deposit address"),
+            created_swap
+                .deposit_vault_address
+                .parse()
+                .expect("valid deposit address"),
             insufficient_amount,
         )
         .send()
@@ -583,7 +590,8 @@ async fn test_insufficient_evm_deposit_refund(
 
     info!("Swap status after insufficient deposit: {:?}", swap.status);
     assert_eq!(
-        swap.status, SwapStatus::WaitingUserDepositInitiated,
+        swap.status,
+        SwapStatus::WaitingUserDepositInitiated,
         "Swap should remain in WaitingUserDepositInitiated due to insufficient deposit"
     );
 
@@ -679,7 +687,8 @@ async fn test_insufficient_evm_deposit_refund(
         .unwrap();
 
     assert_eq!(
-        final_swap.status, SwapStatus::RefundingUser,
+        final_swap.status,
+        SwapStatus::RefundingUser,
         "Swap should be in RefundingUser status"
     );
 

@@ -167,7 +167,6 @@ impl P2WPKHBitcoinWallet {
     }
 }
 
-
 /// Calculates the median fee rate from an Esplora fee histogram.
 ///
 /// The histogram is a list of (fee_rate, vsize_weight) tuples sorted by fee (high to low).
@@ -211,7 +210,7 @@ fn calculate_median_fee_from_histogram(histogram: &[(f32, u64)]) -> f64 {
 }
 
 #[async_trait]
-pub trait MempoolEsploraFeeExt { 
+pub trait MempoolEsploraFeeExt {
     async fn get_mempool_fee_estimate_next_block(&self) -> Result<f64, esplora_client::Error>;
 }
 
@@ -219,14 +218,15 @@ pub trait MempoolEsploraFeeExt {
 impl MempoolEsploraFeeExt for esplora_client::AsyncClient {
     async fn get_mempool_fee_estimate_next_block(&self) -> Result<f64, esplora_client::Error> {
         let mempool_info = self.get_mempool_info().await?;
-        Ok(calculate_median_fee_from_histogram(&mempool_info.fee_histogram))
+        Ok(calculate_median_fee_from_histogram(
+            &mempool_info.fee_histogram,
+        ))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     #[test]
     fn test_fee_estimate_real_data_histogram() {
@@ -252,8 +252,8 @@ mod tests {
             (1.00236406619385_f32, 51165),
             (1.00174620366482_f32, 51371),
             (1.00003299567757_f32, 55233),
-            (1.0_f32, 62300)
-          ];
+            (1.0_f32, 62300),
+        ];
         let fee = calculate_median_fee_from_histogram(&histogram);
         println!("fee: {fee}");
     }
@@ -327,22 +327,19 @@ mod tests {
     fn test_fee_estimate_all_below_minimum() {
         let histogram = vec![(0.1_f32, 100), (0.5_f32, 200), (0.9_f32, 300)];
         let fee = calculate_median_fee_from_histogram(&histogram);
-        assert_eq!(
-            fee, 1.01,
-            "All fees below 1.01 should still return 1.01"
-        );
+        assert_eq!(fee, 1.01, "All fees below 1.01 should still return 1.01");
     }
 
     #[test]
     fn test_fee_estimate_realistic_scenario() {
         // Simulating a realistic mempool with various fee levels
         let histogram = vec![
-            (100.0_f32, 50_000),   // Very high priority
-            (50.0_f32, 100_000),   // High priority
-            (25.0_f32, 200_000),   // Medium-high priority
-            (10.0_f32, 300_000),   // Medium priority
-            (5.0_f32, 350_000),    // Low-medium priority
-            (2.0_f32, 500_000),    // Low priority
+            (100.0_f32, 50_000), // Very high priority
+            (50.0_f32, 100_000), // High priority
+            (25.0_f32, 200_000), // Medium-high priority
+            (10.0_f32, 300_000), // Medium priority
+            (5.0_f32, 350_000),  // Low-medium priority
+            (2.0_f32, 500_000),  // Low priority
         ];
         // Total: 1,500,000 -> capped at 1,000,000
         // Target: 500,000
@@ -351,5 +348,4 @@ mod tests {
         let fee = calculate_median_fee_from_histogram(&histogram);
         assert_eq!(fee, 10.0, "Should calculate median fee correctly");
     }
-
 }

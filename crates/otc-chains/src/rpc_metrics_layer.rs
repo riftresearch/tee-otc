@@ -1,10 +1,10 @@
+use alloy::rpc::json_rpc::{RequestPacket, ResponsePacket};
+use metrics::{counter, histogram};
+use std::future::Future;
+use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::Instant;
 use tower::{Layer, Service};
-use alloy::rpc::json_rpc::{RequestPacket, ResponsePacket};
-use metrics::{histogram, counter};
-use std::future::Future;
-use std::pin::Pin;
 
 #[derive(Clone)]
 pub struct RpcMetricsLayer {
@@ -21,7 +21,7 @@ impl<S> Layer<S> for RpcMetricsLayer {
     type Service = RpcMetricsService<S>;
 
     fn layer(&self, inner: S) -> Self::Service {
-        RpcMetricsService { 
+        RpcMetricsService {
             inner,
             chain: self.chain.clone(),
         }
@@ -56,28 +56,26 @@ where
                 if calls.is_empty() {
                     "empty_batch".to_string()
                 } else {
-                     "batch".to_string()
+                    "batch".to_string()
                 }
             }
         };
 
         let start = Instant::now();
         let chain = self.chain.clone();
-        
 
         let fut = self.inner.call(req);
 
         Box::pin(async move {
             let result = fut.await;
             let duration = start.elapsed();
-            
+
             let status = if result.is_ok() { "success" } else { "error" };
-            
+
             counter!("ethereum_rpc_requests_total", "method" => method.clone(), "status" => status, "chain" => chain.clone()).increment(1);
             histogram!("ethereum_rpc_duration_seconds", "method" => method, "status" => status, "chain" => chain).record(duration.as_secs_f64());
-            
+
             result
         })
     }
 }
-

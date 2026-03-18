@@ -1,4 +1,8 @@
-use std::{collections::VecDeque, io, thread, time::{Duration, Instant}};
+use std::{
+    collections::VecDeque,
+    io, thread,
+    time::{Duration, Instant},
+};
 
 use alloy::primitives::U256;
 use anyhow::Result;
@@ -59,7 +63,7 @@ fn run(
                 // Immediate redraw for user input
                 terminal.draw(|f| app.draw(f))?;
                 last_draw = Instant::now();
-                
+
                 if app.should_exit() {
                     break;
                 }
@@ -492,12 +496,12 @@ impl App {
 
         let buffer = 10;
         let selected = self.table_scroll.state.selected().unwrap_or(0);
-        
+
         // Calculate visible window centered around selection with buffer
         let half_viewport = viewport_height / 2;
         let start = selected.saturating_sub(half_viewport + buffer);
         let end = (start + viewport_height + buffer * 2).min(self.rows.len());
-        
+
         let visible_rows: Vec<&SwapRow> = self.rows[start..end].iter().collect();
         (start, visible_rows)
     }
@@ -582,7 +586,7 @@ impl App {
         if let Some(selected) = adjusted_state.selected() {
             adjusted_state.select(Some(selected.saturating_sub(offset)));
         }
-        
+
         frame.render_stateful_widget(table, table_area, &mut adjusted_state);
 
         let footer = if self.shutdown {

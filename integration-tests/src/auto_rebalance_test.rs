@@ -54,7 +54,7 @@ async fn wait_for_rebalancing(
             let script_pubkey: ScriptBuf = mm_account.bitcoin_wallet.address.script_pubkey();
             // Wait for esplora to sync
             tokio::time::sleep(Duration::from_millis(500)).await;
-            
+
             // Get all UTXOs for this address and sum them
             match esplora_client.scripthash_txs(&script_pubkey, None).await {
                 Ok(txs) => {
@@ -68,13 +68,14 @@ async fn wait_for_rebalancing(
                                     txid: tx.txid,
                                     vout: vout as u32,
                                 };
-                                let is_spent = esplora_client.get_output_status(&outpoint.txid, outpoint.vout as u64)
+                                let is_spent = esplora_client
+                                    .get_output_status(&outpoint.txid, outpoint.vout as u64)
                                     .await
                                     .ok()
                                     .and_then(|status| status)
                                     .map(|status| status.spent)
                                     .unwrap_or(false);
-                                
+
                                 if !is_spent {
                                     balance += output.value;
                                 }
@@ -584,7 +585,7 @@ async fn test_no_rebalance_when_within_tolerance(
         use bitcoin::ScriptBuf;
         let script_pubkey: ScriptBuf = market_maker_account.bitcoin_wallet.address.script_pubkey();
         tokio::time::sleep(Duration::from_millis(500)).await;
-        
+
         // Get all UTXOs for this address and sum them
         match esplora_client.scripthash_txs(&script_pubkey, None).await {
             Ok(txs) => {
@@ -598,13 +599,14 @@ async fn test_no_rebalance_when_within_tolerance(
                                 txid: tx.txid,
                                 vout: vout as u32,
                             };
-                            let is_spent = esplora_client.get_output_status(&outpoint.txid, outpoint.vout as u64)
+                            let is_spent = esplora_client
+                                .get_output_status(&outpoint.txid, outpoint.vout as u64)
                                 .await
                                 .ok()
                                 .and_then(|status| status)
                                 .map(|status| status.spent)
                                 .unwrap_or(false);
-                            
+
                             if !is_spent {
                                 balance += output.value;
                             }
@@ -645,7 +647,7 @@ async fn test_no_rebalance_when_within_tolerance(
     // Verify balances haven't changed by more than 5% (allowing for consolidation fees)
     let btc_diff = (final_btc_balance as i64 - btc_amount_sats as i64).abs() as u64;
     let cbbtc_diff = (final_cbbtc_balance as i64 - cbbtc_amount_sats as i64).abs() as u64;
-    
+
     assert!(
         btc_diff < btc_amount_sats / 20,
         "BTC balance should not have changed significantly (changed by {} sats)",
@@ -660,4 +662,3 @@ async fn test_no_rebalance_when_within_tolerance(
     drop(devnet);
     service_join_set.shutdown().await;
 }
-

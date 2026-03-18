@@ -60,7 +60,8 @@ impl BroadcastedTransactionRepository {
             .context(DatabaseSnafu)?;
 
         if let Some((txid, chain_str, txdata, utxos_json, absolute_fee)) = row {
-            let chain = ChainType::from_db_string(&chain_str).ok_or(BroadcastedTransactionRepositoryError::UnknownChain { value: chain_str })?;
+            let chain = ChainType::from_db_string(&chain_str)
+                .ok_or(BroadcastedTransactionRepositoryError::UnknownChain { value: chain_str })?;
             let bitcoin_tx_foreign_utxos: Option<Vec<ForeignUtxo>> = utxos_json
                 .map(serde_json::from_value)
                 .transpose()

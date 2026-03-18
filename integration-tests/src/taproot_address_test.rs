@@ -597,7 +597,10 @@ async fn test_swap_to_taproot_destination(
     // Verify the swap is in Settled state - this confirms the MM payment to the Taproot address
     // was successfully created and broadcast
     let final_swap = client
-        .get(format!("http://localhost:{otc_port}/api/v2/swap/{}", swap.id))
+        .get(format!(
+            "http://localhost:{otc_port}/api/v2/swap/{}",
+            swap.id
+        ))
         .send()
         .await
         .unwrap()
@@ -621,4 +624,3 @@ async fn test_swap_to_taproot_destination(
     drop(devnet);
     tokio::join!(wallet_join_set.shutdown(), service_join_set.shutdown());
 }
-

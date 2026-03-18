@@ -70,7 +70,10 @@ enum WithdrawalState {
     /// Processing with automatic completion at specified time (tx not yet processed)
     Processing { completion_time: std::time::Instant },
     /// Completed withdrawal (tx has been processed on-chain)
-    Completed { tx_hash: String, completed_at: String },
+    Completed {
+        tx_hash: String,
+        completed_at: String,
+    },
     /// Cancelled withdrawal
     Cancelled,
 }
@@ -148,7 +151,8 @@ impl CoinbaseMockServer {
         let state = AppState::new(bitcoin_devnet, ethereum_devnet, self.processing_mode);
         let state_for_task = state.clone();
 
-        let addr = listener.local_addr()
+        let addr = listener
+            .local_addr()
             .map_err(|e| eyre::eyre!("Failed to get local address: {}", e))?;
         info!("Coinbase mock server starting on {}", addr);
 
@@ -163,9 +167,18 @@ impl CoinbaseMockServer {
                 "/coinbase-accounts/:account_id/addresses",
                 axum::routing::post(create_deposit_address),
             )
-            .route("/withdrawals/crypto", axum::routing::post(create_withdrawal))
-            .route("/transfers/:withdrawal_id", axum::routing::get(get_transfer_status))
-            .route("/admin/process-withdrawals", axum::routing::post(admin_process_withdrawals))
+            .route(
+                "/withdrawals/crypto",
+                axum::routing::post(create_withdrawal),
+            )
+            .route(
+                "/transfers/:withdrawal_id",
+                axum::routing::get(get_transfer_status),
+            )
+            .route(
+                "/admin/process-withdrawals",
+                axum::routing::post(admin_process_withdrawals),
+            )
             .with_state(state);
 
         let handle = tokio::spawn(async move {
@@ -195,7 +208,7 @@ async fn execute_withdrawal(
     // Detect address type to determine actual destination
     // This simulates Coinbase's automatic BTC->cbBTC conversion when withdrawing to Ethereum
     let is_ethereum_address = Address::from_str(crypto_address).is_ok();
-    
+
     match (network, is_ethereum_address) {
         // Bitcoin network with Bitcoin address -> send native BTC
         ("bitcoin", false) => {
@@ -220,8 +233,8 @@ async fn execute_withdrawal(
         }
         // Bitcoin network with Ethereum address OR Ethereum network -> mint cbBTC
         ("bitcoin", true) | ("ethereum", _) => {
-            let recipient_addr = Address::from_str(crypto_address)
-                .expect("Address already validated");
+            let recipient_addr =
+                Address::from_str(crypto_address).expect("Address already validated");
 
             match state
                 .ethereum_devnet
@@ -367,7 +380,7 @@ async fn create_withdrawal(
     // (which automatically converts to cbBTC)
     let is_bitcoin_address = BitcoinAddress::from_str(&req.crypto_address).is_ok();
     let is_ethereum_address = Address::from_str(&req.crypto_address).is_ok();
-    
+
     if !is_bitcoin_address && !is_ethereum_address {
         return (
             StatusCode::BAD_REQUEST,
@@ -384,54 +397,62 @@ async fn create_withdrawal(
         WithdrawalProcessingMode::Fixed(d) => d,
         WithdrawalProcessingMode::Realistic => match network.as_str() {
             "bitcoin" => Duration::from_secs(15 * 60), // 15 minutes
-            "ethereum" => Duration::from_secs(45),      // 45 seconds
+            "ethereum" => Duration::from_secs(45),     // 45 seconds
             _ => Duration::from_secs(0),
         },
         WithdrawalProcessingMode::Manual => Duration::from_secs(0), // Will stay pending
     };
 
     // Create withdrawal with appropriate state
-    let withdrawal = match state.processing_mode {
-        WithdrawalProcessingMode::Instant => {
-            // For Instant mode, process the transaction immediately
-            let tx_hash = match execute_withdrawal(&state, &network, &req.crypto_address, amount_sats).await {
-                Ok(hash) => hash,
-                Err(response) => return response,
-            };
-            
-            Withdrawal {
+    let withdrawal =
+        match state.processing_mode {
+            WithdrawalProcessingMode::Instant => {
+                // For Instant mode, process the transaction immediately
+                let tx_hash =
+                    match execute_withdrawal(&state, &network, &req.crypto_address, amount_sats)
+                        .await
+                    {
+                        Ok(hash) => hash,
+                        Err(response) => return response,
+                    };
+
+                Withdrawal {
+                    id: withdrawal_id.clone(),
+                    amount_sats,
+                    recipient_address: req.crypto_address.clone(),
+                    network: req.network.clone(),
+                    status: WithdrawalState::Completed {
+                        tx_hash: tx_hash.clone(),
+                        completed_at: Utc::now().to_rfc3339(),
+                    },
+                    created_at,
+                }
+            }
+            WithdrawalProcessingMode::Manual => Withdrawal {
                 id: withdrawal_id.clone(),
                 amount_sats,
                 recipient_address: req.crypto_address.clone(),
                 network: req.network.clone(),
-                status: WithdrawalState::Completed {
-                    tx_hash: tx_hash.clone(),
-                    completed_at: Utc::now().to_rfc3339(),
-                },
+                status: WithdrawalState::Pending,
                 created_at,
-            }
-        },
-        WithdrawalProcessingMode::Manual => Withdrawal {
-            id: withdrawal_id.clone(),
-            amount_sats,
-            recipient_address: req.crypto_address.clone(),
-            network: req.network.clone(),
-            status: WithdrawalState::Pending,
-            created_at,
-        },
-        WithdrawalProcessingMode::Fixed(_) | WithdrawalProcessingMode::Realistic => Withdrawal {
-            id: withdrawal_id.clone(),
-            amount_sats,
-            recipient_address: req.crypto_address.clone(),
-            network: req.network.clone(),
-            status: WithdrawalState::Processing {
-                completion_time: std::time::Instant::now() + delay,
             },
-            created_at,
-        },
-    };
+            WithdrawalProcessingMode::Fixed(_) | WithdrawalProcessingMode::Realistic => {
+                Withdrawal {
+                    id: withdrawal_id.clone(),
+                    amount_sats,
+                    recipient_address: req.crypto_address.clone(),
+                    network: req.network.clone(),
+                    status: WithdrawalState::Processing {
+                        completion_time: std::time::Instant::now() + delay,
+                    },
+                    created_at,
+                }
+            }
+        };
 
-    state.withdrawals.insert(withdrawal_id.clone(), withdrawal.clone());
+    state
+        .withdrawals
+        .insert(withdrawal_id.clone(), withdrawal.clone());
 
     info!(
         "Created withdrawal {}: {} sats to {} on {} (mode: {:?})",
@@ -475,7 +496,10 @@ async fn get_transfer_status(
                 "crypto_transaction_hash": serde_json::Value::Null
             }
         }),
-        WithdrawalState::Completed { tx_hash, completed_at } => json!({
+        WithdrawalState::Completed {
+            tx_hash,
+            completed_at,
+        } => json!({
             "id": withdrawal.id,
             "cancelled": serde_json::Value::Null,
             "completed_at": completed_at,
@@ -500,9 +524,11 @@ async fn get_transfer_status(
 async fn admin_process_withdrawals(State(state): State<AppState>) -> impl IntoResponse {
     let mut processed = Vec::new();
     let mut failed = Vec::new();
-    
+
     // First, collect all pending withdrawals
-    let pending: Vec<_> = state.withdrawals.iter()
+    let pending: Vec<_> = state
+        .withdrawals
+        .iter()
         .filter_map(|entry| {
             if matches!(entry.value().status, WithdrawalState::Pending) {
                 Some((entry.key().clone(), entry.value().clone()))
@@ -511,7 +537,7 @@ async fn admin_process_withdrawals(State(state): State<AppState>) -> impl IntoRe
             }
         })
         .collect();
-    
+
     // Process each pending withdrawal
     for (withdrawal_id, withdrawal) in pending {
         // Execute the withdrawal transaction
@@ -520,7 +546,9 @@ async fn admin_process_withdrawals(State(state): State<AppState>) -> impl IntoRe
             &withdrawal.network,
             &withdrawal.recipient_address,
             withdrawal.amount_sats,
-        ).await {
+        )
+        .await
+        {
             Ok(tx_hash) => {
                 // Update withdrawal to completed
                 if let Some(mut entry) = state.withdrawals.get_mut(&withdrawal_id) {
@@ -538,9 +566,13 @@ async fn admin_process_withdrawals(State(state): State<AppState>) -> impl IntoRe
             }
         }
     }
-    
-    info!("Admin processed {} withdrawals, {} failed", processed.len(), failed.len());
-    
+
+    info!(
+        "Admin processed {} withdrawals, {} failed",
+        processed.len(),
+        failed.len()
+    );
+
     (
         StatusCode::OK,
         Json(json!({
@@ -555,12 +587,14 @@ async fn admin_process_withdrawals(State(state): State<AppState>) -> impl IntoRe
 /// Background task that processes withdrawal state transitions
 async fn process_withdrawal_states(state: AppState) {
     let mut interval = tokio::time::interval(Duration::from_secs(1));
-    
+
     loop {
         interval.tick().await;
-        
+
         // Collect withdrawals ready to be processed
-        let ready_to_process: Vec<_> = state.withdrawals.iter()
+        let ready_to_process: Vec<_> = state
+            .withdrawals
+            .iter()
             .filter_map(|entry| {
                 if let WithdrawalState::Processing { completion_time } = &entry.value().status {
                     if std::time::Instant::now() >= *completion_time {
@@ -573,7 +607,7 @@ async fn process_withdrawal_states(state: AppState) {
                 }
             })
             .collect();
-        
+
         // Execute and transition each ready withdrawal
         for (withdrawal_id, withdrawal) in ready_to_process {
             match execute_withdrawal(
@@ -581,7 +615,9 @@ async fn process_withdrawal_states(state: AppState) {
                 &withdrawal.network,
                 &withdrawal.recipient_address,
                 withdrawal.amount_sats,
-            ).await {
+            )
+            .await
+            {
                 Ok(tx_hash) => {
                     if let Some(mut entry) = state.withdrawals.get_mut(&withdrawal_id) {
                         let completed_at = Utc::now().to_rfc3339();
@@ -589,11 +625,18 @@ async fn process_withdrawal_states(state: AppState) {
                             tx_hash,
                             completed_at,
                         };
-                        info!("Auto-processed withdrawal {} with tx {}", withdrawal_id, entry.status.tx_hash().unwrap_or("none"));
+                        info!(
+                            "Auto-processed withdrawal {} with tx {}",
+                            withdrawal_id,
+                            entry.status.tx_hash().unwrap_or("none")
+                        );
                     }
                 }
                 Err(e) => {
-                    warn!("Failed to auto-process withdrawal {}: {:?}", withdrawal_id, e);
+                    warn!(
+                        "Failed to auto-process withdrawal {}: {:?}",
+                        withdrawal_id, e
+                    );
                     // Keep it in Processing state, will retry on next tick
                 }
             }
