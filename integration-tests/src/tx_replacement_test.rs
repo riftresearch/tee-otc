@@ -313,18 +313,37 @@ async fn test_user_deposit_replacement_bitcoin_to_ethereum(
     // Wait for esplora to sync
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    // The monitoring service should detect that we now have two transactions to the same address
-    // and should use the confirmed one (second_tx_hash) as the actual deposit
-    // We need to wait for the monitoring cycle to run
-    tokio::time::sleep(Duration::from_secs(10)).await;
+    // The user-deposit scheduler rearms the first mempool candidate after it disappears, so
+    // replacement detection is now bounded by the Bitcoin head poll interval rather than a
+    // fixed short sleep.
+    let replacement_deadline = Instant::now() + Duration::from_secs(45);
+    let swap_final = loop {
+        let swap_response = client
+            .get(format!("http://localhost:{otc_port}/api/v2/swap/{swap_id}"))
+            .send()
+            .await
+            .unwrap();
+        let current_swap: Swap = swap_response.json().await.unwrap();
 
-    // Get swap details again to verify it now tracks the SECOND transaction
-    let swap_response = client
-        .get(format!("http://localhost:{otc_port}/api/v2/swap/{swap_id}"))
-        .send()
-        .await
-        .unwrap();
-    let swap_final: Swap = swap_response.json().await.unwrap();
+        if current_swap
+            .user_deposit_status
+            .as_ref()
+            .map(|status| status.tx_hash.as_str())
+            == Some(second_tx_hash.as_str())
+        {
+            break current_swap;
+        }
+
+        assert!(
+            Instant::now() <= replacement_deadline,
+            "Timeout waiting for swap {} to track replacement tx {}, last user deposit: {:?}",
+            swap_id,
+            second_tx_hash,
+            current_swap.user_deposit_status
+        );
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    };
 
     info!("Swap user deposit: {:?}", swap_final.user_deposit_status);
 

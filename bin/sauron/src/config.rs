@@ -1,0 +1,110 @@
+use bitcoincore_rpc_async::Auth;
+use clap::Parser;
+
+#[derive(Parser, Debug, Clone)]
+#[command(name = "sauron")]
+#[command(about = "Replica-backed user deposit detector for tee-otc")]
+pub struct SauronArgs {
+    /// Log level
+    #[arg(long, env = "RUST_LOG", default_value = "info")]
+    pub log_level: String,
+
+    /// Replica database URL used for watch loading and notifications
+    #[arg(long, env = "OTC_REPLICA_DATABASE_URL")]
+    pub otc_replica_database_url: String,
+
+    /// Replica database name, used for logging and operational clarity
+    #[arg(long, env = "OTC_REPLICA_DATABASE_NAME", default_value = "otc_db")]
+    pub otc_replica_database_name: String,
+
+    /// Notification channel used for watch-set invalidation
+    #[arg(
+        long,
+        env = "OTC_REPLICA_NOTIFICATION_CHANNEL",
+        default_value = "sauron_watch_set_changed"
+    )]
+    pub otc_replica_notification_channel: String,
+
+    /// Base URL for the OTC server deposit observation route
+    #[arg(long, env = "OTC_INTERNAL_BASE_URL")]
+    pub otc_internal_base_url: String,
+
+    /// Trusted detector API identifier
+    #[arg(long, env = "OTC_DETECTOR_API_ID")]
+    pub otc_detector_api_id: String,
+
+    /// Trusted detector API secret
+    #[arg(long, env = "OTC_DETECTOR_API_SECRET")]
+    pub otc_detector_api_secret: String,
+
+    /// Bitcoin RPC URL
+    #[arg(long, env = "BITCOIN_RPC_URL")]
+    pub bitcoin_rpc_url: String,
+
+    /// Bitcoin RPC Auth
+    #[arg(long, env = "BITCOIN_RPC_AUTH", default_value = "none", value_parser = parse_auth)]
+    pub bitcoin_rpc_auth: Auth,
+
+    /// Electrum HTTP Server URL
+    #[arg(long, env = "ELECTRUM_HTTP_SERVER_URL")]
+    pub untrusted_esplora_http_server_url: String,
+
+    /// Bitcoin Network
+    #[arg(long, env = "BITCOIN_NETWORK", default_value = "bitcoin")]
+    pub bitcoin_network: bitcoin::Network,
+
+    /// Ethereum Mainnet RPC URL
+    #[arg(long, env = "EVM_RPC_URL")]
+    pub ethereum_mainnet_rpc_url: String,
+
+    /// Ethereum Mainnet Token Indexer URL
+    #[arg(long, env = "UNTRUSTED_ETHEREUM_TOKEN_INDEXER_URL")]
+    pub untrusted_ethereum_mainnet_token_indexer_url: String,
+
+    /// Ethereum allowed token address
+    #[arg(
+        long,
+        env = "ETHEREUM_ALLOWED_TOKEN",
+        default_value = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+    )]
+    pub ethereum_allowed_token: String,
+
+    /// Base RPC URL
+    #[arg(long, env = "BASE_RPC_URL")]
+    pub base_rpc_url: String,
+
+    /// Base Token Indexer URL
+    #[arg(long, env = "UNTRUSTED_BASE_TOKEN_INDEXER_URL")]
+    pub untrusted_base_token_indexer_url: String,
+
+    /// Base allowed token address
+    #[arg(
+        long,
+        env = "BASE_ALLOWED_TOKEN",
+        default_value = "0xcbB7C0000aB88B473b1f5aFd9ef808440eed33Bf"
+    )]
+    pub base_allowed_token: String,
+
+    /// Low-frequency full watch-set reconcile interval
+    #[arg(long, env = "SAURON_RECONCILE_INTERVAL_SECONDS", default_value = "60")]
+    pub sauron_reconcile_interval_seconds: u64,
+
+    /// Temporary poll interval for the first Bitcoin detector implementation
+    #[arg(
+        long,
+        env = "SAURON_BITCOIN_SCAN_INTERVAL_SECONDS",
+        default_value = "15"
+    )]
+    pub sauron_bitcoin_scan_interval_seconds: u64,
+}
+
+fn parse_auth(s: &str) -> Result<Auth, String> {
+    if s.eq_ignore_ascii_case("none") {
+        return Ok(Auth::None);
+    }
+
+    let mut split = s.splitn(2, ':');
+    let username = split.next().ok_or("Invalid auth string")?;
+    let password = split.next().ok_or("Invalid auth string")?;
+    Ok(Auth::UserPass(username.to_string(), password.to_string()))
+}

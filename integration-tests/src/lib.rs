@@ -79,3 +79,9 @@ mod quote_modes_swap_test;
 
 #[cfg(test)]
 mod taproot_address_test;
+
+#[cfg(test)]
+mod external_detection_ingest_test;
+
+#[cfg(test)]
+mod market_maker_batch_settlement_test;

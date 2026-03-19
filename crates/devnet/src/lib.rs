@@ -377,9 +377,10 @@ impl RiftDevnet {
         processing_mode: WithdrawalProcessingMode,
     ) -> Result<u16> {
         use crate::coinbase_mock_server::CoinbaseMockServer;
-        
+
         let (listener, port) = if let Some(listener) = listener {
-            let port = listener.local_addr()
+            let port = listener
+                .local_addr()
                 .map_err(|e| eyre::eyre!("Failed to get local address: {}", e))?
                 .port();
             (listener, port)
@@ -388,18 +389,17 @@ impl RiftDevnet {
             let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
                 .await
                 .map_err(|e| eyre::eyre!("Failed to bind to random port: {}", e))?;
-            let port = listener.local_addr()
+            let port = listener
+                .local_addr()
                 .map_err(|e| eyre::eyre!("Failed to get local address: {}", e))?
                 .port();
             (listener, port)
         };
-        
+
         let server = CoinbaseMockServer::new().with_processing_mode(processing_mode);
         let bitcoin_arc = self.bitcoin.clone();
         let ethereum_arc = self.ethereum.clone();
-        let handle = server
-            .start(listener, bitcoin_arc, ethereum_arc)
-            .await?;
+        let handle = server.start(listener, bitcoin_arc, ethereum_arc).await?;
         self.coinbase_mock_server_handle = Some(handle);
         self.coinbase_mock_server_port = Some(port);
         Ok(port)
@@ -492,7 +492,6 @@ impl RiftDevnetBuilder {
         self.coinbase_mock_server_config = Some(processing_mode);
         self
     }
-
 
     pub async fn build(self) -> Result<(crate::RiftDevnet, u64)> {
         // dont bother with the cache if we're in interactive mode for now
@@ -590,7 +589,7 @@ impl RiftDevnetBuilder {
                 None // No token indexer for Base in tests
             },
             self.interactive,
-            8453, // Base chain ID
+            8453,                                              // Base chain ID
             if self.interactive { Some(50102) } else { None }, // Base port
             if self.interactive { Some(50105) } else { None }, // Base token indexer port
         )
@@ -626,7 +625,12 @@ impl RiftDevnetBuilder {
                         .map_err(|e| eyre::eyre!("Failed to parse U256: {}", e))?,
                 )
                 .await
-                .map_err(|e| eyre::eyre!("[devnet builder] Failed to fund ETH address on Ethereum: {}", e))?;
+                .map_err(|e| {
+                    eyre::eyre!(
+                        "[devnet builder] Failed to fund ETH address on Ethereum: {}",
+                        e
+                    )
+                })?;
 
             // ~10 ETH on Base
             base_devnet
@@ -636,21 +640,30 @@ impl RiftDevnetBuilder {
                         .map_err(|e| eyre::eyre!("Failed to parse U256: {}", e))?,
                 )
                 .await
-                .map_err(|e| eyre::eyre!("[devnet builder] Failed to fund ETH address on Base: {}", e))?;
+                .map_err(|e| {
+                    eyre::eyre!("[devnet builder] Failed to fund ETH address on Base: {}", e)
+                })?;
 
             // Debugging: check funded balances
             let eth_balance = ethereum_devnet
                 .funded_provider
                 .get_balance(address)
                 .await
-                .map_err(|e| eyre::eyre!("[devnet builder] Failed to get ETH balance on Ethereum: {}", e))?;
+                .map_err(|e| {
+                    eyre::eyre!(
+                        "[devnet builder] Failed to get ETH balance on Ethereum: {}",
+                        e
+                    )
+                })?;
             info!("[Devnet Builder] Ethereum Balance of {addr_str} => {eth_balance:?}");
 
             let base_balance = base_devnet
                 .funded_provider
                 .get_balance(address)
                 .await
-                .map_err(|e| eyre::eyre!("[devnet builder] Failed to get ETH balance on Base: {}", e))?;
+                .map_err(|e| {
+                    eyre::eyre!("[devnet builder] Failed to get ETH balance on Base: {}", e)
+                })?;
             info!("[Devnet Builder] Base Balance of {addr_str} => {base_balance:?}");
         }
         if let Some(start) = funding_start {
@@ -658,8 +671,13 @@ impl RiftDevnetBuilder {
         }
 
         if self.interactive {
-            self.setup_interactive_mode(&bitcoin_devnet, &ethereum_devnet, &base_devnet, self.using_esplora)
-                .await?;
+            self.setup_interactive_mode(
+                &bitcoin_devnet,
+                &ethereum_devnet,
+                &base_devnet,
+                self.using_esplora,
+            )
+            .await?;
         }
 
         let config_dir = get_new_temp_dir()?;
@@ -681,27 +699,31 @@ impl RiftDevnetBuilder {
             let listener = tokio::net::TcpListener::bind(("0.0.0.0", 8080))
                 .await
                 .map_err(|e| eyre::eyre!("Failed to bind to port 8080: {}", e))?;
-            
+
             devnet
-                .start_coinbase_mock_server(Some(listener), self.coinbase_mock_server_config.unwrap_or(WithdrawalProcessingMode::default()))
+                .start_coinbase_mock_server(
+                    Some(listener),
+                    self.coinbase_mock_server_config
+                        .unwrap_or(WithdrawalProcessingMode::default()),
+                )
                 .await
                 .map_err(|e| eyre::eyre!("Failed to start Coinbase mock server: {}", e))?;
             info!(
                 "[Devnet Builder] Coinbase mock server started on port 8080 with mode {:?}",
-                self.coinbase_mock_server_config.unwrap_or(WithdrawalProcessingMode::default())
+                self.coinbase_mock_server_config
+                    .unwrap_or(WithdrawalProcessingMode::default())
             );
-        }
-        else if let Some(config) = self.coinbase_mock_server_config {
+        } else if let Some(config) = self.coinbase_mock_server_config {
             // Bind to random port and keep listener alive
             let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
                 .await
                 .map_err(|e| eyre::eyre!("Failed to bind to random port: {}", e))?;
-            
+
             let port = listener
                 .local_addr()
                 .map_err(|e| eyre::eyre!("Failed to get local address: {}", e))?
                 .port();
-            
+
             devnet
                 .start_coinbase_mock_server(Some(listener), config)
                 .await
@@ -728,7 +750,7 @@ impl RiftDevnetBuilder {
         using_esplora: bool,
     ) -> Result<()> {
         let setup_start = Instant::now();
-        
+
         // Ethereum market maker account (matches compose.override.yml)
         // EVM: 0x42c0ca15451F626B83f6BA80fDB13A4F59167213
         // BTC: bcrt1qn65u46clcspgdg7ylgdvd5848cg0jzgy0a8lee
@@ -744,15 +766,22 @@ impl RiftDevnetBuilder {
         // Base market maker account (matches compose.override.yml)
         // Generate from MultichainAccount to ensure valid address/key pair
         let market_maker_base_account = MultichainAccount::new(220202);
-        let market_maker_base_bitcoin_address = market_maker_base_account.bitcoin_wallet.address.clone();
+        let market_maker_base_bitcoin_address =
+            market_maker_base_account.bitcoin_wallet.address.clone();
         let market_maker_base_evm_address = market_maker_base_account.ethereum_address;
-        
+
         // Log the Base MM credentials for compose.override.yml
         info!("[Interactive Setup] Base Market Maker Credentials:");
         info!("  EVM Address: {}", market_maker_base_evm_address);
-        info!("  EVM Private Key: {:02x?}", market_maker_base_account.secret_bytes);
+        info!(
+            "  EVM Private Key: {:02x?}",
+            market_maker_base_account.secret_bytes
+        );
         info!("  Bitcoin Address: {}", market_maker_base_bitcoin_address);
-        info!("  Bitcoin Descriptor: {}", market_maker_base_account.bitcoin_wallet.descriptor());
+        info!(
+            "  Bitcoin Descriptor: {}",
+            market_maker_base_account.bitcoin_wallet.descriptor()
+        );
 
         let funding_amount = bitcoin::Amount::from_btc(1.0).unwrap().to_sat();
 
@@ -965,10 +994,7 @@ impl RiftDevnetBuilder {
         }
 
         if let Some(eth_indexer) = &ethereum_devnet.token_indexer {
-            println!(
-                "Ethereum Token Indexer:     {}",
-                eth_indexer.api_server_url
-            );
+            println!("Ethereum Token Indexer:     {}", eth_indexer.api_server_url);
         }
 
         if let Some(base_indexer) = &base_devnet.token_indexer {

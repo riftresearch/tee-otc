@@ -2,7 +2,7 @@ use crate::Result;
 use alloy::primitives::U256;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use otc_models::{Currency, Lot, Swap, TokenIdentifier, TransferInfo, TxStatus, Wallet};
+use otc_models::{Currency, Lot, Swap, TokenIdentifier, TxStatus, Wallet};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use uuid::Uuid;
@@ -18,6 +18,19 @@ pub struct FeeSettlementVerification {
     pub confirmations: u64,
     /// Amount paid to the protocol fee address, denominated in sats of the BTC-like fee asset.
     pub amount_sats: U256,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifiedUserDeposit {
+    pub amount: U256,
+    pub confirmations: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum UserDepositCandidateStatus {
+    TxNotFound,
+    TransferNotFound,
+    Verified(VerifiedUserDeposit),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,7 +106,10 @@ impl MarketMakerQueuedPaymentExt for [MarketMakerQueuedPayment] {
             .collect();
 
         // Calculate aggregated fee from pre-computed protocol fees
-        let aggregated_fee: U256 = self.iter().map(|qp| qp.protocol_fee).fold(U256::ZERO, |acc, fee| acc + fee);
+        let aggregated_fee: U256 = self
+            .iter()
+            .map(|qp| qp.protocol_fee)
+            .fold(U256::ZERO, |acc, fee| acc + fee);
 
         // Compute batch nonce digest by hashing all nonces together
         let mut nonce_data = Vec::new();
@@ -149,16 +165,17 @@ pub trait ChainOperations: Send + Sync {
         settlement_digest: [u8; 32],
     ) -> Result<Option<FeeSettlementVerification>>;
 
-    /// Check for transfers to an address for a given currency.
-    /// Returns the first/largest transfer found (regardless of amount).
-    /// The caller is responsible for validating the amount against quote bounds.
-    async fn search_for_transfer(
+    /// Verify an exact user deposit candidate by tx hash and transfer index.
+    ///
+    /// For Bitcoin, `transfer_index` is the `vout`.
+    /// For EVM, `transfer_index` is the receipt `log_index`.
+    async fn verify_user_deposit_candidate(
         &self,
         recipient_address: &str,
         currency: &Currency,
-        // Before this block, the transfer was not possible/irrelevant - can be used to limit the search range
-        from_block_height: Option<u64>,
-    ) -> Result<Option<TransferInfo>>;
+        tx_hash: &str,
+        transfer_index: u64,
+    ) -> Result<UserDepositCandidateStatus>;
 
     /// Get the status of a transaction
     async fn get_tx_status(&self, tx_hash: &str) -> Result<TxStatus>;
@@ -180,6 +197,9 @@ pub trait ChainOperations: Send + Sync {
 
     /// Get rough block time as an estimation of confirmation time
     fn estimated_block_time(&self) -> Duration;
+
+    /// Get the current best block height for the chain.
+    async fn get_block_height(&self) -> Result<u64>;
 
     /// Get the best hash for the chain as hex string
     async fn get_best_hash(&self) -> Result<String>;

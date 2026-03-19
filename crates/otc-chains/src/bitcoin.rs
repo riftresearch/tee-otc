@@ -1,6 +1,9 @@
 use crate::{
     key_derivation,
-    traits::{FeeSettlementVerification, MarketMakerBatch},
+    traits::{
+        FeeSettlementVerification, MarketMakerBatch, UserDepositCandidateStatus,
+        VerifiedUserDeposit,
+    },
     ChainOperations, Result,
 };
 use alloy::hex;
@@ -12,7 +15,9 @@ use bitcoin::base64::Engine;
 use bitcoin::secp256k1::{Secp256k1, SecretKey};
 use bitcoin::{Address, Amount, CompressedPublicKey, Network, OutPoint, PrivateKey, Transaction};
 use bitcoincore_rpc_async::{jsonrpc, Auth, Client, RpcApi};
-use otc_models::{ChainType, Currency, TokenIdentifier, TransferInfo, TxStatus, Wallet};
+use otc_models::{
+    ChainType, ConfirmedTxStatus, Currency, PendingTxStatus, TokenIdentifier, TxStatus, Wallet,
+};
 use reqwest::Url;
 use snafu::location;
 use std::str::FromStr;
@@ -183,7 +188,9 @@ impl ChainOperations for BitcoinChain {
         let tx = match tx_verbose_result {
             Ok(tx_verbose) => tx_verbose,
             Err(e) => {
-                if e.to_string().contains("No such mempool or blockchain transaction") {
+                if e.to_string()
+                    .contains("No such mempool or blockchain transaction")
+                {
                     return Ok(TxStatus::NotFound);
                 }
                 return Err(crate::Error::BitcoinRpcError {
@@ -192,10 +199,25 @@ impl ChainOperations for BitcoinChain {
                 });
             }
         };
+        let current_height =
+            self.rpc_client
+                .get_block_count()
+                .await
+                .map_err(|e| crate::Error::BitcoinRpcError {
+                    source: e,
+                    loc: location!(),
+                })?;
+
         if tx.confirmations.unwrap_or(0) > 0 {
-            Ok(TxStatus::Confirmed(tx.confirmations.unwrap_or(0)))
+            Ok(TxStatus::Confirmed(ConfirmedTxStatus {
+                confirmations: tx.confirmations.unwrap_or(0),
+                current_height,
+                inclusion_height: current_height
+                    .saturating_sub(tx.confirmations.unwrap_or(0))
+                    .saturating_add(1),
+            }))
         } else {
-            Ok(TxStatus::NotFound)
+            Ok(TxStatus::Pending(PendingTxStatus { current_height }))
         }
     }
 
@@ -363,21 +385,13 @@ impl ChainOperations for BitcoinChain {
         Ok(hex::encode(raw))
     }
 
-    async fn search_for_transfer(
+    async fn verify_user_deposit_candidate(
         &self,
-        address: &str,
+        recipient_address: &str,
         currency: &Currency,
-        _from_block_height: Option<u64>,
-    ) -> Result<Option<TransferInfo>> {
-        debug!("Searching for transfer");
-        let span = tracing::span!(
-            tracing::Level::DEBUG,
-            "search_for_transfer",
-            address = address,
-            currency = format!("{:?}", currency),
-        );
-        let _enter = span.enter();
-
+        tx_hash: &str,
+        transfer_index: u64,
+    ) -> Result<UserDepositCandidateStatus> {
         if !matches!(currency.chain, ChainType::Bitcoin)
             || !matches!(currency.token, otc_models::TokenIdentifier::Native)
         {
@@ -386,12 +400,61 @@ impl ChainOperations for BitcoinChain {
                 network: ChainType::Bitcoin,
             });
         }
-        let address = bitcoin::Address::from_str(address)?.assume_checked();
-        let transfer_opt = self
-            .get_transfer_hint(address.to_string().as_str())
-            .await?;
-        debug!("Potential transfer: {:?}", transfer_opt);
-        Ok(transfer_opt)
+
+        let txid = bitcoin::Txid::from_str(tx_hash).map_err(|e| {
+            crate::Error::TransactionDeserializationFailed {
+                context: format!("Failed to parse txid: {e}"),
+                loc: location!(),
+            }
+        })?;
+
+        let tx_verbose = match self.rpc_client.get_raw_transaction_verbose(&txid).await {
+            Ok(tx_verbose) => tx_verbose,
+            Err(bitcoincore_rpc_async::Error::JsonRpc(jsonrpc::Error::Rpc(rpc_err)))
+                if rpc_err.code == -5 =>
+            {
+                return Ok(UserDepositCandidateStatus::TxNotFound);
+            }
+            Err(e) => {
+                return Err(crate::Error::BitcoinRpcError {
+                    source: e,
+                    loc: location!(),
+                });
+            }
+        };
+
+        let confirmations = tx_verbose.confirmations.unwrap_or(0);
+        let tx_bytes = hex::decode(tx_verbose.hex).map_err(|e| {
+            crate::Error::TransactionDeserializationFailed {
+                context: format!("Failed to decode bitcoin tx data hex to bytes: {e}"),
+                loc: location!(),
+            }
+        })?;
+        let tx = bitcoin::consensus::deserialize::<Transaction>(&tx_bytes).map_err(|e| {
+            crate::Error::TransactionDeserializationFailed {
+                context: format!("Failed to deserialize tx data as bitcoin transaction: {e}"),
+                loc: location!(),
+            }
+        })?;
+
+        let Some(output) = tx.output.get(transfer_index as usize) else {
+            return Ok(UserDepositCandidateStatus::TransferNotFound);
+        };
+
+        let output_address =
+            match bitcoin::Address::from_script(&output.script_pubkey, self.network) {
+                Ok(address) => address,
+                Err(_) => return Ok(UserDepositCandidateStatus::TransferNotFound),
+            };
+
+        if output_address.to_string() != recipient_address {
+            return Ok(UserDepositCandidateStatus::TransferNotFound);
+        }
+
+        Ok(UserDepositCandidateStatus::Verified(VerifiedUserDeposit {
+            amount: U256::from(output.value.to_sat()),
+            confirmations,
+        }))
     }
 
     async fn verify_market_maker_batch_transaction(
@@ -575,7 +638,8 @@ impl ChainOperations for BitcoinChain {
             return Err(crate::Error::BadMarketMakerBatch {
                 chain: ChainType::Bitcoin,
                 tx_hash: tx_hash.to_string(),
-                message: "Fee settlement tx does not contain expected digest in OP_RETURN".to_string(),
+                message: "Fee settlement tx does not contain expected digest in OP_RETURN"
+                    .to_string(),
                 loc: location!(),
             });
         }
@@ -622,6 +686,16 @@ impl ChainOperations for BitcoinChain {
         Duration::from_secs(600) // 10 minutes
     }
 
+    async fn get_block_height(&self) -> Result<u64> {
+        self.rpc_client
+            .get_block_count()
+            .await
+            .map_err(|e| crate::Error::BitcoinRpcError {
+                source: e,
+                loc: location!(),
+            })
+    }
+
     async fn get_best_hash(&self) -> Result<String> {
         Ok(self
             .rpc_client
@@ -632,57 +706,5 @@ impl ChainOperations for BitcoinChain {
                 loc: location!(),
             })?
             .to_string())
-    }
-}
-
-impl BitcoinChain {
-    /// Search for any transfer to an address.
-    /// Returns the most confirmed transfer found (regardless of amount).
-    /// The caller is responsible for validating the amount against quote bounds.
-    async fn get_transfer_hint(&self, address: &str) -> Result<Option<TransferInfo>> {
-        let address = bitcoin::Address::from_str(address)?.assume_checked();
-
-        // Called a hint b/c the esplora client CANNOT be trusted to return non-fradulent data (b/c it not intended to run locally)
-        let utxos = self
-            .untrusted_esplora_client
-            .get_address_utxo(&address)
-            .await
-            .map_err(|e| crate::Error::EsploraClientError {
-                source: e,
-                loc: location!(),
-            })?;
-        debug!("UTXOs: {:?}", utxos);
-        let current_block_height =
-            self.rpc_client
-                .get_block_count()
-                .await
-                .map_err(|e| crate::Error::BitcoinRpcError {
-                    source: e,
-                    loc: location!(),
-                })? as u32;
-        let mut most_confirmed_transfer: Option<TransferInfo> = None;
-        for utxo in utxos {
-            // TODO: the height of the utxo should be validated against the rpc client
-            let cur_utxo_confirmations =
-                current_block_height - utxo.status.block_height.unwrap_or(current_block_height);
-            if most_confirmed_transfer.is_some()
-                && (most_confirmed_transfer.as_ref().unwrap().confirmations
-                    > cur_utxo_confirmations as u64)
-            {
-                // if we already have a candidate let's do the cheap check to see if it's better confirmations wise before we fully validate it
-                // before we download the full tx
-                continue;
-            }
-
-            // At this point, our new candidate is valid and the most confirmed transfer we've seen
-            // so let's return it
-            most_confirmed_transfer = Some(TransferInfo {
-                tx_hash: utxo.txid.to_string(),
-                amount: U256::from(utxo.value),
-                detected_at: utc::now(),
-                confirmations: cur_utxo_confirmations as u64,
-            });
-        }
-        Ok(most_confirmed_transfer)
     }
 }

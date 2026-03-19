@@ -26,8 +26,21 @@ impl ChainType {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PendingTxStatus {
+    pub current_height: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConfirmedTxStatus {
+    pub confirmations: u64,
+    pub current_height: u64,
+    pub inclusion_height: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TxStatus {
     NotFound,
-    Confirmed(u64), // 0 = in mempool, 1+ = confirmed blocks
+    Pending(PendingTxStatus),
+    Confirmed(ConfirmedTxStatus),
 }

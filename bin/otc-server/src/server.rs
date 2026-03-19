@@ -5,15 +5,24 @@ use crate::{
         swap_repo::{SWAP_FEES_TOTAL_METRIC, SWAP_VOLUME_TOTAL_METRIC},
         Database, GOOD_STANDING_THRESHOLD_SATS, GOOD_STANDING_WINDOW, MM_FEE_DEBT_SATS_METRIC,
     },
+    detection_ingest::{deposit_observation, ParticipantCooldownMap},
     http_metrics::{track_http_metrics, HTTP_REQUESTS_TOTAL, HTTP_REQUEST_DURATION_SECONDS},
     services::{
-        swap_monitoring::{
-            ACTIVE_INDIVIDUAL_SWAPS_METRIC, ACTIVE_SWAP_BATCHES_METRIC,
-            SWAP_MONITORING_DURATION_METRIC,
+        market_maker_batch_settlement::{
+            MarketMakerBatchSettlementStatus, ACTIVE_MARKET_MAKER_BATCHES_METRIC,
+            MARKET_MAKER_BATCH_SETTLEMENT_DURATION_METRIC,
+            MARKET_MAKER_BATCH_SETTLEMENT_EVENTS_TOTAL_METRIC,
         },
-        MMRegistry, SwapManager, SwapMonitoringService,
+        user_deposit_confirmation_scheduler::{
+            UserDepositSchedulerStatus, ACTIVE_USER_DEPOSIT_CONFIRMATIONS_METRIC,
+            USER_DEPOSIT_CONFIRMATIONS_ADVANCED_TOTAL_METRIC,
+            USER_DEPOSIT_CONFIRMATION_DURATION_METRIC,
+            USER_DEPOSIT_HEAD_FETCH_FAILURES_TOTAL_METRIC, USER_DEPOSIT_REARMS_TOTAL_METRIC,
+        },
+        MMRegistry, MarketMakerBatchSettlementService, SwapManager,
+        UserDepositConfirmationScheduler,
     },
-    OtcServerArgs, Result,
+    BackgroundTaskResult, OtcServerArgs, Result,
 };
 use async_trait::async_trait;
 use axum::{
@@ -31,17 +40,20 @@ use dstack_sdk::dstack_client::{DstackClient, GetQuoteResponse, InfoResponse};
 use metrics::{describe_counter, describe_gauge, describe_histogram, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use mm_websocket_server::{MessageHandler, MessageSender};
-use otc_auth::{api_keys::MARKET_MAKER_API_KEYS, ApiKeyStore};
+use otc_auth::{
+    api_keys::{DETECTOR_API_KEY, MARKET_MAKER_API_KEYS},
+    ApiKeyStore,
+};
 use otc_chains::{bitcoin::BitcoinChain, evm::EvmChain, ChainRegistry};
 use otc_protocols::mm::{MMRequest, MMResponse, ProtocolMessage};
 use serde::{Deserialize, Serialize};
-use snafu::prelude::*;
+use snafu::{prelude::*, FromString, Whatever};
 use std::{
     net::SocketAddr,
     sync::{Arc, OnceLock},
     time::Instant,
 };
-use tokio::{sync::mpsc, time::Duration};
+use tokio::{sync::mpsc, task::JoinSet, time::Duration};
 use tower_http::cors::{AllowOrigin, CorsLayer};
 use tracing::{error, info};
 use uuid::Uuid;
@@ -52,17 +64,25 @@ pub struct AppState {
     pub swap_manager: Arc<SwapManager>,
     pub mm_registry: Arc<MMRegistry>,
     pub api_key_store: Arc<otc_auth::ApiKeyStore>,
+    pub detector_api_key_store: Arc<otc_auth::ApiKeyStore>,
     pub address_screener: Option<ChainalysisAddressScreener>,
     pub chain_registry: Arc<ChainRegistry>,
     pub dstack_client: Arc<DstackClient>,
-    pub swap_monitoring_service: Arc<SwapMonitoringService>,
+    pub market_maker_batch_settlement_service: Arc<MarketMakerBatchSettlementService>,
+    pub user_deposit_confirmation_scheduler: Arc<UserDepositConfirmationScheduler>,
+    pub participant_submission_cooldowns: Arc<ParticipantCooldownMap>,
+    pub participant_detection_min_interval: Duration,
+    pub participant_signed_detection_enabled: bool,
 }
 
 #[derive(Serialize, Deserialize)]
 struct Status {
     status: String,
     version: String,
-    last_monitor_pass: u64,
+    last_batch_settlement_pass: u64,
+    last_user_deposit_confirmation_pass: u64,
+    market_maker_batch_settlement: MarketMakerBatchSettlementStatus,
+    user_deposit_confirmation_scheduler: UserDepositSchedulerStatus,
     connected_market_makers: Vec<Uuid>,
 }
 
@@ -78,6 +98,7 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
     info!("Starting OTC server...");
 
     let addr = SocketAddr::from((args.host, args.port));
+    let mut background_tasks: JoinSet<BackgroundTaskResult> = JoinSet::new();
 
     let settings =
         Arc::new(
@@ -113,46 +134,49 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
     chain_registry.register(otc_models::ChainType::Bitcoin, Arc::new(bitcoin_chain));
 
     // Initialize Ethereum chain
-    let ethereum_chain = EvmChain::new(
-        &args.ethereum_mainnet_rpc_url,
-        &args.untrusted_ethereum_mainnet_token_indexer_url,
-        &args.ethereum_allowed_token,
-        otc_models::ChainType::Ethereum,
-        b"ethereum-wallet",
-        4,
-        Duration::from_secs(12),
-    )
-    .await
-    .map_err(|e| crate::Error::DatabaseInit {
-        source: crate::error::OtcServerError::InvalidData {
-            message: format!("Failed to initialize Ethereum chain: {e}"),
-        },
-    })?;
-    chain_registry.register(otc_models::ChainType::Ethereum, Arc::new(ethereum_chain));
+    let ethereum_chain = Arc::new(
+        EvmChain::new(
+            &args.ethereum_mainnet_rpc_url,
+            &args.ethereum_allowed_token,
+            otc_models::ChainType::Ethereum,
+            b"ethereum-wallet",
+            4,
+            Duration::from_secs(12),
+        )
+        .await
+        .map_err(|e| crate::Error::DatabaseInit {
+            source: crate::error::OtcServerError::InvalidData {
+                message: format!("Failed to initialize Ethereum chain: {e}"),
+            },
+        })?,
+    );
+    chain_registry.register_evm(otc_models::ChainType::Ethereum, ethereum_chain);
 
     // Initialize Base chain
-    let base_chain = EvmChain::new(
-        &args.base_rpc_url,
-        &args.untrusted_base_token_indexer_url,
-        &args.base_allowed_token,
-        otc_models::ChainType::Base,
-        b"base-wallet",
-        2,
-        Duration::from_secs(2),
-    )
-    .await
-    .map_err(|e| crate::Error::DatabaseInit {
-        source: crate::error::OtcServerError::InvalidData {
-            message: format!("Failed to initialize Base chain: {e}"),
-        },
-    })?;
-    chain_registry.register(otc_models::ChainType::Base, Arc::new(base_chain));
+    let base_chain = Arc::new(
+        EvmChain::new(
+            &args.base_rpc_url,
+            &args.base_allowed_token,
+            otc_models::ChainType::Base,
+            b"base-wallet",
+            2,
+            Duration::from_secs(2),
+        )
+        .await
+        .map_err(|e| crate::Error::DatabaseInit {
+            source: crate::error::OtcServerError::InvalidData {
+                message: format!("Failed to initialize Base chain: {e}"),
+            },
+        })?,
+    );
+    chain_registry.register_evm(otc_models::ChainType::Base, base_chain);
 
     let chain_registry = Arc::new(chain_registry);
 
     info!("Initializing services...");
 
     let api_key_store = Arc::new(ApiKeyStore::new(MARKET_MAKER_API_KEYS.clone()).await?);
+    let detector_api_key_store = Arc::new(ApiKeyStore::new(vec![DETECTOR_API_KEY.clone()]).await?);
 
     let mm_registry = Arc::new(MMRegistry::new());
 
@@ -163,68 +187,29 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         mm_registry.clone(),
     ));
 
-    // Start the swap monitoring service
-    let swap_monitoring_service = Arc::new(SwapMonitoringService::new(
+    let market_maker_batch_settlement_service = Arc::new(MarketMakerBatchSettlementService::new(
         db.clone(),
         settings.clone(),
         chain_registry.clone(),
         mm_registry.clone(),
-        args.chain_monitor_interval_seconds,
-        args.max_concurrent_swaps,
+    ));
+    let user_deposit_confirmation_scheduler = Arc::new(UserDepositConfirmationScheduler::new(
+        db.clone(),
+        chain_registry.clone(),
+        mm_registry.clone(),
     ));
 
-    info!("Starting swap monitoring service...");
-    tokio::spawn({
-        let monitoring_service = swap_monitoring_service.clone();
-        async move {
-            monitoring_service.run().await;
-        }
-    });
+    info!("Starting market maker batch settlement service...");
+    market_maker_batch_settlement_service.initialize().await;
+    market_maker_batch_settlement_service.spawn_tasks(&mut background_tasks);
+
+    info!("Starting user deposit confirmation scheduler...");
+    user_deposit_confirmation_scheduler.initialize().await;
+    user_deposit_confirmation_scheduler.spawn_tasks(&mut background_tasks);
 
     // Start periodic database metrics sync for Grafana
     info!("Starting database metrics sync...");
-    tokio::spawn({
-        let db = db.clone();
-        async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(10));
-            loop {
-                interval.tick().await;
-
-                // Sync volume metrics
-                if let Ok(volumes) = db.swaps().get_settled_volume_totals().await {
-                    for (market, total) in volumes {
-                        gauge!(
-                            SWAP_VOLUME_TOTAL_METRIC,
-                            "market" => market,
-                        )
-                        .set(total as f64);
-                    }
-                }
-
-                // Sync fee metrics
-                if let Ok(fees) = db.swaps().get_settled_fee_totals().await {
-                    for (market, total) in fees {
-                        gauge!(
-                            SWAP_FEES_TOTAL_METRIC,
-                            "market" => market,
-                        )
-                        .set(total as f64);
-                    }
-                }
-
-                // Sync MM fee debt metrics
-                if let Ok(states) = db.fees().list_all_fee_states().await {
-                    for (mm_id, debt_sats) in states {
-                        gauge!(
-                            MM_FEE_DEBT_SATS_METRIC,
-                            "market_maker_id" => mm_id.to_string(),
-                        )
-                        .set(debt_sats as f64);
-                    }
-                }
-            }
-        }
-    });
+    spawn_database_metrics_sync(&mut background_tasks, db.clone());
 
     // Initialize optional Chainalysis address screener
     let address_screener = match (&args.chainalysis_host, &args.chainalysis_token) {
@@ -257,14 +242,21 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         swap_manager,
         mm_registry,
         api_key_store,
+        detector_api_key_store,
         address_screener,
         chain_registry,
         dstack_client,
-        swap_monitoring_service,
+        market_maker_batch_settlement_service,
+        user_deposit_confirmation_scheduler,
+        participant_submission_cooldowns: Arc::new(ParticipantCooldownMap::new()),
+        participant_detection_min_interval: Duration::from_secs(
+            args.participant_detection_min_interval_seconds,
+        ),
+        participant_signed_detection_enabled: args.participant_signed_detection_enabled,
     };
 
     if let Some(metrics_addr) = args.metrics_listen_addr {
-        setup_metrics(metrics_addr).await?;
+        setup_metrics(&mut background_tasks, metrics_addr).await?;
     } else {
         install_metrics_recorder()?;
     }
@@ -285,6 +277,10 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         .route(
             "/api/v2/market-makers/suspended",
             get(get_suspended_market_makers),
+        )
+        .route(
+            "/api/v1/swaps/:swap_id/deposit-observation",
+            post(deposit_observation),
         )
         .route("/api/v1/tdx/quote", get(get_tdx_quote))
         .route("/api/v1/tdx/info", get(get_tdx_info))
@@ -336,11 +332,82 @@ pub async fn run_server(args: OtcServerArgs) -> Result<()> {
         .await
         .context(crate::ServerBindSnafu)?;
 
-    axum::serve(listener, app)
-        .await
-        .context(crate::ServerStartSnafu)?;
+    tokio::select! {
+        serve_result = axum::serve(listener, app) => {
+            serve_result.context(crate::ServerStartSnafu)?;
+            Ok(())
+        }
+        background_result = background_tasks.join_next(), if !background_tasks.is_empty() => {
+            handle_background_task_result(background_result)
+        }
+    }
+}
 
-    Ok(())
+fn spawn_database_metrics_sync(join_set: &mut JoinSet<BackgroundTaskResult>, db: Database) {
+    join_set.spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_secs(10));
+        loop {
+            interval.tick().await;
+
+            // Sync volume metrics
+            if let Ok(volumes) = db.swaps().get_settled_volume_totals().await {
+                for (market, total) in volumes {
+                    gauge!(
+                        SWAP_VOLUME_TOTAL_METRIC,
+                        "market" => market,
+                    )
+                    .set(total as f64);
+                }
+            }
+
+            // Sync fee metrics
+            if let Ok(fees) = db.swaps().get_settled_fee_totals().await {
+                for (market, total) in fees {
+                    gauge!(
+                        SWAP_FEES_TOTAL_METRIC,
+                        "market" => market,
+                    )
+                    .set(total as f64);
+                }
+            }
+
+            // Sync MM fee debt metrics
+            if let Ok(states) = db.fees().list_all_fee_states().await {
+                for (mm_id, debt_sats) in states {
+                    gauge!(
+                        MM_FEE_DEBT_SATS_METRIC,
+                        "market_maker_id" => mm_id.to_string(),
+                    )
+                    .set(debt_sats as f64);
+                }
+            }
+        }
+        #[allow(unreachable_code)]
+        Ok::<(), String>(())
+    });
+}
+
+fn background_task_failed(message: String) -> crate::Error {
+    crate::Error::Generic {
+        source: Whatever::without_source(message),
+    }
+}
+
+fn handle_background_task_result(
+    background_result: Option<std::result::Result<BackgroundTaskResult, tokio::task::JoinError>>,
+) -> Result<()> {
+    match background_result {
+        Some(Ok(Ok(()))) => Err(background_task_failed(
+            "A background task exited unexpectedly".to_string(),
+        )),
+        Some(Ok(Err(err))) => Err(background_task_failed(err)),
+        Some(Err(err)) => Err(background_task_failed(format!(
+            "A background task panicked or was cancelled: {err}"
+        ))),
+        None => Err(background_task_failed(
+            "The background task set terminated unexpectedly".to_string(),
+        )),
+    }
 }
 
 fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
@@ -376,18 +443,43 @@ fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
     );
 
     describe_histogram!(
-        SWAP_MONITORING_DURATION_METRIC,
-        "Duration in seconds for monitoring all active swaps in a single iteration."
+        MARKET_MAKER_BATCH_SETTLEMENT_DURATION_METRIC,
+        "Duration in seconds for refreshing a market maker batch settlement candidate."
+    );
+
+    describe_counter!(
+        MARKET_MAKER_BATCH_SETTLEMENT_EVENTS_TOTAL_METRIC,
+        "Market maker batch settlement lifecycle events by chain and event type."
     );
 
     describe_gauge!(
-        ACTIVE_INDIVIDUAL_SWAPS_METRIC,
-        "Current number of swaps monitored individually in the latest monitoring cycle."
+        ACTIVE_MARKET_MAKER_BATCHES_METRIC,
+        "Current number of market maker deposit batches scheduled for confirmation tracking."
+    );
+
+    describe_histogram!(
+        USER_DEPOSIT_CONFIRMATION_DURATION_METRIC,
+        "Duration in seconds for refreshing a scheduled user deposit confirmation candidate."
     );
 
     describe_gauge!(
-        ACTIVE_SWAP_BATCHES_METRIC,
-        "Current number of market maker deposit batches monitored in the latest monitoring cycle."
+        ACTIVE_USER_DEPOSIT_CONFIRMATIONS_METRIC,
+        "Current number of swaps scheduled for user-deposit confirmation tracking."
+    );
+
+    describe_counter!(
+        USER_DEPOSIT_CONFIRMATIONS_ADVANCED_TOTAL_METRIC,
+        "Total number of user deposits advanced to market-maker initiation after confirmation."
+    );
+
+    describe_counter!(
+        USER_DEPOSIT_REARMS_TOTAL_METRIC,
+        "Total number of accepted user deposits rearmed after disappearing from chain visibility."
+    );
+
+    describe_counter!(
+        USER_DEPOSIT_HEAD_FETCH_FAILURES_TOTAL_METRIC,
+        "Total number of user-deposit scheduler chain-head fetch failures by chain."
     );
 
     describe_gauge!(
@@ -434,16 +526,21 @@ fn install_metrics_recorder() -> Result<Arc<PrometheusHandle>> {
     Ok(shared_handle)
 }
 
-async fn setup_metrics(addr: SocketAddr) -> Result<()> {
+async fn setup_metrics(
+    join_set: &mut JoinSet<BackgroundTaskResult>,
+    addr: SocketAddr,
+) -> Result<()> {
     let shared_handle = install_metrics_recorder()?;
 
     let upkeep_handle = shared_handle.clone();
-    tokio::spawn(async move {
+    join_set.spawn(async move {
         let mut ticker = tokio::time::interval(Duration::from_secs(10));
         loop {
             ticker.tick().await;
             upkeep_handle.run_upkeep();
         }
+        #[allow(unreachable_code)]
+        Ok::<(), String>(())
     });
 
     let listener = tokio::net::TcpListener::bind(addr)
@@ -451,14 +548,16 @@ async fn setup_metrics(addr: SocketAddr) -> Result<()> {
         .context(crate::MetricsServerBindSnafu { addr })?;
 
     let metrics_state = shared_handle.clone();
-    tokio::spawn(async move {
+    join_set.spawn(async move {
         let app = Router::new()
             .route("/metrics", get(metrics_handler))
             .with_state(metrics_state);
 
-        if let Err(error) = axum::serve(listener, app).await {
-            error!("Metrics server error: {}", error);
-        }
+        axum::serve(listener, app)
+            .await
+            .map_err(|error| format!("Metrics server error: {error}"))?;
+
+        Ok::<(), String>(())
     });
 
     Ok(())
@@ -476,10 +575,17 @@ async fn metrics_handler(State(handle): State<Arc<PrometheusHandle>>) -> impl In
 }
 
 async fn status_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let batch_status = state
+        .market_maker_batch_settlement_service
+        .status_snapshot();
+    let user_status = state.user_deposit_confirmation_scheduler.status_snapshot();
     Json(Status {
         status: "ok".to_string(),
         version: env!("CARGO_PKG_VERSION").to_string(),
-        last_monitor_pass: state.swap_monitoring_service.last_monitor_pass(),
+        last_batch_settlement_pass: batch_status.last_pass,
+        last_user_deposit_confirmation_pass: user_status.last_pass,
+        market_maker_batch_settlement: batch_status,
+        user_deposit_confirmation_scheduler: user_status,
         connected_market_makers: state.mm_registry.get_connected_market_makers(),
     })
 }
@@ -716,7 +822,7 @@ async fn get_swap(
 struct OTCMessageHandler {
     db: Database,
     mm_registry: Arc<MMRegistry>,
-    swap_monitoring_service: Arc<SwapMonitoringService>,
+    market_maker_batch_settlement_service: Arc<MarketMakerBatchSettlementService>,
     chain_registry: Arc<ChainRegistry>,
     swap_manager: Arc<SwapManager>,
 }
@@ -837,9 +943,10 @@ impl MessageHandler for OTCMessageHandler {
                                 tx_hash = %tx_hash,
                                 "Received batch payment notification from MM",
                             );
-                            let swap_monitoring_service = self.swap_monitoring_service.clone();
+                            let market_maker_batch_settlement_service =
+                                self.market_maker_batch_settlement_service.clone();
                             tokio::spawn(async move {
-                                let res = swap_monitoring_service
+                                let res = market_maker_batch_settlement_service
                                     .track_batch_payment(
                                         mm_id,
                                         &tx_hash,
@@ -1280,7 +1387,7 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     let handler = Arc::new(OTCMessageHandler {
         db: state.db.clone(),
         mm_registry: state.mm_registry.clone(),
-        swap_monitoring_service: state.swap_monitoring_service.clone(),
+        market_maker_batch_settlement_service: state.market_maker_batch_settlement_service.clone(),
         chain_registry: state.chain_registry.clone(),
         swap_manager: state.swap_manager.clone(),
     });

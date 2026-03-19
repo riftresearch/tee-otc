@@ -4396,6 +4396,7 @@ dependencies = [
  "otc-server",
  "reqwest",
  "rfq-server",
+ "sauron",
  "serde",
  "serde_json",
  "snafu",
@@ -6449,6 +6450,34 @@ name = "ryu"
 version = "1.0.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28d3b2b1366ec20994f1fd18c3c594f05c5dd4bc44d8bb0c1c632c8d6829481f"
+
+[[package]]
+name = "sauron"
+version = "1.7.1"
+dependencies = [
+ "alloy 1.0.30",
+ "async-trait",
+ "bitcoin",
+ "bitcoincore-rpc-async",
+ "blockchain-utils",
+ "chrono",
+ "clap",
+ "esplora-client",
+ "evm-token-indexer-client",
+ "otc-models",
+ "otc-server",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "snafu",
+ "sqlx",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "utc",
+ "uuid",
+]
 
 [[package]]
 name = "schannel"

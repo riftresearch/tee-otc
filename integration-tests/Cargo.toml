@@ -21,6 +21,7 @@ reqwest = {workspace = true}
 serde_json = {workspace = true}
 devnet = {workspace = true}
 alloy = {workspace = true}
+sauron = { path = "../bin/sauron" }
 tracing = {workspace = true}
 evm-token-indexer-client = {workspace = true}
 bitcoincore-rpc-async = {workspace = true}

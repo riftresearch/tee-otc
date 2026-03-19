@@ -61,3 +61,22 @@ pub static FEE_SET_API_KEY: LazyLock<PublicApiKeyRecord> = LazyLock::new(|| {
         hash: "$argon2id$v=19$m=19456,t=2,p=1$6+VxTESZo5x9nChdI1KBqQ$tYH4aBg6WGcGVwC8YSjSPmP+aLaaCjeBI+2+bVtUBlU".to_string(),
     }
 });
+
+#[cfg(feature = "test-market-makers")]
+pub static DETECTOR_API_KEY: LazyLock<PublicApiKeyRecord> = LazyLock::new(|| {
+    PublicApiKeyRecord {
+        id: "019d01bc-4352-75f1-bbe0-128040d0e781".parse().unwrap(),
+        tag: "test-detector-key".to_string(),
+        // Secret value for integration tests: `5SSXJSnQOAxycnzLOlr3BBVVAQnwYiza`
+        hash: "$argon2id$v=19$m=19456,t=2,p=1$fJpW0vRThdSO8ClTJKn2LQ$IgAyBj/fX/JLlLfDWRmcZJ9VpxzoRBlC8R+Yk9mrwHY".to_string(),
+    }
+});
+
+#[cfg(not(feature = "test-market-makers"))]
+pub static DETECTOR_API_KEY: LazyLock<PublicApiKeyRecord> = LazyLock::new(|| {
+    PublicApiKeyRecord {
+        id: "019d01b9-495c-7751-b48b-cb4732e04fcb".parse().unwrap(),
+        tag: "detector-key".to_string(),
+        hash: "$argon2id$v=19$m=19456,t=2,p=1$Rm+20FTZtMV8plSAoBbeJw$3micxBaYPmzZwlO7St8YT7kQK9BTq4aXRt2Rf5G3ejQ".to_string(),
+    }
+});

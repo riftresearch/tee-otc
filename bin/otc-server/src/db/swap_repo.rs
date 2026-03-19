@@ -21,6 +21,7 @@ use crate::error::{OtcServerError, OtcServerResult};
 
 pub const SWAP_VOLUME_TOTAL_METRIC: &str = "otc_swap_volume_total";
 pub const SWAP_FEES_TOTAL_METRIC: &str = "otc_swap_fees_total";
+const ACTIVE_SWAP_MAX_AGE: chrono::Duration = chrono::Duration::days(365);
 
 #[derive(Debug, Clone)]
 pub struct PendingMMDepositSwap {
@@ -355,7 +356,7 @@ impl SwapRepository {
     }
 
     pub async fn get_active_swaps(&self) -> OtcServerResult<Vec<Swap>> {
-        let cutoff_time = utc::now() - chrono::Duration::hours(24);
+        let cutoff_time = utc::now() - ACTIVE_SWAP_MAX_AGE;
 
         let rows = sqlx::query(
             r"
@@ -391,6 +392,54 @@ impl SwapRepository {
         .await?;
 
         let mut swaps = Vec::new();
+        for row in rows {
+            swaps.push(Swap::from_row(&row)?);
+        }
+
+        Ok(swaps)
+    }
+
+    pub async fn get_active_swaps_with_status(
+        &self,
+        status: SwapStatus,
+    ) -> OtcServerResult<Vec<Swap>> {
+        let cutoff_time = utc::now() - ACTIVE_SWAP_MAX_AGE;
+
+        let rows = sqlx::query(
+            r"
+            SELECT 
+                s.id, s.quote_id, s.market_maker_id,
+                s.metadata, s.realized_swap,
+                s.deposit_vault_salt, s.deposit_vault_address, s.mm_nonce,
+                s.user_destination_address, s.refund_address,
+                s.status,
+                s.user_deposit_status, s.mm_deposit_status, s.settlement_status,
+                s.latest_refund,
+                s.failure_reason, s.failure_at,
+                s.mm_notified_at, s.mm_private_key_sent_at,
+                s.created_at, s.updated_at,
+                -- Quote fields
+                q.id as quote_id,
+                q.from_chain, q.from_token, q.from_decimals, q.from_amount,
+                q.to_chain, q.to_token, q.to_decimals, q.to_amount,
+                q.liquidity_fee_bps, q.protocol_fee_bps, q.network_fee_sats,
+                q.fee_liquidity, q.fee_protocol, q.fee_network,
+                q.min_input, q.max_input,
+                q.affiliate as quote_affiliate,
+                q.market_maker_id as quote_market_maker_id, q.expires_at, q.created_at as quote_created_at
+            FROM swaps s
+            JOIN quotes q ON s.quote_id = q.id
+            WHERE s.status = $1
+              AND NOT (s.updated_at < $2)
+            ORDER BY s.created_at DESC
+            ",
+        )
+        .bind(status)
+        .bind(cutoff_time)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut swaps = Vec::with_capacity(rows.len());
         for row in rows {
             swaps.push(Swap::from_row(&row)?);
         }
@@ -825,6 +874,20 @@ impl SwapRepository {
             }
         };
         self.update(&swap, expected_status).await?;
+        Ok(())
+    }
+
+    /// Reset a confirmed-but-disappeared user deposit so external discovery can rediscover it.
+    pub async fn rearm_user_deposit_detection(&self, swap_id: Uuid) -> OtcServerResult<()> {
+        let mut swap = self.get(swap_id).await?;
+        let original_status = swap.status;
+
+        swap.rearm_user_deposit_detection()
+            .map_err(|e| OtcServerError::InvalidState {
+                message: format!("State transition failed: {e}"),
+            })?;
+
+        self.update(&swap, Some(original_status)).await?;
         Ok(())
     }
 
@@ -1536,6 +1599,38 @@ mod tests {
             refund_record.recipient_address
         );
         assert_eq!(latest_refund.timestamp, refund_record.timestamp);
+
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn test_get_active_swaps_with_status_filters_in_sql(
+        pool: sqlx::PgPool,
+    ) -> sqlx::Result<()> {
+        let db = Database::from_pool(pool.clone()).await.unwrap();
+        let swaps = db.swaps();
+
+        let mut waiting_mm = create_test_swap(create_test_quote());
+        waiting_mm.status = SwapStatus::WaitingMMDepositConfirmed;
+
+        let mut waiting_user = create_test_swap(create_test_quote());
+        waiting_user.status = SwapStatus::WaitingUserDepositConfirmed;
+
+        let mut settled = create_test_swap(create_test_quote());
+        settled.status = SwapStatus::Settled;
+
+        swaps.create(&waiting_mm).await.unwrap();
+        swaps.create(&waiting_user).await.unwrap();
+        swaps.create(&settled).await.unwrap();
+
+        let filtered = swaps
+            .get_active_swaps_with_status(SwapStatus::WaitingMMDepositConfirmed)
+            .await
+            .unwrap();
+
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].id, waiting_mm.id);
+        assert_eq!(filtered[0].status, SwapStatus::WaitingMMDepositConfirmed);
 
         Ok(())
     }

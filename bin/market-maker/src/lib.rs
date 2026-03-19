@@ -4,14 +4,14 @@ mod batch_monitor;
 pub mod bitcoin_wallet;
 pub mod db;
 pub mod evm_wallet;
+mod fee_settlement;
 mod liquidity_cache;
 mod liquidity_lock;
-mod fee_settlement;
 mod otc_handler;
 pub mod payment_manager;
 pub mod price_oracle;
-mod rfq_handler;
 mod rebalancer;
+mod rfq_handler;
 pub mod wallet;
 mod websocket_client;
 mod wrapped_bitcoin_quoter;
@@ -34,24 +34,21 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, Instrument};
 
+use crate::payment_manager::PaymentManager;
+use crate::rebalancer::run_inventory_metrics_reporter;
+use crate::rebalancer::run_rebalancer;
+use crate::rebalancer::BandsParams;
+use crate::{
+    bitcoin_wallet::BitcoinWallet, db::Database, evm_wallet::EVMWallet, wallet::WalletManager,
+    wrapped_bitcoin_quoter::WrappedBitcoinQuoter,
+};
 use axum::{
     extract::State, http::header, http::StatusCode, response::IntoResponse, routing::get, Router,
 };
+use coinbase_exchange_client::CoinbaseClient;
 use metrics_exporter_prometheus::{BuildError, PrometheusBuilder, PrometheusHandle};
 use tokio::net::TcpListener;
 use uuid::Uuid;
-use coinbase_exchange_client::CoinbaseClient;
-use crate::payment_manager::PaymentManager;
-use crate::rebalancer::BandsParams;
-use crate::rebalancer::run_inventory_metrics_reporter;
-use crate::rebalancer::run_rebalancer;
-use crate::{
-    bitcoin_wallet::BitcoinWallet,
-    db::Database,
-    evm_wallet::EVMWallet,
-    wallet::WalletManager,
-    wrapped_bitcoin_quoter::WrappedBitcoinQuoter,
-};
 
 #[derive(Debug, Snafu)]
 pub enum Error {
@@ -59,7 +56,9 @@ pub enum Error {
     Config { context: String },
 
     #[snafu(display("WebSocket client error: {}", source))]
-    WebSocketClient { source: websocket_client::WebSocketError },
+    WebSocketClient {
+        source: websocket_client::WebSocketError,
+    },
 
     #[snafu(display("Bitcoin wallet error: {}", source))]
     BitcoinWallet {
@@ -139,7 +138,12 @@ pub enum Error {
     #[snafu(display("Admin API server error: {}", source))]
     AdminApiServer { source: std::io::Error },
 
-    #[snafu(display("Chain ID mismatch: expected {} for {:?}, but RPC returned {}", expected, chain, actual))]
+    #[snafu(display(
+        "Chain ID mismatch: expected {} for {:?}, but RPC returned {}",
+        expected,
+        chain,
+        actual
+    ))]
     ChainIdMismatch {
         expected: u64,
         actual: u64,
@@ -381,7 +385,10 @@ fn parse_evm_chain(s: &str) -> std::result::Result<ChainType, String> {
     match s.to_lowercase().as_str() {
         "ethereum" => Ok(ChainType::Ethereum),
         "base" => Ok(ChainType::Base),
-        _ => Err(format!("Invalid EVM chain: '{}'. Must be 'ethereum' or 'base'", s)),
+        _ => Err(format!(
+            "Invalid EVM chain: '{}'. Must be 'ethereum' or 'base'",
+            s
+        )),
     }
 }
 
@@ -395,11 +402,12 @@ where
 {
     use otc_models::constants::EXPECTED_CHAIN_IDS;
 
-    let expected_chain_id = EXPECTED_CHAIN_IDS
-        .get(&expected_chain)
-        .ok_or_else(|| Error::Config {
-            context: format!("No expected chain ID configured for {:?}", expected_chain),
-        })?;
+    let expected_chain_id =
+        EXPECTED_CHAIN_IDS
+            .get(&expected_chain)
+            .ok_or_else(|| Error::Config {
+                context: format!("No expected chain ID configured for {:?}", expected_chain),
+            })?;
 
     let actual_chain_id = provider.get_chain_id().await.map_err(|e| Error::Config {
         context: format!("Failed to query chain ID from RPC: {}", e),
@@ -421,9 +429,7 @@ where
     Ok(())
 }
 
-pub async fn run_market_maker(
-    args: MarketMakerArgs,
-) -> Result<()> {
+pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     let cancellation_token = CancellationToken::new();
     let mut join_set: JoinSet<Result<()>> = JoinSet::new();
     let market_maker_id = Uuid::parse_str(&args.market_maker_id).map_err(|_| Error::Config {
@@ -436,7 +442,6 @@ pub async fn run_market_maker(
         info!("Setting up metrics listener on {}", addr);
         setup_metrics(&mut join_set, addr)?;
     }
-
 
     let database = Arc::new(
         Database::connect(
@@ -473,14 +478,13 @@ pub async fn run_market_maker(
         .context(BitcoinWalletSnafu)?,
     );
 
-    info!("Configuring market maker for EVM chain: {:?}", args.evm_chain);
+    info!(
+        "Configuring market maker for EVM chain: {:?}",
+        args.evm_chain
+    );
 
     let provider = Arc::new(
-        create_websocket_wallet_provider(
-            &args.evm_rpc_ws_url,
-            args.evm_wallet_private_key,
-        )
-        .await?,
+        create_websocket_wallet_provider(&args.evm_rpc_ws_url, args.evm_wallet_private_key).await?,
     );
 
     // Validate that the RPC URL is for the correct chain
@@ -521,9 +525,9 @@ pub async fn run_market_maker(
     wallet_manager.register(args.evm_chain, evm_wallet.clone());
 
     let wallet_manager = Arc::new(wallet_manager);
-    let balance_strategy = Arc::new(
-        balance_strat::QuoteBalanceStrategy::new(args.balance_utilization_threshold_bps),
-    );
+    let balance_strategy = Arc::new(balance_strat::QuoteBalanceStrategy::new(
+        args.balance_utilization_threshold_bps,
+    ));
 
     // Create liquidity lock manager for tracking locked liquidity
     let liquidity_lock_manager = Arc::new(liquidity_lock::LiquidityLockManager::new(&mut join_set));
@@ -610,15 +614,15 @@ pub async fn run_market_maker(
         args.api_secret.clone(),
         otc_handler,
     );
-    let (otc_handle, otc_future) = otc_ws_client.connect().instrument(tracing::info_span!("ws", client = "otc")).await.context(WebSocketClientSnafu)?;
-    
+    let (otc_handle, otc_future) = otc_ws_client
+        .connect()
+        .instrument(tracing::info_span!("ws", client = "otc"))
+        .await
+        .context(WebSocketClientSnafu)?;
+
     // Spawn OTC WebSocket connection (ezsockets handles reconnection automatically)
-    join_set.spawn(
-        async move {
-            otc_future.await.context(WebSocketClientSnafu)
-        }
-    );
-    
+    join_set.spawn(async move { otc_future.await.context(WebSocketClientSnafu) });
+
     // Spawn OTC response forwarder task for unsolicited MMResponse messages
     let otc_handle_for_forwarder = otc_handle.clone();
     join_set.spawn(async move {
@@ -664,14 +668,14 @@ pub async fn run_market_maker(
         args.api_secret.clone(),
         rfq_handler,
     );
-    let (_rfq_handle, rfq_future) = rfq_ws_client.connect().instrument(tracing::info_span!("ws", client = "rfq")).await.context(WebSocketClientSnafu)?;
-    
+    let (_rfq_handle, rfq_future) = rfq_ws_client
+        .connect()
+        .instrument(tracing::info_span!("ws", client = "rfq"))
+        .await
+        .context(WebSocketClientSnafu)?;
+
     // Spawn RFQ WebSocket connection (ezsockets handles reconnection automatically)
-    join_set.spawn(
-        async move {
-            rfq_future.await.context(WebSocketClientSnafu)
-        }
-    );
+    join_set.spawn(async move { rfq_future.await.context(WebSocketClientSnafu) });
 
     let coinbase_client = CoinbaseClient::new(
         args.coinbase_exchange_api_base_url,
@@ -709,8 +713,7 @@ pub async fn run_market_maker(
     );
     join_set.spawn(async move { inventory_metrics_reporter.await.context(RebalancerSnafu) });
 
-
-    tokio::select! { 
+    tokio::select! {
         _ = shutdown_signal() => {
             info!("Shutdown signal received");
         }

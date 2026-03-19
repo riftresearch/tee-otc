@@ -23,7 +23,9 @@ use tokio::task::JoinSet;
 use tracing::{info, warn};
 
 use crate::bitcoin_wallet::transaction_broadcaster::{ForeignUtxo, TransactionRequest};
-use crate::db::{BroadcastedTransactionRepository, Deposit, DepositRepository, DepositStore, FillStatus};
+use crate::db::{
+    BroadcastedTransactionRepository, Deposit, DepositRepository, DepositStore, FillStatus,
+};
 use crate::wallet::{self, Wallet as WalletTrait, WalletBalance, WalletError};
 use crate::WalletResult;
 
@@ -260,7 +262,7 @@ impl BitcoinWallet {
                 source: e,
                 loc: location!(),
             })?;
-        
+
         let tx = match tx {
             Some(tx) => tx,
             None => {
@@ -286,19 +288,21 @@ impl BitcoinWallet {
                 })?;
 
         // Derive at index 0 to get the concrete address
-        let derived_desc = public_desc.at_derivation_index(0).map_err(|e| {
-            WalletError::InvalidDescriptor {
-                reason: format!("Failed to derive descriptor at index 0: {e}"),
-                loc: location!(),
-            }
-        })?;
+        let derived_desc =
+            public_desc
+                .at_derivation_index(0)
+                .map_err(|e| WalletError::InvalidDescriptor {
+                    reason: format!("Failed to derive descriptor at index 0: {e}"),
+                    loc: location!(),
+                })?;
 
-        let deposit_address = derived_desc.address(network).map_err(|e| {
-            WalletError::InvalidDescriptor {
-                reason: format!("Failed to get address from descriptor: {e}"),
-                loc: location!(),
-            }
-        })?;
+        let deposit_address =
+            derived_desc
+                .address(network)
+                .map_err(|e| WalletError::InvalidDescriptor {
+                    reason: format!("Failed to get address from descriptor: {e}"),
+                    loc: location!(),
+                })?;
 
         // find all UTXOs in `tx` that pay to `deposit_address`
         let target_spk = deposit_address.script_pubkey();
@@ -528,11 +532,11 @@ impl WalletTrait for BitcoinWallet {
 
         let mut foreign_utxos = Vec::new();
         let mut reserved_deposit_keys = Vec::new();
-        
+
         if let Some(deposit_repository) = self.deposit_repository.clone() {
             for payment in &payments {
                 if foreign_utxos.len() >= self.max_deposits_per_lot {
-                    // roughly limit number of foreign UTXOs for this batch 
+                    // roughly limit number of foreign UTXOs for this batch
                     break;
                 }
                 let lot = payment.lot.clone();
@@ -562,9 +566,10 @@ impl WalletTrait for BitcoinWallet {
             "Broadcasting bitcoin tx w/ foreign_utxos: {:?}",
             foreign_utxos
         );
-        
+
         // Send transaction request to the broadcaster
-        match self.tx_broadcaster
+        match self
+            .tx_broadcaster
             .broadcast_transaction(payments, foreign_utxos, mm_payment_validation, None)
             .await
         {
@@ -573,7 +578,10 @@ impl WalletTrait for BitcoinWallet {
                 // Broadcast failed - unreserve the deposits so they can be used again
                 if !reserved_deposit_keys.is_empty() {
                     if let Some(deposit_repository) = &self.deposit_repository {
-                        match deposit_repository.unreserve_deposits(&reserved_deposit_keys).await {
+                        match deposit_repository
+                            .unreserve_deposits(&reserved_deposit_keys)
+                            .await
+                        {
                             Ok(count) => {
                                 tracing::warn!(
                                     "Unreserved {} deposits after broadcast failure: {:?}",
@@ -669,11 +677,9 @@ impl WalletTrait for BitcoinWallet {
                 FillStatus::Empty => break,
                 FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
                     // Track deposit keys for potential unreserving on failure
-                    let reserved_deposit_keys: Vec<String> = deposits
-                        .iter()
-                        .map(|d| d.private_key.clone())
-                        .collect();
-                    
+                    let reserved_deposit_keys: Vec<String> =
+                        deposits.iter().map(|d| d.private_key.clone()).collect();
+
                     // Sum the amount in this batch
                     let mut batch_amount = U256::from(0);
                     for deposit in &deposits {
@@ -729,7 +735,10 @@ impl WalletTrait for BitcoinWallet {
                         }
                         Err(e) => {
                             // Broadcast failed - unreserve the deposits so they can be used again
-                            match deposit_repository.unreserve_deposits(&reserved_deposit_keys).await {
+                            match deposit_repository
+                                .unreserve_deposits(&reserved_deposit_keys)
+                                .await
+                            {
                                 Ok(count) => {
                                     tracing::warn!(
                                         "Unreserved {} deposits after consolidation broadcast failure: {:?}",

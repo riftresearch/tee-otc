@@ -1,11 +1,14 @@
 use blockchain_utils::shutdown_signal;
 use clap::Parser;
-use otc_server::{server::run_server, OtcServerArgs, Result};
+use otc_server::{server::run_server, BackgroundTaskResult, Error, OtcServerArgs, Result};
+use snafu::{FromString, Whatever};
+use tokio::task::JoinSet;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = OtcServerArgs::parse();
+    let mut background_tasks: JoinSet<BackgroundTaskResult> = JoinSet::new();
 
     // Build the tracing subscriber with multiple layers
     // Create env filter for stdout
@@ -38,8 +41,10 @@ async fn main() -> Result<()> {
                             .with(filtered_loki_layer)
                             .init();
 
-                        // Spawn the Loki background task
-                        tokio::spawn(task);
+                        background_tasks.spawn(async move {
+                            task.await;
+                            Ok::<(), String>(())
+                        });
                         tracing::info!("Loki logging enabled, shipping logs to {}", loki_url);
                         true
                     }
@@ -76,6 +81,28 @@ async fn main() -> Result<()> {
         _ = shutdown_signal() => {
             tracing::info!("Shutdown signal received; stopping otc-server");
             Ok(())
+        }
+        background_result = background_tasks.join_next(), if !background_tasks.is_empty() => {
+            match background_result {
+                Some(Ok(Ok(()))) => Err(Error::Generic {
+                    source: Whatever::without_source(
+                        "A background task exited unexpectedly".to_string(),
+                    ),
+                }),
+                Some(Ok(Err(err))) => Err(Error::Generic {
+                    source: Whatever::without_source(err),
+                }),
+                Some(Err(err)) => Err(Error::Generic {
+                    source: Whatever::without_source(format!(
+                        "A background task panicked or was cancelled: {err}"
+                    )),
+                }),
+                None => Err(Error::Generic {
+                    source: Whatever::without_source(
+                        "The background task set terminated unexpectedly".to_string(),
+                    ),
+                }),
+            }
         }
     }
 }

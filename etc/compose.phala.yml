@@ -640,34 +640,17 @@ configs:
                 },
                 "disableTextWrap": false,
                 "editorMode": "builder",
-                "expr": "otc_swaps_active_individual{instance=\"otc-server:9000\"}",
+                "expr": "otc_market_maker_batches_active{instance=\"otc-server:9000\"}",
                 "fullMetaSearch": false,
-                "includeNullMetadata": true,
-                "instant": false,
-                "legendFormat": "Waiting User Deposit",
-                "range": true,
-                "refId": "A",
-                "useBackend": false
-              },
-              {
-                "datasource": {
-                  "type": "prometheus",
-                  "uid": "PBFA97CFB590B2093"
-                },
-                "disableTextWrap": false,
-                "editorMode": "builder",
-                "expr": "otc_swap_batches_active{instance=\"otc-server:9000\"}",
-                "fullMetaSearch": false,
-                "hide": false,
                 "includeNullMetadata": true,
                 "instant": false,
                 "legendFormat": "Waiting MM Batches",
                 "range": true,
-                "refId": "B",
+                "refId": "A",
                 "useBackend": false
-              }
+              },
             ],
-            "title": "Active Swap Pool",
+            "title": "Active MM Batch Tracking",
             "type": "timeseries"
           },
           {
@@ -758,7 +741,7 @@ configs:
                 "disableTextWrap": false,
                 "editorMode": "builder",
                 "exemplar": false,
-                "expr": "otc_swap_monitoring_duration_seconds{quantile=\"0.95\"}",
+                "expr": "otc_market_maker_batch_settlement_duration_seconds{quantile=\"0.95\"}",
                 "fullMetaSearch": false,
                 "includeNullMetadata": true,
                 "instant": false,
@@ -768,7 +751,7 @@ configs:
                 "useBackend": false
               }
             ],
-            "title": "Swap Monitoring Time",
+            "title": "MM Batch Settlement Time",
             "type": "timeseries"
           },
           {
@@ -2610,9 +2593,6 @@ services:
       BITCOIN_RPC_AUTH: user:pass
       ELECTRUM_HTTP_SERVER_URL: ${UNTRUSTED_ELECTRUM_HTTP_SERVER_URL}
       BITCOIN_NETWORK: bitcoin
-      # Monitoring configuration
-      CHAIN_MONITOR_INTERVAL: "15"
-      MAX_CONCURRENT_SWAPS: "250"
       # Server configuration
       CORS_DOMAIN: "*"
       CHAINALYSIS_HOST: ${CHAINALYSIS_HOST}

@@ -28,7 +28,10 @@ impl Swap {
         realized: Option<RealizedSwap>,
     ) -> TransitionResult {
         ensure!(
-            matches!(self.status, SwapStatus::WaitingUserDepositInitiated | SwapStatus::WaitingUserDepositConfirmed),
+            matches!(
+                self.status,
+                SwapStatus::WaitingUserDepositInitiated | SwapStatus::WaitingUserDepositConfirmed
+            ),
             InvalidTransitionSnafu {
                 from: self.status,
                 to: SwapStatus::WaitingUserDepositConfirmed,
@@ -71,6 +74,24 @@ impl Swap {
 
         self.user_deposit_status.as_mut().unwrap().confirmed_at = Some(utc::now());
         self.status = SwapStatus::WaitingMMDepositInitiated;
+        self.updated_at = utc::now();
+
+        Ok(())
+    }
+
+    /// Reset the swap so external discovery can find a replacement deposit again.
+    pub fn rearm_user_deposit_detection(&mut self) -> TransitionResult {
+        ensure!(
+            self.status == SwapStatus::WaitingUserDepositConfirmed,
+            InvalidTransitionSnafu {
+                from: self.status,
+                to: SwapStatus::WaitingUserDepositInitiated,
+            }
+        );
+
+        self.user_deposit_status = None;
+        self.realized = None;
+        self.status = SwapStatus::WaitingUserDepositInitiated;
         self.updated_at = utc::now();
 
         Ok(())
@@ -132,7 +153,10 @@ impl Swap {
     }
 
     /// Transition when MM deposit is confirmed
-    pub fn mm_deposit_confirmed(&mut self, swap_settlement_timestamp: &DateTime<Utc>) -> TransitionResult {
+    pub fn mm_deposit_confirmed(
+        &mut self,
+        swap_settlement_timestamp: &DateTime<Utc>,
+    ) -> TransitionResult {
         ensure!(
             self.status == SwapStatus::WaitingMMDepositConfirmed,
             InvalidTransitionSnafu {
@@ -330,8 +354,13 @@ mod tests {
             .expect("1M sats should produce valid output");
 
         // Valid transition
-        swap.user_deposit_detected("0xabc123".to_string(), U256::from(1000000u64), 1, Some(realized))
-            .unwrap();
+        swap.user_deposit_detected(
+            "0xabc123".to_string(),
+            U256::from(1000000u64),
+            1,
+            Some(realized),
+        )
+        .unwrap();
 
         assert_eq!(swap.status, SwapStatus::WaitingUserDepositConfirmed);
         assert!(swap.user_deposit_status.is_some());
@@ -344,7 +373,12 @@ mod tests {
         // Valid transition - can replace deposit (e.g., RBF transaction)
         let new_realized = RealizedSwap::compute(1_000_000, &swap.quote.rates)
             .expect("1M sats should produce valid output");
-        let result = swap.user_deposit_detected("0xdef456".to_string(), U256::from(1000000u64), 1, Some(new_realized));
+        let result = swap.user_deposit_detected(
+            "0xdef456".to_string(),
+            U256::from(1000000u64),
+            1,
+            Some(new_realized),
+        );
         assert!(result.is_ok());
         assert_eq!(
             swap.user_deposit_status.as_ref().unwrap().tx_hash,
@@ -359,8 +393,13 @@ mod tests {
             .expect("1M sats should produce valid output");
 
         // User deposits
-        swap.user_deposit_detected("0xuser123".to_string(), U256::from(1000000u64), 1, Some(realized))
-            .unwrap();
+        swap.user_deposit_detected(
+            "0xuser123".to_string(),
+            U256::from(1000000u64),
+            1,
+            Some(realized),
+        )
+        .unwrap();
         assert_eq!(swap.status, SwapStatus::WaitingUserDepositConfirmed);
 
         // User deposit confirmed
@@ -381,6 +420,27 @@ mod tests {
         swap.record_settlement("0xsettle789".to_string(), 6, Some(U256::from(1000u64)))
             .unwrap();
         assert!(swap.settlement_status.is_some());
+    }
+
+    #[test]
+    fn test_rearm_user_deposit_detection() {
+        let mut swap = create_test_swap();
+        let realized = RealizedSwap::compute(1_000_000, &swap.quote.rates)
+            .expect("1M sats should produce valid output");
+
+        swap.user_deposit_detected(
+            "0xuser123".to_string(),
+            U256::from(1_000_000u64),
+            1,
+            Some(realized),
+        )
+        .unwrap();
+
+        swap.rearm_user_deposit_detection().unwrap();
+
+        assert_eq!(swap.status, SwapStatus::WaitingUserDepositInitiated);
+        assert!(swap.user_deposit_status.is_none());
+        assert!(swap.realized.is_none());
     }
 
     #[test]

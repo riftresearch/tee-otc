@@ -12,6 +12,7 @@ use snafu::{prelude::*, Whatever};
 pub mod api;
 pub mod config;
 pub mod db;
+pub mod detection_ingest;
 pub mod error;
 pub mod http_metrics;
 pub mod server;
@@ -62,8 +63,9 @@ impl From<Whatever> for Error {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
+pub type BackgroundTaskResult = std::result::Result<(), String>;
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(name = "otc-server")]
 #[command(about = "TEE-OTC server for cross-chain swaps")]
 pub struct OtcServerArgs {
@@ -151,13 +153,21 @@ pub struct OtcServerArgs {
     #[arg(long, env = "BITCOIN_NETWORK", default_value = "bitcoin")]
     pub bitcoin_network: bitcoin::Network,
 
-    /// Chain monitor interval in seconds
-    #[arg(long, env = "CHAIN_MONITOR_INTERVAL", default_value = "15")]
-    pub chain_monitor_interval_seconds: u64,
+    /// Whether participant-signed detection submissions are enabled
+    #[arg(
+        long,
+        env = "PARTICIPANT_SIGNED_DETECTION_ENABLED",
+        default_value = "true"
+    )]
+    pub participant_signed_detection_enabled: bool,
 
-    /// Maximum number of swaps to monitor concurrently
-    #[arg(long, env = "MAX_CONCURRENT_SWAPS", default_value = "250")]
-    pub max_concurrent_swaps: usize,
+    /// Minimum interval between participant-signed submissions for the same signer
+    #[arg(
+        long,
+        env = "PARTICIPANT_DETECTION_MIN_INTERVAL_SECONDS",
+        default_value = "60"
+    )]
+    pub participant_detection_min_interval_seconds: u64,
 
     /// CORS domain to allow (supports wildcards like "*.example.com")
     #[arg(long = "corsdomain", env = "CORS_DOMAIN")]

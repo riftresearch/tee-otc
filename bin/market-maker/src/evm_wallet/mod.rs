@@ -12,7 +12,7 @@ use alloy::{
     sol_types::SolValue,
 };
 use async_trait::async_trait;
-use blockchain_utils::{WebsocketWalletProvider, create_transfer_with_authorization_execution};
+use blockchain_utils::{create_transfer_with_authorization_execution, WebsocketWalletProvider};
 use eip3009_erc20_contract::GenericEIP3009ERC20::GenericEIP3009ERC20Instance;
 use eip7702_delegator_contract::{
     EIP7702Delegator::{EIP7702DelegatorInstance, Execution},
@@ -169,9 +169,12 @@ impl Wallet for EVMWallet {
     }
 
     async fn check_tx_confirmations(&self, tx_hash: &str) -> WalletResult<u64> {
-        let tx_hash: TxHash = tx_hash.parse().map_err(|e| WalletError::TransactionCreationFailed {
-            reason: format!("invalid tx hash: {e}"),
-        })?;
+        let tx_hash: TxHash =
+            tx_hash
+                .parse()
+                .map_err(|e| WalletError::TransactionCreationFailed {
+                    reason: format!("invalid tx hash: {e}"),
+                })?;
 
         let receipt = self
             .provider
@@ -186,14 +189,14 @@ impl Wallet for EVMWallet {
             return Ok(0);
         };
 
-        let current_block = self
-            .provider
-            .get_block_number()
-            .await
-            .map_err(|e| WalletError::RpcCallError {
-                source: e,
-                loc: location!(),
-            })?;
+        let current_block =
+            self.provider
+                .get_block_number()
+                .await
+                .map_err(|e| WalletError::RpcCallError {
+                    source: e,
+                    loc: location!(),
+                })?;
 
         let Some(included_block) = receipt.block_number else {
             return Ok(0);
@@ -225,7 +228,7 @@ impl Wallet for EVMWallet {
 
         let mut funding_executions = Vec::new();
         let mut reserved_deposit_keys = Vec::new();
-        
+
         if let Some(deposit_repository) = &self.deposit_repository {
             for payment in &payments {
                 let (consolidation_executions, fill_status) = get_funding_executions_from_deposits(
@@ -240,16 +243,15 @@ impl Wallet for EVMWallet {
                 // Track deposit keys for potential unreserving on failure
                 match fill_status {
                     FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
-                        reserved_deposit_keys.extend(
-                            deposits.iter().map(|d| d.private_key.clone())
-                        );
+                        reserved_deposit_keys
+                            .extend(deposits.iter().map(|d| d.private_key.clone()));
                     }
                     FillStatus::Empty => {}
                 }
 
                 funding_executions.extend(consolidation_executions);
                 if funding_executions.len() >= self.max_deposits_per_lot {
-                    // roughly limit number of funding executions for this batch 
+                    // roughly limit number of funding executions for this batch
                     break;
                 }
             }
@@ -275,7 +277,7 @@ impl Wallet for EVMWallet {
             .map_err(|e| WalletError::TransactionCreationFailed {
                 reason: e.to_string(),
             })?;
-        
+
         match broadcast_result {
             transaction_broadcaster::TransactionExecutionResult::Success(tx_receipt) => {
                 info!(
@@ -290,7 +292,10 @@ impl Wallet for EVMWallet {
                 // Broadcast failed - unreserve the deposits so they can be used again
                 if !reserved_deposit_keys.is_empty() {
                     if let Some(deposit_repository) = &self.deposit_repository {
-                        match deposit_repository.unreserve_deposits(&reserved_deposit_keys).await {
+                        match deposit_repository
+                            .unreserve_deposits(&reserved_deposit_keys)
+                            .await
+                        {
                             Ok(count) => {
                                 tracing::warn!(
                                     "Unreserved {} deposits after broadcast failure: {:?}",
@@ -412,17 +417,13 @@ impl Wallet for EVMWallet {
 
             let deposits = match &fill_status {
                 FillStatus::Empty => break,
-                FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
-                    deposits
-                }
+                FillStatus::Full(deposits) | FillStatus::Partial(deposits) => deposits,
             };
-            
+
             // Track deposit keys for potential unreserving on failure
-            let reserved_deposit_keys: Vec<String> = deposits
-                .iter()
-                .map(|d| d.private_key.clone())
-                .collect();
- 
+            let reserved_deposit_keys: Vec<String> =
+                deposits.iter().map(|d| d.private_key.clone()).collect();
+
             // Sum the amount in this batch
             let mut batch_amount = U256::from(0);
             for deposit in deposits {
@@ -478,7 +479,10 @@ impl Wallet for EVMWallet {
                 }
                 _ => {
                     // Broadcast failed - unreserve the deposits so they can be used again
-                    match deposit_repository.unreserve_deposits(&reserved_deposit_keys).await {
+                    match deposit_repository
+                        .unreserve_deposits(&reserved_deposit_keys)
+                        .await
+                    {
                         Ok(count) => {
                             tracing::warn!(
                                 "Unreserved {} deposits after consolidation broadcast failure: {:?}",
@@ -725,8 +729,7 @@ pub async fn create_evm_transfer_transaction(
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
-            let amounts: Vec<U256> =
-                payments.iter().map(|payment| payment.lot.amount).collect();
+            let amounts: Vec<U256> = payments.iter().map(|payment| payment.lot.amount).collect();
 
             // Create payment executions for transferring tokens
             let token_contract =

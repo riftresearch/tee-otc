@@ -60,6 +60,12 @@ impl ApiKeyStore {
     pub fn get_by_id(&self, id: &Uuid) -> Option<&PublicApiKeyRecord> {
         self.records_by_id.get(id)
     }
+
+    /// Returns true when no API key records are loaded.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.records_by_id.is_empty()
+    }
 }
 
 #[cfg(test)]

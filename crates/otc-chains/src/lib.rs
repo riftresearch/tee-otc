@@ -10,4 +10,4 @@ pub mod rpc_metrics_layer;
 
 pub use error::{Error, Result};
 pub use registry::ChainRegistry;
-pub use traits::ChainOperations;
+pub use traits::{ChainOperations, UserDepositCandidateStatus, VerifiedUserDeposit};

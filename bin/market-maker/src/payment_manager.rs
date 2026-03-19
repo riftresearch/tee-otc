@@ -145,7 +145,6 @@ impl PaymentManager {
                     join_set,
                 );
             }
-
         }
         Self {
             wallet_manager,
@@ -428,9 +427,8 @@ async fn process_batch(
     queued_payments: &[MarketMakerQueuedPayment],
 ) -> crate::Result<()> {
     // Split queued payments into eligible and ineligible (near refund window)
-    let (eligible_payments, ineligible_payments): (Vec<_>, Vec<_>) = queued_payments
-        .into_iter()
-        .partition(|p| {
+    let (eligible_payments, ineligible_payments): (Vec<_>, Vec<_>) =
+        queued_payments.into_iter().partition(|p| {
             !can_be_refunded_soon(
                 otc_models::SwapStatus::WaitingMMDepositInitiated,
                 p.user_deposit_confirmed_at,
@@ -459,7 +457,8 @@ async fn process_batch(
         chain_type
     );
 
-    let collected_payments: Vec<MarketMakerQueuedPayment> = eligible_payments.iter().map(|&p| p.clone()).collect();
+    let collected_payments: Vec<MarketMakerQueuedPayment> =
+        eligible_payments.iter().map(|&p| p.clone()).collect();
     let payment_batch = match collected_payments.as_slice().to_market_maker_batch() {
         Some(payment_batch) => payment_batch,
         None => {
@@ -472,7 +471,10 @@ async fn process_batch(
     };
 
     let batch_nonce_digest = payment_batch.payment_verification.batch_nonce_digest;
-    let aggregated_fee_sats = payment_batch.payment_verification.aggregated_fee.to::<u64>();
+    let aggregated_fee_sats = payment_batch
+        .payment_verification
+        .aggregated_fee
+        .to::<u64>();
 
     // Execute the batch payment
     match wallet
@@ -555,7 +557,7 @@ async fn process_batch(
             return Err(e.into());
         }
     }
-    
+
     Ok(())
 }
 
@@ -619,7 +621,11 @@ mod tests {
 
     #[async_trait]
     impl crate::wallet::Wallet for RecordingWallet {
-        async fn consolidate(&self, _lot: &otc_models::Lot, _max_deposits_per_iteration: usize) -> crate::wallet::WalletResult<crate::wallet::ConsolidationSummary> {
+        async fn consolidate(
+            &self,
+            _lot: &otc_models::Lot,
+            _max_deposits_per_iteration: usize,
+        ) -> crate::wallet::WalletResult<crate::wallet::ConsolidationSummary> {
             Ok(crate::wallet::ConsolidationSummary {
                 total_amount: U256::ZERO,
                 iterations: 0,

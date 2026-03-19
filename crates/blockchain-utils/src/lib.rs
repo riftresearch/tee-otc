@@ -3,8 +3,8 @@ mod bitcoin_wallet;
 mod transfer_auth_helper;
 pub use alloy_ext::*;
 pub use bitcoin_wallet::*;
-pub use transfer_auth_helper::*;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter, Layer};
+pub use transfer_auth_helper::*;
 
 pub fn handle_background_thread_result<T, E>(
     result: Option<Result<Result<T, E>, tokio::task::JoinError>>,
@@ -30,10 +30,7 @@ pub enum InitLoggerError {
     },
 }
 
-pub fn init_logger<L>(
-    log_level: &str,
-    console_layer: Option<L>,
-) -> Result<(), InitLoggerError>
+pub fn init_logger<L>(log_level: &str, console_layer: Option<L>) -> Result<(), InitLoggerError>
 where
     L: Layer<tracing_subscriber::Registry> + Send + Sync + 'static,
 {
