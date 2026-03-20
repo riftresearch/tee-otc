@@ -25,7 +25,8 @@ pub struct BitcoinDiscoveryBackend {
 
 impl BitcoinDiscoveryBackend {
     pub async fn new(args: &SauronArgs) -> Result<Self> {
-        let esplora_client = esplora_client::Builder::new(&args.electrum_http_server_url)
+        let electrum_http_server_url = args.electrum_http_server_url.trim_end_matches('/');
+        let esplora_client = esplora_client::Builder::new(electrum_http_server_url)
             .build_async()
             .map_err(|error| crate::error::Error::DiscoveryBackendInit {
                 backend: "bitcoin".to_string(),
