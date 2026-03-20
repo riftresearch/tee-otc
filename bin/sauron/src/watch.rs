@@ -21,14 +21,13 @@ SELECT
   s.deposit_vault_address AS address,
   q.min_input::text AS min_amount,
   q.max_input::text AS max_amount,
-  q.expires_at AS deposit_deadline,
+  s.created_at + INTERVAL '15 months' AS deposit_deadline,
   s.created_at AS created_at,
   s.updated_at AS updated_at
 FROM public.swaps s
 JOIN public.quotes q ON q.id = s.quote_id
 WHERE s.status = 'waiting_user_deposit_initiated'
   AND s.created_at >= $1
-  AND q.expires_at > $2
 ORDER BY s.updated_at ASC, s.id ASC
 "#;
 
@@ -40,7 +39,7 @@ SELECT
   s.deposit_vault_address AS address,
   q.min_input::text AS min_amount,
   q.max_input::text AS max_amount,
-  q.expires_at AS deposit_deadline,
+  s.created_at + INTERVAL '15 months' AS deposit_deadline,
   s.created_at AS created_at,
   s.updated_at AS updated_at
 FROM public.swaps s
@@ -48,7 +47,6 @@ JOIN public.quotes q ON q.id = s.quote_id
 WHERE s.id = $1::uuid
   AND s.status = 'waiting_user_deposit_initiated'
   AND s.created_at >= $2
-  AND q.expires_at > $3
 "#;
 
 const SAURON_WATCH_COUNT_METRIC: &str = "sauron_watch_count";
@@ -188,11 +186,9 @@ impl WatchRepository {
 
     pub async fn load_all(&self) -> Result<Vec<WatchEntry>> {
         let cutoff_time = deposit_vault_watch_cutoff();
-        let now = utc::now();
         let started = Instant::now();
         let rows = sqlx::query(FULL_WATCH_QUERY)
             .bind(cutoff_time)
-            .bind(now)
             .fetch_all(&self.pool)
             .await
             .context(ReplicaDatabaseQuerySnafu)?;
@@ -204,12 +200,10 @@ impl WatchRepository {
 
     pub async fn load_swap(&self, swap_id: Uuid) -> Result<Option<WatchEntry>> {
         let cutoff_time = deposit_vault_watch_cutoff();
-        let now = utc::now();
         let started = Instant::now();
         let row = sqlx::query(TARGETED_WATCH_QUERY)
             .bind(swap_id)
             .bind(cutoff_time)
-            .bind(now)
             .fetch_optional(&self.pool)
             .await
             .context(ReplicaDatabaseQuerySnafu)?;
