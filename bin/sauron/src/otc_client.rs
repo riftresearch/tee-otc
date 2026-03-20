@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use metrics::histogram;
 use otc_server::api::{
     DepositObservationAcceptedResponse, DepositObservationErrorResponse, DepositObservationRequest,
 };
@@ -11,6 +12,8 @@ use crate::{
     config::SauronArgs,
     error::{OtcRejectedSnafu, OtcRequestSnafu, OtcUrlSnafu, Result},
 };
+
+const SAURON_OTC_SUBMISSION_DURATION_SECONDS: &str = "sauron_otc_submission_duration_seconds";
 
 #[derive(Clone)]
 pub struct OtcClient {
@@ -40,6 +43,7 @@ impl OtcClient {
         swap_id: Uuid,
         request: &DepositObservationRequest,
     ) -> Result<DepositObservationAcceptedResponse> {
+        let started = std::time::Instant::now();
         let endpoint = reqwest::Url::parse(&self.base_url)
             .context(OtcUrlSnafu {
                 base_url: self.base_url.clone(),
@@ -60,9 +64,15 @@ impl OtcClient {
             .context(OtcRequestSnafu)?;
 
         match response.status() {
-            StatusCode::OK | StatusCode::ACCEPTED => response.json().await.context(OtcRequestSnafu),
+            StatusCode::OK | StatusCode::ACCEPTED => {
+                histogram!(SAURON_OTC_SUBMISSION_DURATION_SECONDS, "status" => response.status().as_str().to_string())
+                    .record(started.elapsed().as_secs_f64());
+                response.json().await.context(OtcRequestSnafu)
+            }
             _ => {
                 let status = response.status();
+                histogram!(SAURON_OTC_SUBMISSION_DURATION_SECONDS, "status" => status.as_str().to_string())
+                    .record(started.elapsed().as_secs_f64());
                 let body = response.text().await.unwrap_or_default();
                 let body = match serde_json::from_str::<DepositObservationErrorResponse>(&body) {
                     Ok(parsed) => serde_json::to_string(&parsed).unwrap_or(body),

@@ -86,7 +86,11 @@ pub struct SauronArgs {
     pub base_allowed_token: String,
 
     /// Low-frequency full watch-set reconcile interval
-    #[arg(long, env = "SAURON_RECONCILE_INTERVAL_SECONDS", default_value = "60")]
+    #[arg(
+        long,
+        env = "SAURON_RECONCILE_INTERVAL_SECONDS",
+        default_value = "3600"
+    )]
     pub sauron_reconcile_interval_seconds: u64,
 
     /// Temporary poll interval for the first Bitcoin detector implementation
@@ -96,6 +100,22 @@ pub struct SauronArgs {
         default_value = "15"
     )]
     pub sauron_bitcoin_scan_interval_seconds: u64,
+
+    /// Maximum number of concurrent Bitcoin indexed lookups
+    #[arg(
+        long,
+        env = "SAURON_BITCOIN_INDEXED_LOOKUP_CONCURRENCY",
+        default_value = "32"
+    )]
+    pub sauron_bitcoin_indexed_lookup_concurrency: usize,
+
+    /// Maximum number of concurrent EVM indexed lookups per backend
+    #[arg(
+        long,
+        env = "SAURON_EVM_INDEXED_LOOKUP_CONCURRENCY",
+        default_value = "8"
+    )]
+    pub sauron_evm_indexed_lookup_concurrency: usize,
 }
 
 fn parse_auth(s: &str) -> Result<Auth, String> {

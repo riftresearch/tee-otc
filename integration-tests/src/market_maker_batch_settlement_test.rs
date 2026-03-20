@@ -22,8 +22,7 @@ use crate::utils::{
     build_mm_test_args, build_otc_server_test_args, build_rfq_server_test_args,
     build_test_user_ethereum_wallet, get_free_port, wait_for_market_maker_to_connect_to_rfq_server,
     wait_for_otc_server_to_be_ready, wait_for_rfq_server_to_be_ready, wait_for_swap_status,
-    wait_for_swap_to_be_settled,
-    PgConnectOptionsExt,
+    wait_for_swap_to_be_settled, PgConnectOptionsExt,
 };
 
 fn spawn_otc_server(otc_args: OtcServerArgs) -> JoinHandle<()> {

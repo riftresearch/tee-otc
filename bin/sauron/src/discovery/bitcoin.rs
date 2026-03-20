@@ -2,7 +2,7 @@ use std::{collections::HashMap, str::FromStr, time::Duration};
 
 use alloy::primitives::U256;
 use async_trait::async_trait;
-use bitcoin::{Address, BlockHash, ScriptBuf, Txid};
+use bitcoin::{Address, BlockHash, ScriptBuf};
 use bitcoincore_rpc_async::{Auth, Client, RpcApi};
 use chrono::Utc;
 use otc_models::{ChainType, TokenIdentifier};
@@ -13,13 +13,16 @@ use crate::{
     config::SauronArgs,
     discovery::{BlockCursor, BlockScan, DetectedDeposit, DiscoveryBackend},
     error::{BitcoinEsploraSnafu, BitcoinRpcSnafu, Result},
-    watch::WatchEntry,
+    watch::{SharedWatchEntry, WatchEntry},
 };
+
+const BITCOIN_REORG_RESCAN_DEPTH: u64 = 6;
 
 pub struct BitcoinDiscoveryBackend {
     rpc_client: Client,
     esplora_client: esplora_client::AsyncClient,
     poll_interval: Duration,
+    indexed_lookup_concurrency: usize,
 }
 
 impl BitcoinDiscoveryBackend {
@@ -45,17 +48,21 @@ impl BitcoinDiscoveryBackend {
             rpc_client,
             esplora_client,
             poll_interval: Duration::from_secs(args.sauron_bitcoin_scan_interval_seconds),
+            indexed_lookup_concurrency: args.sauron_bitcoin_indexed_lookup_concurrency,
         })
     }
 
-    fn script_map<'a>(&self, watches: &'a [WatchEntry]) -> HashMap<ScriptBuf, Vec<&'a WatchEntry>> {
+    fn script_map<'a>(
+        &self,
+        watches: &'a [SharedWatchEntry],
+    ) -> HashMap<ScriptBuf, Vec<&'a WatchEntry>> {
         let mut scripts: HashMap<ScriptBuf, Vec<&WatchEntry>> = HashMap::new();
 
         for watch in watches {
             let parsed = Address::from_str(&watch.address)
                 .map(|address| address.assume_checked().script_pubkey());
             match parsed {
-                Ok(script) => scripts.entry(script).or_default().push(watch),
+                Ok(script) => scripts.entry(script).or_default().push(watch.as_ref()),
                 Err(error) => {
                     warn!(
                         swap_id = %watch.swap_id,
@@ -99,6 +106,10 @@ impl DiscoveryBackend for BitcoinDiscoveryBackend {
         self.poll_interval
     }
 
+    fn indexed_lookup_concurrency(&self) -> usize {
+        self.indexed_lookup_concurrency
+    }
+
     async fn indexed_lookup(&self, watch: &WatchEntry) -> Result<Option<DetectedDeposit>> {
         if watch.source_token != TokenIdentifier::Native {
             return Ok(None);
@@ -120,7 +131,7 @@ impl DiscoveryBackend for BitcoinDiscoveryBackend {
             .context(BitcoinEsploraSnafu)?;
         let current_height = self.current_tip_height().await? as u32;
 
-        let mut best_match: Option<DetectedDeposit> = None;
+        let mut best_match: Option<(DetectedDeposit, u64)> = None;
 
         for utxo in utxos {
             let amount = U256::from(utxo.value);
@@ -143,29 +154,15 @@ impl DiscoveryBackend for BitcoinDiscoveryBackend {
                 observed_at: Utc::now(),
             };
 
-            if best_match.is_none() {
-                best_match = Some(candidate);
-                continue;
-            }
-
-            let best_confirmations = current_height.saturating_sub(
-                self.esplora_client
-                    .get_tx_status(
-                        &Txid::from_str(&best_match.as_ref().unwrap().tx_hash)
-                            .expect("stored tx hash should stay valid"),
-                    )
-                    .await
-                    .context(BitcoinEsploraSnafu)?
-                    .block_height
-                    .unwrap_or(current_height),
-            ) as u64;
-
-            if confirmations > best_confirmations {
-                best_match = Some(candidate);
+            if best_match
+                .as_ref()
+                .is_none_or(|(_, best_confirmations)| confirmations > *best_confirmations)
+            {
+                best_match = Some((candidate, confirmations));
             }
         }
 
-        Ok(best_match)
+        Ok(best_match.map(|(candidate, _)| candidate))
     }
 
     async fn current_cursor(&self) -> Result<BlockCursor> {
@@ -180,7 +177,7 @@ impl DiscoveryBackend for BitcoinDiscoveryBackend {
     async fn scan_new_blocks(
         &self,
         from_exclusive: &BlockCursor,
-        watches: &[WatchEntry],
+        watches: &[SharedWatchEntry],
     ) -> Result<BlockScan> {
         let current_height = self.current_tip_height().await?;
         let current_tip_hash = self.current_tip_hash().await?;
@@ -202,16 +199,29 @@ impl DiscoveryBackend for BitcoinDiscoveryBackend {
                 .await
                 .context(BitcoinRpcSnafu)?;
             if expected_hash.to_string() != from_exclusive.hash {
+                let rewind_height = from_exclusive
+                    .height
+                    .saturating_sub(BITCOIN_REORG_RESCAN_DEPTH);
+                let rewind_hash = if rewind_height == 0 {
+                    String::new()
+                } else {
+                    self.rpc_client
+                        .get_block_hash(rewind_height)
+                        .await
+                        .context(BitcoinRpcSnafu)?
+                        .to_string()
+                };
                 warn!(
                     stored_height = from_exclusive.height,
                     stored_hash = %from_exclusive.hash,
                     current_hash = %expected_hash,
-                    "Bitcoin discovery cursor reorg detected; resetting to current tip"
+                    rewind_height,
+                    "Bitcoin discovery cursor reorg detected; rewinding cursor"
                 );
                 return Ok(BlockScan {
                     new_cursor: BlockCursor {
-                        height: current_height,
-                        hash: current_tip_hash.to_string(),
+                        height: rewind_height,
+                        hash: rewind_hash,
                     },
                     detections: Vec::new(),
                 });

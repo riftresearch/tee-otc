@@ -234,40 +234,47 @@ impl MMRegistry {
         expected_lot: &Lot,
         protocol_fee: U256,
         user_deposit_confirmed_at: DateTime<Utc>,
-    ) {
-        if let Some(conn) = self.connections.get(market_maker_id) {
-            let request = ProtocolMessage {
-                version: conn.protocol_version.clone(),
-                sequence: 0,
-                payload: MMRequest::UserDepositConfirmed {
-                    request_id: Uuid::now_v7(),
-                    swap_id: *swap_id,
-                    quote_id: *quote_id,
-                    user_destination_address: user_destination_address.to_string(),
-                    mm_nonce,
-                    expected_lot: expected_lot.clone(),
-                    protocol_fee,
-                    user_deposit_confirmed_at,
-                    timestamp: utc::now(),
-                },
-            };
+    ) -> Result<()> {
+        let (protocol_version, sender) = {
+            let connection = self.connections.get(market_maker_id).ok_or_else(|| {
+                MMRegistryError::MarketMakerNotConnected {
+                    market_maker_id: market_maker_id.to_string(),
+                }
+            })?;
 
-            info!(
-                market_maker_id = %market_maker_id,
-                swap_id = %swap_id,
-                user_destination_address = %user_destination_address,
-                "Notifying MM that user deposit is confirmed - MM should send payment with nonce"
-            );
+            (
+                connection.protocol_version.clone(),
+                connection.sender.clone(),
+            )
+        };
 
-            if let Err(e) = conn.sender.send(request).await {
-                error!(market_maker_id = %market_maker_id, error = %e, "Failed to send user deposit confirmed notification");
-            }
-        } else {
-            warn!(
-                market_maker_id = %market_maker_id,
-                "Cannot notify MM - not connected"
-            );
-        }
+        let request = ProtocolMessage {
+            version: protocol_version,
+            sequence: 0,
+            payload: MMRequest::UserDepositConfirmed {
+                request_id: Uuid::now_v7(),
+                swap_id: *swap_id,
+                quote_id: *quote_id,
+                user_destination_address: user_destination_address.to_string(),
+                mm_nonce,
+                expected_lot: expected_lot.clone(),
+                protocol_fee,
+                user_deposit_confirmed_at,
+                timestamp: utc::now(),
+            },
+        };
+
+        info!(
+            market_maker_id = %market_maker_id,
+            swap_id = %swap_id,
+            user_destination_address = %user_destination_address,
+            "Notifying MM that user deposit is confirmed - MM should send payment with nonce"
+        );
+
+        sender
+            .send(request)
+            .await
+            .map_err(|source| MMRegistryError::MessageSendError { source })
     }
 
     pub async fn notify_swap_complete(

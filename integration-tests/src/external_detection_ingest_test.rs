@@ -45,7 +45,12 @@ sol! {
     #[derive(Debug)]
     struct ParticipantDepositDetectionAuthPayload {
         string swapId;
+        string sourceChain;
+        string sourceToken;
+        string depositAddress;
         string txHash;
+        uint64 transferIndex;
+        uint256 amount;
         uint64 signedAt;
     }
 }
@@ -153,6 +158,14 @@ async fn trusted_detector_route_accepts_bitcoin_deposit(
             | SwapStatus::Settled
     ));
     assert_eq!(swap.user_deposit_status.as_ref().unwrap().tx_hash, tx_hash);
+    if matches!(
+        swap.status,
+        SwapStatus::WaitingMMDepositInitiated
+            | SwapStatus::WaitingMMDepositConfirmed
+            | SwapStatus::Settled
+    ) {
+        assert!(swap.mm_notified_at.is_some());
+    }
 
     fixture.shutdown().await;
 }
@@ -197,7 +210,18 @@ async fn participant_signed_route_accepts_bitcoin_deposit(
     let observed_at = utc::now();
     let signed_at = utc::now();
     let signer = PrivateKeySigner::from_slice(&fixture.user_account.secret_bytes).unwrap();
-    let signature = sign_participant_detection_payload(&signer, &swap.id, &tx_hash, signed_at, 1);
+    let signature = sign_participant_detection_payload(
+        &signer,
+        &swap,
+        swap.quote.from.currency.chain,
+        &swap.quote.from.currency.token,
+        &swap.deposit_vault_address,
+        &tx_hash,
+        transfer_index,
+        amount,
+        signed_at,
+        1,
+    );
 
     let request = DepositObservationRequest {
         source_chain: swap.quote.from.currency.chain,
@@ -249,6 +273,97 @@ async fn participant_signed_route_accepts_bitcoin_deposit(
             | SwapStatus::Settled
     ));
     assert_eq!(swap.user_deposit_status.as_ref().unwrap().tx_hash, tx_hash);
+    if matches!(
+        swap.status,
+        SwapStatus::WaitingMMDepositInitiated
+            | SwapStatus::WaitingMMDepositConfirmed
+            | SwapStatus::Settled
+    ) {
+        assert!(swap.mm_notified_at.is_some());
+    }
+
+    fixture.shutdown().await;
+}
+
+#[sqlx::test]
+async fn participant_signed_route_rejects_mismatched_transfer_binding(
+    _: PoolOptions<sqlx::Postgres>,
+    connect_options: PgConnectOptions,
+) {
+    let mut fixture =
+        setup_external_detection_fixture(connect_options, false, ChainType::Ethereum).await;
+    let client = reqwest::Client::new();
+
+    let swap = request_and_create_btc_to_eth_swap(
+        &client,
+        fixture.otc_port,
+        fixture.rfq_port,
+        &fixture.devnet,
+        &fixture.user_account,
+    )
+    .await;
+
+    let tx_hash = fixture
+        .user_bitcoin_wallet
+        .create_batch_payment(
+            vec![Payment {
+                lot: Lot {
+                    currency: swap.quote.from.currency.clone(),
+                    amount: swap.quote.min_input,
+                },
+                to_address: swap.deposit_vault_address.clone(),
+            }],
+            None,
+        )
+        .await
+        .unwrap();
+
+    let (transfer_index, amount) =
+        find_bitcoin_output_for_address(&fixture.devnet, &tx_hash, &swap.deposit_vault_address)
+            .await;
+
+    let signed_at = utc::now();
+    let signer = PrivateKeySigner::from_slice(&fixture.user_account.secret_bytes).unwrap();
+    let signature = sign_participant_detection_payload(
+        &signer,
+        &swap,
+        swap.quote.from.currency.chain,
+        &swap.quote.from.currency.token,
+        &swap.deposit_vault_address,
+        &tx_hash,
+        transfer_index.saturating_add(1),
+        amount,
+        signed_at,
+        1,
+    );
+
+    let request = DepositObservationRequest {
+        source_chain: swap.quote.from.currency.chain,
+        source_token: swap.quote.from.currency.token.clone(),
+        tx_hash,
+        amount,
+        transfer_index,
+        address: swap.deposit_vault_address.clone(),
+        observed_at: utc::now(),
+        participant_auth: Some(ParticipantAuth {
+            kind: ParticipantAuthKind::ParticipantEip712,
+            signer: fixture.user_account.ethereum_address.to_string(),
+            signer_chain: ChainType::Ethereum,
+            signature,
+            signed_at,
+        }),
+    };
+
+    let response = client
+        .post(deposit_observation_url(fixture.otc_port, swap.id))
+        .json(&request)
+        .send()
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let error: otc_server::api::DepositObservationErrorResponse = response.json().await.unwrap();
+    assert_eq!(error.error.code, "participant_signature_invalid");
 
     fixture.shutdown().await;
 }
@@ -817,14 +932,24 @@ async fn send_evm_deposit(
 
 fn sign_participant_detection_payload(
     signer: &PrivateKeySigner,
-    swap_id: &Uuid,
+    swap: &Swap,
+    source_chain: ChainType,
+    source_token: &TokenIdentifier,
+    deposit_address: &str,
     tx_hash: &str,
+    transfer_index: u64,
+    amount: U256,
     signed_at: chrono::DateTime<chrono::Utc>,
     signer_chain_id: u64,
 ) -> String {
     let payload = ParticipantDepositDetectionAuthPayload {
-        swapId: swap_id.to_string(),
-        txHash: tx_hash.to_string(),
+        swapId: swap.id.to_string(),
+        sourceChain: canonical_chain(source_chain).to_string(),
+        sourceToken: canonical_token_identifier(source_token),
+        depositAddress: canonical_address(source_chain, deposit_address),
+        txHash: tx_hash.to_lowercase(),
+        transferIndex: transfer_index,
+        amount,
         signedAt: signed_at.timestamp() as u64,
     };
     let domain = eip712_domain! {
@@ -836,4 +961,26 @@ fn sign_participant_detection_payload(
         .sign_typed_data_sync(&payload, &domain)
         .unwrap()
         .to_string()
+}
+
+fn canonical_chain(chain: ChainType) -> &'static str {
+    match chain {
+        ChainType::Bitcoin => "bitcoin",
+        ChainType::Ethereum => "ethereum",
+        ChainType::Base => "base",
+    }
+}
+
+fn canonical_token_identifier(token: &TokenIdentifier) -> String {
+    match token.normalize() {
+        TokenIdentifier::Native => "native".to_string(),
+        TokenIdentifier::Address(address) => address,
+    }
+}
+
+fn canonical_address(chain: ChainType, address: &str) -> String {
+    match chain {
+        ChainType::Bitcoin => address.to_string(),
+        ChainType::Ethereum | ChainType::Base => address.to_lowercase(),
+    }
 }

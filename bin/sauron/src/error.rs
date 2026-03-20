@@ -6,6 +6,9 @@ pub enum Error {
     #[snafu(display("Failed to connect to replica database"))]
     ReplicaDatabaseConnection { source: sqlx::Error },
 
+    #[snafu(display("Failed to apply replica migrations"))]
+    ReplicaMigration { source: sqlx::migrate::MigrateError },
+
     #[snafu(display("Replica database query failed"))]
     ReplicaDatabaseQuery { source: sqlx::Error },
 

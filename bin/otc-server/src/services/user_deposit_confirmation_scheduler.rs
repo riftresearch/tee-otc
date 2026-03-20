@@ -1,6 +1,6 @@
 use crate::db::Database;
 use crate::error::OtcServerError;
-use crate::services::mm_registry::MMRegistry;
+use crate::services::mm_registry::{MMRegistry, MMRegistryError};
 use dashmap::DashMap;
 use metrics::{counter, gauge, histogram};
 use otc_chains::ChainRegistry;
@@ -51,6 +51,13 @@ pub enum SchedulerError {
     #[snafu(display("Chain operation error: {source} at {loc}"))]
     ChainOperation {
         source: otc_chains::Error,
+        #[snafu(implicit)]
+        loc: Location,
+    },
+
+    #[snafu(display("Market maker notification error: {source} at {loc}"))]
+    MMRegistry {
+        source: MMRegistryError,
         #[snafu(implicit)]
         loc: Location,
     },
@@ -145,6 +152,9 @@ impl UserDepositConfirmationScheduler {
         info!("Starting user deposit confirmation scheduler");
         if let Err(err) = self.reconcile_from_db().await {
             error!("Failed initial user-deposit scheduler reconcile: {}", err);
+        }
+        if let Err(err) = self.retry_unnotified_mm_swaps().await {
+            error!("Failed initial MM notification recovery sweep: {}", err);
         }
     }
 
@@ -348,15 +358,6 @@ impl UserDepositConfirmationScheduler {
                     reason: "missing user_deposit_status".to_string(),
                     loc: location!(),
                 })?;
-        let realized = swap
-            .realized
-            .as_ref()
-            .ok_or_else(|| SchedulerError::InvalidState {
-                swap_id: swap.id,
-                reason: "missing realized amounts".to_string(),
-                loc: location!(),
-            })?;
-
         let user_deposit_confirmed_at = match self.db.swaps().user_deposit_confirmed(swap.id).await
         {
             Ok(timestamp) => timestamp,
@@ -375,32 +376,16 @@ impl UserDepositConfirmationScheduler {
             }
         };
 
-        let expected_lot = Lot {
-            currency: swap.quote.to.currency.clone(),
-            amount: realized.mm_output,
-        };
-        let protocol_fee = realized.protocol_fee;
-        let mm_registry = self.mm_registry.clone();
-        let market_maker_id = swap.market_maker_id;
-        let swap_id = swap.id;
-        let quote_id = swap.quote.id;
-        let user_destination_address = swap.user_destination_address.clone();
-        let mm_nonce = swap.mm_nonce;
-
-        tokio::spawn(async move {
-            let _ = mm_registry
-                .notify_user_deposit_confirmed(
-                    &market_maker_id,
-                    &swap_id,
-                    &quote_id,
-                    &user_destination_address,
-                    mm_nonce,
-                    &expected_lot,
-                    protocol_fee,
-                    user_deposit_confirmed_at,
-                )
-                .await;
-        });
+        if let Err(err) = self
+            .notify_market_maker_user_deposit_confirmed(swap, user_deposit_confirmed_at)
+            .await
+        {
+            warn!(
+                swap_id = %swap.id,
+                error = %err,
+                "User deposit was confirmed, but MM notification will need retry"
+            );
+        }
 
         info!(
             swap_id = %swap.id,
@@ -469,7 +454,90 @@ impl UserDepositConfirmationScheduler {
                     err
                 );
             }
+
+            if let Err(err) = self.retry_unnotified_mm_swaps().await {
+                error!(
+                    "User-deposit MM notification recovery sweep failed: {}",
+                    err
+                );
+            }
         }
+    }
+
+    async fn notify_market_maker_user_deposit_confirmed(
+        &self,
+        swap: &Swap,
+        user_deposit_confirmed_at: chrono::DateTime<chrono::Utc>,
+    ) -> SchedulerResult<()> {
+        let realized = swap
+            .realized
+            .as_ref()
+            .ok_or_else(|| SchedulerError::InvalidState {
+                swap_id: swap.id,
+                reason: "missing realized amounts".to_string(),
+                loc: location!(),
+            })?;
+
+        let expected_lot = Lot {
+            currency: swap.quote.to.currency.clone(),
+            amount: realized.mm_output,
+        };
+
+        self.mm_registry
+            .notify_user_deposit_confirmed(
+                &swap.market_maker_id,
+                &swap.id,
+                &swap.quote.id,
+                &swap.user_destination_address,
+                swap.mm_nonce,
+                &expected_lot,
+                realized.protocol_fee,
+                user_deposit_confirmed_at,
+            )
+            .await
+            .context(MMRegistrySnafu)?;
+
+        Ok(())
+    }
+
+    async fn retry_unnotified_mm_swaps(&self) -> SchedulerResult<()> {
+        let waiting_swaps = self
+            .db
+            .swaps()
+            .get_active_swaps_with_status(SwapStatus::WaitingMMDepositInitiated)
+            .await
+            .context(DatabaseSnafu)?;
+
+        for swap in waiting_swaps {
+            if swap.mm_notified_at.is_some() {
+                continue;
+            }
+
+            let Some(user_deposit_confirmed_at) = swap
+                .user_deposit_status
+                .as_ref()
+                .and_then(|status| status.confirmed_at)
+            else {
+                warn!(
+                    swap_id = %swap.id,
+                    "Skipping MM notification retry because confirmed_at is missing"
+                );
+                continue;
+            };
+
+            if let Err(err) = self
+                .notify_market_maker_user_deposit_confirmed(&swap, user_deposit_confirmed_at)
+                .await
+            {
+                warn!(
+                    swap_id = %swap.id,
+                    error = %err,
+                    "Retrying MM notification for confirmed user deposit failed"
+                );
+            }
+        }
+
+        Ok(())
     }
 
     async fn fetch_chain_head(&self, chain: ChainType) -> SchedulerResult<ChainHead> {

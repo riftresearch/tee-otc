@@ -1,7 +1,9 @@
+pub mod benchmarks;
 pub mod config;
 pub mod discovery;
 pub mod error;
 pub mod otc_client;
+pub mod replica_db;
 pub mod runtime;
 pub mod watch;
 

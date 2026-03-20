@@ -19,7 +19,11 @@ use sqlx::{
 use std::time::Duration;
 use tracing::info;
 
-// Embeds all migration files from ./migrations at compile time
+// Embeds all migration files from ./migrations at compile time.
+//
+// Some Sauron integration environments point both OTC and the replica migrator
+// at the same Postgres database, so OTC keeps shared Sauron migration versions
+// in this stream as well, including the replica notify trigger and watch-set index.
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 
 #[derive(Clone)]

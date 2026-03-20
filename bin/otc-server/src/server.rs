@@ -1235,8 +1235,15 @@ impl MessageHandler for OTCMessageHandler {
                             }
                         }
                     }
-                    MMResponse::PaymentQueued { .. } => {
-                        // Handle payment queued notification
+                    MMResponse::PaymentQueued { swap_id, .. } => {
+                        if let Err(err) = self.db.swaps().mark_mm_notified(swap_id).await {
+                            error!(
+                                market_maker_id = %mm_id,
+                                swap_id = %swap_id,
+                                error = %err,
+                                "Failed to mark MM notification acknowledged after PaymentQueued"
+                            );
+                        }
                         None
                     }
                     MMResponse::SwapCompleteAck { .. } => {
@@ -1266,7 +1273,8 @@ impl MessageHandler for OTCMessageHandler {
         match self.db.swaps().get_waiting_mm_deposit_swaps(mm_id).await {
             Ok(pending_swaps) => {
                 for swap in pending_swaps {
-                    self.mm_registry
+                    if let Err(err) = self
+                        .mm_registry
                         .notify_user_deposit_confirmed(
                             &mm_id,
                             &swap.swap_id,
@@ -1277,7 +1285,15 @@ impl MessageHandler for OTCMessageHandler {
                             swap.protocol_fee,
                             swap.user_deposit_confirmed_at,
                         )
-                        .await;
+                        .await
+                    {
+                        error!(
+                            market_maker_id = %mm_id,
+                            swap_id = %swap.swap_id,
+                            error = %err,
+                            "Failed to deliver pending user deposit confirmation to market maker on connect"
+                        );
+                    }
                 }
             }
             Err(err) => {

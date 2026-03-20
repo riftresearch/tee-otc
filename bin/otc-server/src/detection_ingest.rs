@@ -1,5 +1,6 @@
 use std::{
-    sync::Arc,
+    collections::HashMap,
+    sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
 
@@ -15,11 +16,11 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use dashmap::DashMap;
 use metrics::{counter, gauge, histogram};
 use otc_auth::ApiKeyStore;
 use otc_models::{
-    constants::EXPECTED_CHAIN_IDS, RealizedSwap, Swap, SwapStatus, UserDepositStatus,
+    constants::EXPECTED_CHAIN_IDS, ChainType, RealizedSwap, Swap, SwapStatus, TokenIdentifier,
+    UserDepositStatus,
 };
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -34,7 +35,60 @@ use crate::{
     server::AppState,
 };
 
-pub type ParticipantCooldownMap = DashMap<String, Instant>;
+#[derive(Debug)]
+struct ParticipantCooldownState {
+    entries: HashMap<String, Instant>,
+}
+
+impl Default for ParticipantCooldownState {
+    fn default() -> Self {
+        Self {
+            entries: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct ParticipantCooldownMap {
+    inner: Mutex<ParticipantCooldownState>,
+}
+
+impl ParticipantCooldownMap {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn try_acquire(&self, signer_key: String, min_interval: Duration) -> bool {
+        let now = Instant::now();
+        let mut state = self
+            .inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+        state.entries.retain(|_, locked_until| *locked_until > now);
+
+        if state
+            .entries
+            .get(&signer_key)
+            .is_some_and(|locked_until| *locked_until > now)
+        {
+            return false;
+        }
+
+        state.entries.insert(signer_key, now + min_interval);
+        true
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .entries
+            .len()
+    }
+}
 
 pub const DETECTOR_ACCEPTED_TOTAL_METRIC: &str = "otc_detector_submissions_accepted_total";
 pub const DETECTOR_REJECTED_TOTAL_METRIC: &str = "otc_detector_submissions_rejected_total";
@@ -54,7 +108,12 @@ sol! {
     #[derive(Debug)]
     struct ParticipantDepositDetectionAuthPayload {
         string swapId;
+        string sourceChain;
+        string sourceToken;
+        string depositAddress;
         string txHash;
+        uint64 transferIndex;
+        uint256 amount;
         uint64 signedAt;
     }
 }
@@ -157,37 +216,6 @@ async fn handle_detection_request_inner(
         Err(err) => return Err(transient_failure(err)),
     };
 
-    if is_duplicate_submission(&swap, &request.tx_hash) {
-        record_acceptance(
-            lane,
-            trusted_detector.as_ref(),
-            swap.quote.from.currency.chain,
-        );
-        return Ok(detection_success(
-            StatusCode::OK,
-            "duplicate",
-            swap.id,
-            swap.status,
-        ));
-    }
-
-    if let Some(participant_auth) = participant_auth.as_ref() {
-        verify_participant_submission(&state, swap_id, &swap, &request, participant_auth).await?;
-    }
-
-    if swap.status != SwapStatus::WaitingUserDepositInitiated {
-        return Err(rejection(
-            lane,
-            trusted_detector.as_ref(),
-            "swap_not_waiting_user_deposit_initiated",
-            StatusCode::CONFLICT,
-            format!(
-                "swap {} is not waiting for user deposit initiation",
-                swap.id
-            ),
-        ));
-    }
-
     if request.source_chain != swap.quote.from.currency.chain {
         return Err(rejection(
             lane,
@@ -219,6 +247,37 @@ async fn handle_detection_request_inner(
             "address_mismatch",
             StatusCode::CONFLICT,
             "candidate address does not match the swap deposit vault",
+        ));
+    }
+
+    if let Some(participant_auth) = participant_auth.as_ref() {
+        verify_participant_submission(&state, &swap, &request, participant_auth).await?;
+    }
+
+    if is_duplicate_submission(&swap, &request.tx_hash) {
+        record_acceptance(
+            lane,
+            trusted_detector.as_ref(),
+            swap.quote.from.currency.chain,
+        );
+        return Ok(detection_success(
+            StatusCode::OK,
+            "duplicate",
+            swap.id,
+            swap.status,
+        ));
+    }
+
+    if swap.status != SwapStatus::WaitingUserDepositInitiated {
+        return Err(rejection(
+            lane,
+            trusted_detector.as_ref(),
+            "swap_not_waiting_user_deposit_initiated",
+            StatusCode::CONFLICT,
+            format!(
+                "swap {} is not waiting for user deposit initiation",
+                swap.id
+            ),
         ));
     }
 
@@ -388,7 +447,6 @@ async fn handle_detection_request_inner(
 
 async fn verify_participant_submission(
     state: &AppState,
-    swap_id: Uuid,
     swap: &Swap,
     request: &DepositObservationRequest,
     participant_auth: &ParticipantAuth,
@@ -467,7 +525,7 @@ async fn verify_participant_submission(
         )
     })?;
 
-    let payload = participant_auth_payload(swap_id, &request.tx_hash, participant_auth);
+    let payload = participant_auth_payload(swap, request, participant_auth);
     let domain = eip712_domain! {
         name: "Rift OTC Deposit Detection",
         version: "1",
@@ -514,13 +572,18 @@ async fn verify_participant_submission(
 }
 
 fn participant_auth_payload(
-    swap_id: Uuid,
-    tx_hash: &str,
+    swap: &Swap,
+    request: &DepositObservationRequest,
     participant_auth: &ParticipantAuth,
 ) -> ParticipantDepositDetectionAuthPayload {
     ParticipantDepositDetectionAuthPayload {
-        swapId: swap_id.to_string(),
-        txHash: tx_hash.to_string(),
+        swapId: swap.id.to_string(),
+        sourceChain: canonical_chain(request.source_chain).to_string(),
+        sourceToken: canonical_token_identifier(&request.source_token),
+        depositAddress: canonical_address(request.source_chain, &request.address),
+        txHash: canonical_tx_hash(&request.tx_hash),
+        transferIndex: request.transfer_index,
+        amount: request.amount,
         signedAt: participant_auth.signed_at.timestamp().max(0) as u64,
     }
 }
@@ -644,28 +707,41 @@ fn canonical_chain(chain: otc_models::ChainType) -> &'static str {
     }
 }
 
+fn canonical_token_identifier(token: &TokenIdentifier) -> String {
+    match token.normalize() {
+        TokenIdentifier::Native => "native".to_string(),
+        TokenIdentifier::Address(address) => address,
+    }
+}
+
+fn canonical_address(chain: ChainType, address: &str) -> String {
+    match chain {
+        ChainType::Bitcoin => address.to_string(),
+        ChainType::Ethereum | ChainType::Base => address.to_lowercase(),
+    }
+}
+
+fn canonical_tx_hash(tx_hash: &str) -> String {
+    tx_hash.to_lowercase()
+}
+
 fn apply_participant_cooldown(
     cooldowns: &ParticipantCooldownMap,
     signer: Address,
     min_interval: Duration,
 ) -> Result<(), Response> {
     let signer_key = signer.to_string().to_lowercase();
-    let now = Instant::now();
 
-    if let Some(entry) = cooldowns.get(&signer_key) {
-        if *entry > now {
-            counter!(PARTICIPANT_COOLDOWN_REJECTED_TOTAL_METRIC).increment(1);
-            return Err(detection_error(
-                StatusCode::TOO_MANY_REQUESTS,
-                "participant_submission_too_soon",
-                "participant signer is still in cooldown",
-            ));
-        }
+    if cooldowns.try_acquire(signer_key, min_interval) {
+        return Ok(());
     }
 
-    cooldowns.remove_if(&signer_key, |_, locked_until| *locked_until <= now);
-    cooldowns.insert(signer_key, now + min_interval);
-    Ok(())
+    counter!(PARTICIPANT_COOLDOWN_REJECTED_TOTAL_METRIC).increment(1);
+    Err(detection_error(
+        StatusCode::TOO_MANY_REQUESTS,
+        "participant_submission_too_soon",
+        "participant signer is still in cooldown",
+    ))
 }
 
 fn authenticate_trusted_detector(
@@ -828,4 +904,39 @@ fn swap_status_code(status: SwapStatus) -> String {
 #[derive(Clone, Debug)]
 struct AuthenticatedDetector {
     tag: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{apply_participant_cooldown, ParticipantCooldownMap};
+    use alloy::primitives::Address;
+    use std::{str::FromStr, thread, time::Duration};
+
+    #[test]
+    fn participant_cooldown_rejects_second_submission_within_interval() {
+        let cooldowns = ParticipantCooldownMap::new();
+        let signer =
+            Address::from_str("0x0000000000000000000000000000000000000001").expect("valid address");
+
+        apply_participant_cooldown(&cooldowns, signer, Duration::from_secs(60))
+            .expect("first submission should acquire cooldown");
+        assert!(apply_participant_cooldown(&cooldowns, signer, Duration::from_secs(60)).is_err());
+    }
+
+    #[test]
+    fn participant_cooldown_prunes_expired_entries() {
+        let cooldowns = ParticipantCooldownMap::new();
+        let signer_a =
+            Address::from_str("0x0000000000000000000000000000000000000001").expect("valid address");
+        let signer_b =
+            Address::from_str("0x0000000000000000000000000000000000000002").expect("valid address");
+
+        apply_participant_cooldown(&cooldowns, signer_a, Duration::from_millis(5))
+            .expect("first signer should acquire cooldown");
+        thread::sleep(Duration::from_millis(10));
+        apply_participant_cooldown(&cooldowns, signer_b, Duration::from_secs(60))
+            .expect("second signer should acquire cooldown");
+
+        assert_eq!(cooldowns.len(), 1);
+    }
 }

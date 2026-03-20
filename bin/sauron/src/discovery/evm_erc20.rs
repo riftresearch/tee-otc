@@ -18,7 +18,7 @@ use crate::{
     config::SauronArgs,
     discovery::{BlockCursor, BlockScan, DetectedDeposit, DiscoveryBackend},
     error::{EvmRpcSnafu, EvmTokenIndexerSnafu, Result},
-    watch::WatchEntry,
+    watch::{SharedWatchEntry, WatchEntry},
 };
 
 sol! {
@@ -26,14 +26,18 @@ sol! {
     event Transfer(address indexed from, address indexed to, uint256 value);
 }
 
+const EVM_REORG_RESCAN_DEPTH: u64 = 32;
+
 pub struct EvmErc20DiscoveryBackend {
     name: &'static str,
     chain_type: ChainType,
     provider: DynProvider,
     token_indexer: TokenIndexerClient,
     allowed_token: Address,
+    allowed_token_identifier: TokenIdentifier,
     transfer_signature: B256,
     poll_interval: Duration,
+    indexed_lookup_concurrency: usize,
 }
 
 impl EvmErc20DiscoveryBackend {
@@ -44,6 +48,7 @@ impl EvmErc20DiscoveryBackend {
             &args.ethereum_mainnet_rpc_url,
             &args.untrusted_ethereum_mainnet_token_indexer_url,
             &args.ethereum_allowed_token,
+            args.sauron_evm_indexed_lookup_concurrency,
         )
         .await
     }
@@ -55,6 +60,7 @@ impl EvmErc20DiscoveryBackend {
             &args.base_rpc_url,
             &args.untrusted_base_token_indexer_url,
             &args.base_allowed_token,
+            args.sauron_evm_indexed_lookup_concurrency,
         )
         .await
     }
@@ -65,6 +71,7 @@ impl EvmErc20DiscoveryBackend {
         rpc_url: &str,
         token_indexer_url: &str,
         allowed_token: &str,
+        indexed_lookup_concurrency: usize,
     ) -> Result<Self> {
         let url = rpc_url
             .parse()
@@ -93,21 +100,21 @@ impl EvmErc20DiscoveryBackend {
             provider,
             token_indexer,
             allowed_token,
+            allowed_token_identifier: TokenIdentifier::address(allowed_token.to_string()),
             transfer_signature: keccak256("Transfer(address,address,uint256)"),
             poll_interval: Duration::from_secs(5),
+            indexed_lookup_concurrency,
         })
     }
 
     fn watch_token_matches(&self, watch: &WatchEntry) -> bool {
-        match &watch.source_token {
-            TokenIdentifier::Address(token) => Address::from_str(token)
-                .map(|parsed| parsed == self.allowed_token)
-                .unwrap_or(false),
-            TokenIdentifier::Native => false,
-        }
+        watch.source_token == self.allowed_token_identifier
     }
 
-    fn address_map<'a>(&self, watches: &'a [WatchEntry]) -> HashMap<Address, Vec<&'a WatchEntry>> {
+    fn address_map<'a>(
+        &self,
+        watches: &'a [SharedWatchEntry],
+    ) -> HashMap<Address, Vec<&'a WatchEntry>> {
         let mut addresses: HashMap<Address, Vec<&WatchEntry>> = HashMap::new();
 
         for watch in watches {
@@ -117,7 +124,7 @@ impl EvmErc20DiscoveryBackend {
 
             match Address::from_str(&watch.address) {
                 Ok(address) => {
-                    addresses.entry(address).or_default().push(watch);
+                    addresses.entry(address).or_default().push(watch.as_ref());
                 }
                 Err(error) => {
                     warn!(
@@ -204,6 +211,10 @@ impl DiscoveryBackend for EvmErc20DiscoveryBackend {
 
     fn poll_interval(&self) -> Duration {
         self.poll_interval
+    }
+
+    fn indexed_lookup_concurrency(&self) -> usize {
+        self.indexed_lookup_concurrency
     }
 
     async fn indexed_lookup(&self, watch: &WatchEntry) -> Result<Option<DetectedDeposit>> {
@@ -294,7 +305,7 @@ impl DiscoveryBackend for EvmErc20DiscoveryBackend {
     async fn scan_new_blocks(
         &self,
         from_exclusive: &BlockCursor,
-        watches: &[WatchEntry],
+        watches: &[SharedWatchEntry],
     ) -> Result<BlockScan> {
         let current_height = self.current_tip_height().await?;
         let current_hash = self.current_tip_hash().await?;
@@ -313,17 +324,31 @@ impl DiscoveryBackend for EvmErc20DiscoveryBackend {
         if from_exclusive.height > 0 {
             let expected_hash = self.block_hash_at(from_exclusive.height).await?;
             if expected_hash.as_deref() != Some(from_exclusive.hash.as_str()) {
+                let rewind_height = from_exclusive.height.saturating_sub(EVM_REORG_RESCAN_DEPTH);
+                let rewind_hash = if rewind_height == 0 {
+                    String::new()
+                } else {
+                    self.block_hash_at(rewind_height).await?.ok_or_else(|| {
+                        crate::error::Error::ChainInit {
+                            chain: self.chain_type.to_db_string().to_string(),
+                            message: format!(
+                                "missing block hash while rewinding discovery cursor at height {rewind_height}"
+                            ),
+                        }
+                    })?
+                };
                 warn!(
                     backend = self.name,
                     stored_height = from_exclusive.height,
                     stored_hash = %from_exclusive.hash,
                     current_hash = ?expected_hash,
-                    "EVM discovery cursor reorg detected; resetting to current tip"
+                    rewind_height,
+                    "EVM discovery cursor reorg detected; rewinding cursor"
                 );
                 return Ok(BlockScan {
                     new_cursor: BlockCursor {
-                        height: current_height,
-                        hash: current_hash,
+                        height: rewind_height,
+                        hash: rewind_hash,
                     },
                     detections: Vec::new(),
                 });

@@ -198,63 +198,11 @@ async fn maybe_spawn_sauron_for_otc_port(otc_port: u16) {
         return;
     };
 
-    install_sauron_notify_trigger(
-        &args.otc_replica_database_url,
-        &args.otc_replica_notification_channel,
-    )
-    .await
-    .expect("should install Sauron test notify trigger");
-
     tokio::spawn(async move {
         if let Err(error) = run_sauron(args).await {
             warn!(%error, "Auto-started Sauron worker exited");
         }
     });
-}
-
-async fn install_sauron_notify_trigger(
-    database_url: &str,
-    notification_channel: &str,
-) -> sqlx::Result<()> {
-    let pool = sqlx::PgPool::connect(database_url).await?;
-    let function_name = "sauron_test_watch_set_notify";
-    let trigger_name = "sauron_test_swaps_notify";
-    let escaped_channel = notification_channel.replace('\'', "''");
-
-    let function_sql = format!(
-        r#"
-CREATE OR REPLACE FUNCTION public.{function_name}()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-DECLARE
-  target_swap_id uuid;
-  payload text;
-BEGIN
-  target_swap_id := COALESCE(NEW.id, OLD.id);
-  payload := json_build_object('swapId', target_swap_id::text)::text;
-  PERFORM pg_notify('{escaped_channel}', payload);
-  RETURN COALESCE(NEW, OLD);
-END;
-$$
-"#
-    );
-    sqlx::query(&function_sql).execute(&pool).await?;
-
-    let drop_trigger_sql = format!("DROP TRIGGER IF EXISTS {trigger_name} ON public.swaps");
-    sqlx::query(&drop_trigger_sql).execute(&pool).await?;
-
-    let create_trigger_sql = format!(
-        r#"
-CREATE TRIGGER {trigger_name}
-AFTER INSERT OR UPDATE OR DELETE ON public.swaps
-FOR EACH ROW
-EXECUTE FUNCTION public.{function_name}()
-"#
-    );
-    sqlx::query(&create_trigger_sql).execute(&pool).await?;
-
-    Ok(())
 }
 
 pub async fn wait_for_rfq_server_to_be_ready(rfq_port: u16) {
@@ -659,6 +607,8 @@ fn build_sauron_test_args(
         base_allowed_token: devnet.base.cbbtc_contract.address().to_string(),
         sauron_reconcile_interval_seconds: 60,
         sauron_bitcoin_scan_interval_seconds: 1,
+        sauron_bitcoin_indexed_lookup_concurrency: 8,
+        sauron_evm_indexed_lookup_concurrency: 4,
     }
 }
 

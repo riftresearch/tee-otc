@@ -19,11 +19,13 @@ use crate::{
         ReplicaNotificationReceiveSnafu, Result,
     },
     otc_client::OtcClient,
+    replica_db::migrate_replica,
     watch::{full_reconcile, WatchChangeNotification, WatchRepository, WatchStore},
 };
 
 pub async fn run(args: SauronArgs) -> Result<()> {
     let replica_pool = connect_replica_pool(&args).await?;
+    migrate_replica(&replica_pool).await?;
     let repository = WatchRepository::new(replica_pool.clone());
 
     let mut listener = PgListener::connect(&args.otc_replica_database_url)
@@ -46,6 +48,7 @@ pub async fn run(args: SauronArgs) -> Result<()> {
     info!(
         replica_database = %args.otc_replica_database_name,
         notification_channel = %args.otc_replica_notification_channel,
+        reconcile_interval_seconds = args.sauron_reconcile_interval_seconds,
         initial_watch_count,
         "Sauron startup completed"
     );
@@ -61,6 +64,7 @@ pub async fn run(args: SauronArgs) -> Result<()> {
         repository.clone(),
         Duration::from_secs(args.sauron_reconcile_interval_seconds),
     );
+    let expiration_prune_task = run_expiration_prune_loop(store.clone(), Duration::from_secs(60));
     let discovery_task = run_backends(
         backends,
         DiscoveryContext {
@@ -69,7 +73,12 @@ pub async fn run(args: SauronArgs) -> Result<()> {
         },
     );
 
-    tokio::try_join!(notification_task, reconcile_task, discovery_task)?;
+    tokio::try_join!(
+        notification_task,
+        reconcile_task,
+        expiration_prune_task,
+        discovery_task
+    )?;
     Ok(())
 }
 
@@ -145,5 +154,19 @@ async fn run_reconcile_loop(
     loop {
         ticker.tick().await;
         full_reconcile(&store, &repository).await?;
+    }
+}
+
+async fn run_expiration_prune_loop(store: WatchStore, interval: Duration) -> Result<()> {
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    ticker.tick().await;
+
+    loop {
+        ticker.tick().await;
+        let pruned = store.prune_expired().await;
+        if pruned > 0 {
+            info!(pruned, "Pruned expired Sauron watches from memory");
+        }
     }
 }

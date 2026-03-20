@@ -467,6 +467,7 @@ impl SwapRepository {
             JOIN quotes q ON s.quote_id = q.id
             WHERE s.market_maker_id = $1
               AND s.status = $2
+              AND s.mm_notified_at IS NULL
               AND s.user_deposit_status IS NOT NULL
               AND s.realized_swap IS NOT NULL
             "#,
@@ -1245,6 +1246,17 @@ impl SwapRepository {
             .unwrap()
             .confirmed_at
             .unwrap())
+    }
+
+    /// Mark MM notification as successfully sent for a confirmed user deposit
+    pub async fn mark_mm_notified(&self, swap_id: Uuid) -> OtcServerResult<()> {
+        let mut swap = self.get(swap_id).await?;
+        swap.mark_mm_notified()
+            .map_err(|e| OtcServerError::InvalidState {
+                message: format!("State transition failed: {e}"),
+            })?;
+        self.update(&swap, None).await?;
+        Ok(())
     }
 
     /// Mark private key as sent to MM
