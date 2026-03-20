@@ -18,3 +18,8 @@ docker tag riftresearch/otc-server:${VERSION_TAG} riftresearch/otc-server:latest
 docker push riftresearch/otc-server:${VERSION_TAG}
 docker push riftresearch/otc-server:latest
 ```
+
+## Railway Sauron Worker
+
+See `deploy/railway/sauron/README.md` for the GitHub-backed Railway worker
+setup, shared-replica reuse, and the required service variables.
