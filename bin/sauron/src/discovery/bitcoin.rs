@@ -2,8 +2,7 @@ use std::{collections::HashMap, str::FromStr, time::Duration};
 
 use alloy::primitives::U256;
 use async_trait::async_trait;
-use bitcoin::{Address, BlockHash, ScriptBuf};
-use bitcoincore_rpc_async::{Auth, Client, RpcApi};
+use bitcoin::{Address, Block, BlockHash, ScriptBuf};
 use chrono::Utc;
 use otc_models::{ChainType, TokenIdentifier};
 use snafu::ResultExt;
@@ -12,14 +11,13 @@ use tracing::warn;
 use crate::{
     config::SauronArgs,
     discovery::{BlockCursor, BlockScan, DetectedDeposit, DiscoveryBackend},
-    error::{BitcoinEsploraSnafu, BitcoinRpcSnafu, Result},
+    error::{BitcoinEsploraSnafu, Result},
     watch::{SharedWatchEntry, WatchEntry},
 };
 
 const BITCOIN_REORG_RESCAN_DEPTH: u64 = 6;
 
 pub struct BitcoinDiscoveryBackend {
-    rpc_client: Client,
     esplora_client: esplora_client::AsyncClient,
     poll_interval: Duration,
     indexed_lookup_concurrency: usize,
@@ -27,17 +25,7 @@ pub struct BitcoinDiscoveryBackend {
 
 impl BitcoinDiscoveryBackend {
     pub async fn new(args: &SauronArgs) -> Result<Self> {
-        let rpc_client = Client::new(
-            args.bitcoin_rpc_url.clone(),
-            normalize_auth(&args.bitcoin_rpc_auth),
-        )
-        .await
-        .map_err(|error| crate::error::Error::DiscoveryBackendInit {
-            backend: "bitcoin".to_string(),
-            message: error.to_string(),
-        })?;
-
-        let esplora_client = esplora_client::Builder::new(&args.untrusted_esplora_http_server_url)
+        let esplora_client = esplora_client::Builder::new(&args.electrum_http_server_url)
             .build_async()
             .map_err(|error| crate::error::Error::DiscoveryBackendInit {
                 backend: "bitcoin".to_string(),
@@ -45,7 +33,6 @@ impl BitcoinDiscoveryBackend {
             })?;
 
         Ok(Self {
-            rpc_client,
             esplora_client,
             poll_interval: Duration::from_secs(args.sauron_bitcoin_scan_interval_seconds),
             indexed_lookup_concurrency: args.sauron_bitcoin_indexed_lookup_concurrency,
@@ -78,17 +65,38 @@ impl BitcoinDiscoveryBackend {
     }
 
     async fn current_tip_height(&self) -> Result<u64> {
-        self.rpc_client
-            .get_block_count()
+        self.esplora_client
+            .get_height()
             .await
-            .context(BitcoinRpcSnafu)
+            .map(u64::from)
+            .context(BitcoinEsploraSnafu)
     }
 
     async fn current_tip_hash(&self) -> Result<BlockHash> {
-        self.rpc_client
-            .get_best_block_hash()
+        self.esplora_client.get_tip_hash().await.context(BitcoinEsploraSnafu)
+    }
+
+    async fn block_hash_at_height(&self, height: u64) -> Result<BlockHash> {
+        let height = u32::try_from(height).map_err(|_| crate::error::Error::ChainInit {
+            chain: ChainType::Bitcoin.to_db_string().to_string(),
+            message: format!("block height {height} exceeded u32 range"),
+        })?;
+
+        self.esplora_client
+            .get_block_hash(height)
             .await
-            .context(BitcoinRpcSnafu)
+            .context(BitcoinEsploraSnafu)
+    }
+
+    async fn block_by_hash(&self, block_hash: &BlockHash) -> Result<Block> {
+        self.esplora_client
+            .get_block_by_hash(block_hash)
+            .await
+            .context(BitcoinEsploraSnafu)?
+            .ok_or_else(|| crate::error::Error::ChainInit {
+                chain: ChainType::Bitcoin.to_db_string().to_string(),
+                message: format!("block {block_hash} was unavailable from Esplora"),
+            })
     }
 }
 
@@ -193,11 +201,7 @@ impl DiscoveryBackend for BitcoinDiscoveryBackend {
         }
 
         if from_exclusive.height > 0 {
-            let expected_hash = self
-                .rpc_client
-                .get_block_hash(from_exclusive.height)
-                .await
-                .context(BitcoinRpcSnafu)?;
+            let expected_hash = self.block_hash_at_height(from_exclusive.height).await?;
             if expected_hash.to_string() != from_exclusive.hash {
                 let rewind_height = from_exclusive
                     .height
@@ -205,11 +209,7 @@ impl DiscoveryBackend for BitcoinDiscoveryBackend {
                 let rewind_hash = if rewind_height == 0 {
                     String::new()
                 } else {
-                    self.rpc_client
-                        .get_block_hash(rewind_height)
-                        .await
-                        .context(BitcoinRpcSnafu)?
-                        .to_string()
+                    self.block_hash_at_height(rewind_height).await?.to_string()
                 };
                 warn!(
                     stored_height = from_exclusive.height,
@@ -233,16 +233,8 @@ impl DiscoveryBackend for BitcoinDiscoveryBackend {
         let mut last_hash = from_exclusive.hash.clone();
 
         for height in (from_exclusive.height + 1)..=current_height {
-            let block_hash = self
-                .rpc_client
-                .get_block_hash(height)
-                .await
-                .context(BitcoinRpcSnafu)?;
-            let block = self
-                .rpc_client
-                .get_block(&block_hash)
-                .await
-                .context(BitcoinRpcSnafu)?;
+            let block_hash = self.block_hash_at_height(height).await?;
+            let block = self.block_by_hash(&block_hash).await?;
             last_hash = block_hash.to_string();
 
             for tx in block.txdata {
@@ -280,13 +272,5 @@ impl DiscoveryBackend for BitcoinDiscoveryBackend {
             },
             detections,
         })
-    }
-}
-
-fn normalize_auth(auth: &Auth) -> Auth {
-    match auth {
-        Auth::None => Auth::None,
-        Auth::UserPass(user, password) => Auth::UserPass(user.clone(), password.clone()),
-        Auth::CookieFile(path) => Auth::CookieFile(path.clone()),
     }
 }

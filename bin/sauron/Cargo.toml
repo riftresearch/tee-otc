@@ -24,7 +24,6 @@ utc = { workspace = true }
 
 alloy = { workspace = true }
 bitcoin = { workspace = true }
-bitcoincore-rpc-async = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true }
 metrics = { workspace = true }

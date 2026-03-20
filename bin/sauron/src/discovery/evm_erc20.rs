@@ -46,7 +46,7 @@ impl EvmErc20DiscoveryBackend {
             "ethereum_erc20",
             ChainType::Ethereum,
             &args.ethereum_mainnet_rpc_url,
-            &args.untrusted_ethereum_mainnet_token_indexer_url,
+            &args.ethereum_token_indexer_url,
             &args.ethereum_allowed_token,
             args.sauron_evm_indexed_lookup_concurrency,
         )
@@ -58,7 +58,7 @@ impl EvmErc20DiscoveryBackend {
             "base_erc20",
             ChainType::Base,
             &args.base_rpc_url,
-            &args.untrusted_base_token_indexer_url,
+            &args.base_token_indexer_url,
             &args.base_allowed_token,
             args.sauron_evm_indexed_lookup_concurrency,
         )

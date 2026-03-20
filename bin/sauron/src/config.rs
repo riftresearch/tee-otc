@@ -1,4 +1,3 @@
-use bitcoincore_rpc_async::Auth;
 use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
@@ -37,29 +36,17 @@ pub struct SauronArgs {
     #[arg(long, env = "OTC_DETECTOR_API_SECRET")]
     pub otc_detector_api_secret: String,
 
-    /// Bitcoin RPC URL
-    #[arg(long, env = "BITCOIN_RPC_URL")]
-    pub bitcoin_rpc_url: String,
-
-    /// Bitcoin RPC Auth
-    #[arg(long, env = "BITCOIN_RPC_AUTH", default_value = "none", value_parser = parse_auth)]
-    pub bitcoin_rpc_auth: Auth,
-
     /// Electrum HTTP Server URL
     #[arg(long, env = "ELECTRUM_HTTP_SERVER_URL")]
-    pub untrusted_esplora_http_server_url: String,
-
-    /// Bitcoin Network
-    #[arg(long, env = "BITCOIN_NETWORK", default_value = "bitcoin")]
-    pub bitcoin_network: bitcoin::Network,
+    pub electrum_http_server_url: String,
 
     /// Ethereum Mainnet RPC URL
     #[arg(long, env = "EVM_RPC_URL")]
     pub ethereum_mainnet_rpc_url: String,
 
     /// Ethereum Mainnet Token Indexer URL
-    #[arg(long, env = "UNTRUSTED_ETHEREUM_TOKEN_INDEXER_URL")]
-    pub untrusted_ethereum_mainnet_token_indexer_url: String,
+    #[arg(long, env = "ETHEREUM_TOKEN_INDEXER_URL")]
+    pub ethereum_token_indexer_url: String,
 
     /// Ethereum allowed token address
     #[arg(
@@ -74,8 +61,8 @@ pub struct SauronArgs {
     pub base_rpc_url: String,
 
     /// Base Token Indexer URL
-    #[arg(long, env = "UNTRUSTED_BASE_TOKEN_INDEXER_URL")]
-    pub untrusted_base_token_indexer_url: String,
+    #[arg(long, env = "BASE_TOKEN_INDEXER_URL")]
+    pub base_token_indexer_url: String,
 
     /// Base allowed token address
     #[arg(
@@ -116,15 +103,4 @@ pub struct SauronArgs {
         default_value = "8"
     )]
     pub sauron_evm_indexed_lookup_concurrency: usize,
-}
-
-fn parse_auth(s: &str) -> Result<Auth, String> {
-    if s.eq_ignore_ascii_case("none") {
-        return Ok(Auth::None);
-    }
-
-    let mut split = s.splitn(2, ':');
-    let username = split.next().ok_or("Invalid auth string")?;
-    let password = split.next().ok_or("Invalid auth string")?;
-    Ok(Auth::UserPass(username.to_string(), password.to_string()))
 }

@@ -6628,7 +6628,6 @@ dependencies = [
  "alloy 1.0.30",
  "async-trait",
  "bitcoin",
- "bitcoincore-rpc-async",
  "blockchain-utils",
  "chrono",
  "clap",

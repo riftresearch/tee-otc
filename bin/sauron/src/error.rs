@@ -36,11 +36,6 @@ pub enum Error {
     #[snafu(display("Failed to initialize discovery backend {backend}: {message}"))]
     DiscoveryBackendInit { backend: String, message: String },
 
-    #[snafu(display("Bitcoin RPC request failed"))]
-    BitcoinRpc {
-        source: bitcoincore_rpc_async::Error,
-    },
-
     #[snafu(display("Bitcoin esplora request failed"))]
     BitcoinEsplora { source: esplora_client::Error },
 
