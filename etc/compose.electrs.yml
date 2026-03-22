@@ -63,13 +63,18 @@ configs:
       #   RATHOLE_BITCOIN_RPC_TOKEN
       #   RATHOLE_ZMQ_RAWTX_TOKEN
       #   RATHOLE_ZMQ_SEQUENCE_TOKEN
+      # Recommended Railway broker endpoint:
+      #   RATHOLE_REMOTE_ADDR=sauron-bitcoin-rathole-broker-production.up.railway.app:443
       [client]
       remote_addr = "${RATHOLE_REMOTE_ADDR:-}"
 
       [client.transport]
-      type = "${RATHOLE_TRANSPORT:-noise}"
+      type = "${RATHOLE_TRANSPORT:-websocket}"
 
       [client.transport.noise]
+
+      [client.transport.websocket]
+      tls = ${RATHOLE_WEBSOCKET_TLS:-true}
 
       [client.services.bitcoin_rpc]
       local_addr = "bitcoin-core:8332"

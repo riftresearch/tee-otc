@@ -1,13 +1,13 @@
 # Sauron Bitcoin Transport Via Rathole
 
-This document captures the exact `rathole` topology discussed for brokering a
-private `bitcoind` RPC endpoint and Bitcoin Core ZMQ feeds from an isolated
-server into Railway so `sauron` can consume them over Railway private
-networking.
+This document captures the `rathole` topology for brokering a private
+`bitcoind` RPC endpoint and Bitcoin Core ZMQ feeds from an isolated server into
+Railway so `sauron` can consume them over Railway private networking.
 
 ## Goal
 
-Keep the Bitcoin host private.
+Keep the Bitcoin host private while using Railway's normal public domain for the
+`rathole` control plane over websocket transport.
 
 - `bitcoind` stays bound to loopback on the isolated host.
 - No public Bitcoin RPC port.
@@ -29,8 +29,8 @@ Traffic shape:
    - RPC on `127.0.0.1:8332`
    - ZMQ rawtx on `127.0.0.1:28332`
    - ZMQ sequence on `127.0.0.1:28333`
-2. `rathole client` on the isolated host dials outbound to the Railway
-   `rathole-broker` control port.
+2. `rathole client` on the isolated host dials outbound over websocket to the
+   Railway `rathole-broker` public domain.
 3. `rathole-broker` exposes three server-side bind ports:
    - internal Railway port `40031` -> Bitcoin RPC
    - internal Railway port `40032` -> Bitcoin ZMQ rawtx
@@ -47,11 +47,11 @@ Important detail:
 
 ## Railway Layout
 
-`rathole-broker` should expose exactly one public port:
+`rathole-broker` should expose exactly one public Railway domain that targets
+the broker control port, typically `2333`. That listener carries websocket
+traffic from the isolated Bitcoin host.
 
-- `2333` = `rathole` control plane
-
-`rathole-broker` should also listen on internal-only ports:
+`rathole-broker` also listens on internal-only ports:
 
 - `40031` = Bitcoin RPC
 - `40032` = Bitcoin ZMQ rawtx
@@ -59,8 +59,9 @@ Important detail:
 
 Operational guidance:
 
-- Create a public Railway TCP proxy only for `2333`.
-- Do not create public proxies for `40031`, `40032`, or `40033`.
+- Generate a normal Railway public domain for the broker service.
+- Do not create public domains or TCP proxies for `40031`, `40032`, or
+  `40033`.
 - Bind the forwarded service ports to `0.0.0.0`, not `127.0.0.1`, inside the
   `rathole-broker` container so sibling Railway services can reach them over
   private networking.
@@ -104,7 +105,10 @@ Suggested `server.toml`:
 bind_addr = "0.0.0.0:2333"
 
 [server.transport]
-type = "noise"
+type = "websocket"
+
+[server.transport.websocket]
+tls = false
 
 [server.services.bitcoin_rpc]
 bind_addr = "0.0.0.0:40031"
@@ -123,9 +127,8 @@ Notes:
 
 - Per-service tokens are preferred over a single `default_token` so RPC and ZMQ
   can be rotated independently.
-- `noise` avoids certificate management while still giving encrypted transport.
-- If the deployment environment makes raw TCP awkward, revisit `rathole`
-  websocket transport later.
+- Railway terminates TLS at the edge, so the broker's websocket listener should
+  stay plain `ws` inside the container while clients connect with `wss`.
 
 ## Rathole Client Config
 
@@ -133,10 +136,13 @@ Suggested `client.toml` on the isolated Bitcoin host:
 
 ```toml
 [client]
-remote_addr = "replace-with-rathole-broker-public-host:2333"
+remote_addr = "sauron-bitcoin-rathole-broker-production.up.railway.app:443"
 
 [client.transport]
-type = "noise"
+type = "websocket"
+
+[client.transport.websocket]
+tls = true
 
 [client.services.bitcoin_rpc]
 local_addr = "127.0.0.1:8332"

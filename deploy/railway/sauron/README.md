@@ -124,7 +124,9 @@ Required runtime variables:
 Recommended runtime variables:
 
 - `RUST_LOG=info`
-- `RATHOLE_TRANSPORT_TYPE=noise`
+- `RATHOLE_CONTROL_PORT=2333`
+- `RATHOLE_TRANSPORT_TYPE=websocket`
+- `RATHOLE_WEBSOCKET_TLS=false`
 - `RATHOLE_BITCOIN_RPC_BIND_PORT=40031`
 - `RATHOLE_ZMQ_RAWTX_BIND_PORT=40032`
 - `RATHOLE_ZMQ_SEQUENCE_BIND_PORT=40033`
@@ -132,11 +134,15 @@ Recommended runtime variables:
 Operational notes:
 
 - Railway should expose exactly one public TCP proxy for the service control
-  port provided in `PORT`. The broker binds that automatically.
+  plane. On Railway, the simplest approach is to use the normal public domain
+  with `RATHOLE_TRANSPORT_TYPE=websocket`; the broker then binds its websocket
+  listener to the Railway-provided `PORT`.
 - The broker also listens on the three internal-only bind ports above. Do not
   create public proxies for those service ports.
-- Point the isolated Bitcoin host's `rathole client` at the broker's public TCP
-  proxy host and port.
+- Point the isolated Bitcoin host's `rathole client` at the broker's public
+  Railway domain on port `443`, for example
+  `sauron-bitcoin-rathole-broker-production.up.railway.app:443`, and use
+  websocket transport with client-side TLS enabled.
 - Point `sauron-worker` at the broker's internal Railway hostname:
   `rathole-broker.railway.internal` or the actual service DNS name Railway
   assigns.

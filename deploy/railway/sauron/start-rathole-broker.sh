@@ -13,11 +13,12 @@ require_env "RATHOLE_BITCOIN_RPC_TOKEN"
 require_env "RATHOLE_ZMQ_RAWTX_TOKEN"
 require_env "RATHOLE_ZMQ_SEQUENCE_TOKEN"
 
-control_port="${PORT:-2333}"
-transport_type="${RATHOLE_TRANSPORT_TYPE:-noise}"
+control_port="${RATHOLE_CONTROL_PORT:-${PORT:-2333}}"
+transport_type="${RATHOLE_TRANSPORT_TYPE:-websocket}"
 rpc_bind_port="${RATHOLE_BITCOIN_RPC_BIND_PORT:-40031}"
 rawtx_bind_port="${RATHOLE_ZMQ_RAWTX_BIND_PORT:-40032}"
 sequence_bind_port="${RATHOLE_ZMQ_SEQUENCE_BIND_PORT:-40033}"
+websocket_tls="${RATHOLE_WEBSOCKET_TLS:-false}"
 
 mkdir -p /etc/rathole
 
@@ -29,6 +30,9 @@ bind_addr = "0.0.0.0:${control_port}"
 type = "${transport_type}"
 
 [server.transport.noise]
+
+[server.transport.websocket]
+tls = ${websocket_tls}
 
 [server.services.bitcoin_rpc]
 bind_addr = "0.0.0.0:${rpc_bind_port}"
@@ -46,6 +50,7 @@ EOF
 echo "Starting rathole broker"
 echo "  control port: ${control_port}"
 echo "  transport: ${transport_type}"
+echo "  websocket tls: ${websocket_tls}"
 echo "  bitcoin_rpc bind port: ${rpc_bind_port}"
 echo "  zmq_rawtx bind port: ${rawtx_bind_port}"
 echo "  zmq_sequence bind port: ${sequence_bind_port}"
