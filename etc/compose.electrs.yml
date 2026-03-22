@@ -69,6 +69,8 @@ configs:
       [client.transport]
       type = "${RATHOLE_TRANSPORT:-noise}"
 
+      [client.transport.noise]
+
       [client.services.bitcoin_rpc]
       local_addr = "bitcoin-core:8332"
       token = "${RATHOLE_BITCOIN_RPC_TOKEN:-}"

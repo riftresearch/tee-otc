@@ -28,6 +28,8 @@ bind_addr = "0.0.0.0:${control_port}"
 [server.transport]
 type = "${transport_type}"
 
+[server.transport.noise]
+
 [server.services.bitcoin_rpc]
 bind_addr = "0.0.0.0:${rpc_bind_port}"
 token = "${RATHOLE_BITCOIN_RPC_TOKEN}"
