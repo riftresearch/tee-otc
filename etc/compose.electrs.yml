@@ -71,6 +71,11 @@ configs:
       [client.transport]
       type = "${RATHOLE_TRANSPORT:-websocket}"
 
+      [client.transport.tcp]
+
+      [client.transport.tls]
+      trusted_root = "${RATHOLE_TLS_TRUSTED_ROOT:-/etc/ssl/certs/ca-certificates.crt}"
+
       [client.transport.noise]
 
       [client.transport.websocket]
@@ -227,11 +232,10 @@ services:
   rathole-client:
     profiles:
       - rathole
-    image: rapiz1/rathole:v0.5.0
+    build:
+      context: .
+      dockerfile: Dockerfile.rathole-client
     container_name: rathole-client
-    command:
-      - "--client"
-      - "/etc/rathole/client.toml"
     configs:
       - source: rathole-client-config
         target: /etc/rathole/client.toml

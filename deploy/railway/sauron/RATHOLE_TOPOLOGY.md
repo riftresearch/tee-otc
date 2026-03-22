@@ -141,6 +141,9 @@ remote_addr = "sauron-bitcoin-rathole-broker-production.up.railway.app:443"
 [client.transport]
 type = "websocket"
 
+[client.transport.tls]
+trusted_root = "/etc/ssl/certs/ca-certificates.crt"
+
 [client.transport.websocket]
 tls = true
 
