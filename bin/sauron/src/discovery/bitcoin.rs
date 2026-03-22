@@ -851,9 +851,9 @@ async fn handle_sequence_message(
     support: &BitcoinMempoolSupport,
 ) -> std::result::Result<(), String> {
     let frames = message.into_vec();
-    if frames.len() != 2 {
+    if !(2..=3).contains(&frames.len()) {
         return Err(format!(
-            "expected 2 sequence frames but received {}",
+            "expected 2 or 3 sequence frames but received {}",
             frames.len()
         ));
     }
@@ -893,6 +893,66 @@ async fn handle_sequence_message(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_support() -> BitcoinMempoolSupport {
+        let (detection_tx, detection_rx) = mpsc::unbounded_channel();
+        BitcoinMempoolSupport {
+            watches_by_script: RwLock::new(HashMap::new()),
+            detection_tx,
+            detection_rx: Mutex::new(detection_rx),
+            mempool_transactions: Mutex::new(HashMap::new()),
+            matched_txids: Mutex::new(HashSet::new()),
+            rawtx_message_sequence: Mutex::new(None),
+            mempool_sequence: Mutex::new(None),
+            snapshot_height: Mutex::new(None),
+            resync_requested: AtomicBool::new(false),
+        }
+    }
+
+    fn sequence_message(body: Vec<u8>, trailing_sequence: Option<[u8; 4]>) -> ZmqMessage {
+        let mut message = ZmqMessage::from("sequence");
+        message.push_back(body.into());
+        if let Some(counter) = trailing_sequence {
+            message.push_back(counter.to_vec().into());
+        }
+        message
+    }
+
+    fn mempool_add_body(sequence: u64) -> Vec<u8> {
+        let mut body = vec![0u8; 32];
+        body.push(b'A');
+        body.extend_from_slice(&sequence.to_le_bytes());
+        body
+    }
+
+    #[tokio::test]
+    async fn handle_sequence_message_accepts_two_frame_form() {
+        let support = test_support();
+        let message = sequence_message(mempool_add_body(42), None);
+
+        handle_sequence_message(message, &support)
+            .await
+            .expect("two-frame sequence message should parse");
+
+        assert_eq!(*support.mempool_sequence.lock().await, Some(42));
+    }
+
+    #[tokio::test]
+    async fn handle_sequence_message_accepts_three_frame_form() {
+        let support = test_support();
+        let message = sequence_message(mempool_add_body(43), Some(7u32.to_le_bytes()));
+
+        handle_sequence_message(message, &support)
+            .await
+            .expect("three-frame sequence message should parse");
+
+        assert_eq!(*support.mempool_sequence.lock().await, Some(43));
+    }
 }
 
 fn parse_u32_le(bytes: &[u8]) -> std::result::Result<u32, String> {

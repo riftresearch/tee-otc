@@ -19,6 +19,14 @@ rpc_bind_port="${RATHOLE_BITCOIN_RPC_BIND_PORT:-40031}"
 rawtx_bind_port="${RATHOLE_ZMQ_RAWTX_BIND_PORT:-40032}"
 sequence_bind_port="${RATHOLE_ZMQ_SEQUENCE_BIND_PORT:-40033}"
 websocket_tls="${RATHOLE_WEBSOCKET_TLS:-false}"
+private_bind_host="${RATHOLE_PRIVATE_BIND_HOST:-127.0.0.1}"
+
+start_ipv6_bridge() {
+  local port="$1"
+  socat \
+    "TCP6-LISTEN:${port},bind=[::],fork,reuseaddr,ipv6only=1" \
+    "TCP4:${private_bind_host}:${port}" &
+}
 
 mkdir -p /etc/rathole
 
@@ -35,15 +43,15 @@ type = "${transport_type}"
 tls = ${websocket_tls}
 
 [server.services.bitcoin_rpc]
-bind_addr = "0.0.0.0:${rpc_bind_port}"
+bind_addr = "${private_bind_host}:${rpc_bind_port}"
 token = "${RATHOLE_BITCOIN_RPC_TOKEN}"
 
 [server.services.zmq_rawtx]
-bind_addr = "0.0.0.0:${rawtx_bind_port}"
+bind_addr = "${private_bind_host}:${rawtx_bind_port}"
 token = "${RATHOLE_ZMQ_RAWTX_TOKEN}"
 
 [server.services.zmq_sequence]
-bind_addr = "0.0.0.0:${sequence_bind_port}"
+bind_addr = "${private_bind_host}:${sequence_bind_port}"
 token = "${RATHOLE_ZMQ_SEQUENCE_TOKEN}"
 EOF
 
@@ -51,8 +59,13 @@ echo "Starting rathole broker"
 echo "  control port: ${control_port}"
 echo "  transport: ${transport_type}"
 echo "  websocket tls: ${websocket_tls}"
+echo "  private bind host: ${private_bind_host}"
 echo "  bitcoin_rpc bind port: ${rpc_bind_port}"
 echo "  zmq_rawtx bind port: ${rawtx_bind_port}"
 echo "  zmq_sequence bind port: ${sequence_bind_port}"
+
+start_ipv6_bridge "${rpc_bind_port}"
+start_ipv6_bridge "${rawtx_bind_port}"
+start_ipv6_bridge "${sequence_bind_port}"
 
 exec /usr/local/bin/rathole --server /etc/rathole/server.toml
