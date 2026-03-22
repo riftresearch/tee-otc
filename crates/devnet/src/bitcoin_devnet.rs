@@ -32,6 +32,8 @@ pub struct BitcoinDevnet {
     pub cookie: PathBuf,
     pub datadir: PathBuf,
     pub rpc_url_with_cookie: String,
+    pub zmq_rawtx_endpoint: String,
+    pub zmq_sequence_endpoint: String,
     pub electrsd: Option<Arc<ElectrsD>>,
     pub esplora_client: Option<Arc<EsploraClient>>,
     pub esplora_url: Option<String>,
@@ -66,6 +68,17 @@ impl BitcoinDevnet {
         conf.args.push("-txindex");
         conf.wallet = None;
         conf.view_stdout = false;
+
+        let zmq_rawtx_port = reserve_local_port()?;
+        let zmq_sequence_port = reserve_local_port()?;
+        let zmq_rawtx_endpoint = format!("tcp://127.0.0.1:{zmq_rawtx_port}");
+        let zmq_sequence_endpoint = format!("tcp://127.0.0.1:{zmq_sequence_port}");
+        conf.args.push(Box::leak(
+            format!("-zmqpubrawtx={zmq_rawtx_endpoint}").into_boxed_str(),
+        ));
+        conf.args.push(Box::leak(
+            format!("-zmqpubsequence={zmq_sequence_endpoint}").into_boxed_str(),
+        ));
 
         if fixed_esplora_url {
             conf.bind = Some(SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 50100_u16));
@@ -306,6 +319,8 @@ impl BitcoinDevnet {
             miner_address: alice_address,
             cookie,
             rpc_url_with_cookie: rpc_url_with_cookie.clone(),
+            zmq_rawtx_endpoint,
+            zmq_sequence_endpoint,
             funded_sats,
             datadir,
             electrsd,
@@ -518,4 +533,15 @@ impl BitcoinDevnet {
 
         Err(crate::DevnetError::EsploraSyncTimeout { timeout })
     }
+}
+
+fn reserve_local_port() -> Result<u16> {
+    let listener = std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
+        .map_err(|error| eyre::eyre!("Failed to reserve local port for Bitcoin ZMQ: {}", error))?;
+    let port = listener
+        .local_addr()
+        .map_err(|error| eyre::eyre!("Failed to read reserved Bitcoin ZMQ port: {}", error))?
+        .port();
+    drop(listener);
+    Ok(port)
 }

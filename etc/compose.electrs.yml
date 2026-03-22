@@ -54,6 +54,32 @@ configs:
 
       echo "Starting Bitcoin Core with arguments: $*"
       exec bitcoind "$@"
+  rathole-client-config:
+    content: |
+      # Optional client config for brokering Bitcoin RPC + ZMQ into Railway.
+      # Enable with: docker compose --profile rathole up -d
+      # Required env vars when the profile is enabled:
+      #   RATHOLE_REMOTE_ADDR
+      #   RATHOLE_BITCOIN_RPC_TOKEN
+      #   RATHOLE_ZMQ_RAWTX_TOKEN
+      #   RATHOLE_ZMQ_SEQUENCE_TOKEN
+      [client]
+      remote_addr = "${RATHOLE_REMOTE_ADDR:-}"
+
+      [client.transport]
+      type = "${RATHOLE_TRANSPORT:-noise}"
+
+      [client.services.bitcoin_rpc]
+      local_addr = "bitcoin-core:8332"
+      token = "${RATHOLE_BITCOIN_RPC_TOKEN:-}"
+
+      [client.services.zmq_rawtx]
+      local_addr = "bitcoin-core:28333"
+      token = "${RATHOLE_ZMQ_RAWTX_TOKEN:-}"
+
+      [client.services.zmq_sequence]
+      local_addr = "bitcoin-core:28334"
+      token = "${RATHOLE_ZMQ_SEQUENCE_TOKEN:-}"
 
 services:
   bitcoin-core:
@@ -76,7 +102,7 @@ services:
           && tar -xzf bitcoin.tar.gz --strip-components=1 \
           && install -m 0755 -o root -g root -t /usr/local/bin bin/* \
           && rm -rf /opt/bitcoin
-        EXPOSE 8332 8333 28332 28333
+        EXPOSE 8332 8333 28332 28333 28334
         VOLUME ["/home/bitcoin/.bitcoin"]
         USER bitcoin
         WORKDIR /home/bitcoin
@@ -98,6 +124,7 @@ services:
       - "-fallbackfee=0.0002"
       - "-zmqpubrawblock=tcp://0.0.0.0:28332"
       - "-zmqpubrawtx=tcp://0.0.0.0:28333"
+      - "-zmqpubsequence=tcp://0.0.0.0:28334"
     volumes:
       - bitcoind_data:/home/bitcoin/.bitcoin    # stored on NVMe via named volumes (as configured on your host)
     configs:
@@ -119,6 +146,7 @@ services:
     expose:
       - "28332"   # ZMQ to electrs only (internal network)
       - "28333"
+      - "28334"
     networks:
       - bitcoin-network
     platform: linux/amd64
@@ -185,6 +213,25 @@ services:
         hard: 1048576
     sysctls:
       net.core.somaxconn: "4096"
+    networks:
+      - bitcoin-network
+    platform: linux/amd64
+
+  rathole-client:
+    profiles:
+      - rathole
+    image: rapiz1/rathole:v0.5.0
+    container_name: rathole-client
+    command:
+      - "--client"
+      - "/etc/rathole/client.toml"
+    configs:
+      - source: rathole-client-config
+        target: /etc/rathole/client.toml
+    depends_on:
+      bitcoin-core:
+        condition: service_healthy
+    restart: unless-stopped
     networks:
       - bitcoin-network
     platform: linux/amd64

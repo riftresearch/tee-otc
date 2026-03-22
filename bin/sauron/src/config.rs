@@ -1,3 +1,6 @@
+use std::{fs, path::PathBuf};
+
+use bitcoincore_rpc_async::Auth;
 use clap::Parser;
 
 #[derive(Parser, Debug, Clone)]
@@ -39,6 +42,22 @@ pub struct SauronArgs {
     /// Electrum HTTP Server URL
     #[arg(long, env = "ELECTRUM_HTTP_SERVER_URL")]
     pub electrum_http_server_url: String,
+
+    /// Direct Bitcoin Core RPC URL used for tip, block, and mempool reconciliation
+    #[arg(long, env = "BITCOIN_RPC_URL")]
+    pub bitcoin_rpc_url: String,
+
+    /// Bitcoin Core RPC authentication
+    #[arg(long, env = "BITCOIN_RPC_AUTH", value_parser = parse_auth)]
+    pub bitcoin_rpc_auth: Auth,
+
+    /// Bitcoin Core ZMQ raw transaction endpoint
+    #[arg(long, env = "BITCOIN_ZMQ_RAWTX_ENDPOINT")]
+    pub bitcoin_zmq_rawtx_endpoint: String,
+
+    /// Bitcoin Core ZMQ mempool sequence endpoint
+    #[arg(long, env = "BITCOIN_ZMQ_SEQUENCE_ENDPOINT")]
+    pub bitcoin_zmq_sequence_endpoint: String,
 
     /// Ethereum Mainnet RPC URL
     #[arg(long, env = "EVM_RPC_URL")]
@@ -103,4 +122,17 @@ pub struct SauronArgs {
         default_value = "8"
     )]
     pub sauron_evm_indexed_lookup_concurrency: usize,
+}
+
+fn parse_auth(s: &str) -> Result<Auth, String> {
+    if s.eq_ignore_ascii_case("none") {
+        Ok(Auth::None)
+    } else if fs::exists(s).map_err(|error| error.to_string())? {
+        Ok(Auth::CookieFile(PathBuf::from(s)))
+    } else {
+        let mut split = s.splitn(2, ':');
+        let user = split.next().ok_or("Invalid auth string")?;
+        let password = split.next().ok_or("Invalid auth string")?;
+        Ok(Auth::UserPass(user.to_string(), password.to_string()))
+    }
 }

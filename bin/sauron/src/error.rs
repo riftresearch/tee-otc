@@ -39,6 +39,11 @@ pub enum Error {
     #[snafu(display("Bitcoin esplora request failed"))]
     BitcoinEsplora { source: esplora_client::Error },
 
+    #[snafu(display("Bitcoin RPC request failed"))]
+    BitcoinRpc {
+        source: bitcoincore_rpc_async::Error,
+    },
+
     #[snafu(display("EVM RPC request failed"))]
     EvmRpc {
         source: alloy::transports::RpcError<alloy::transports::TransportErrorKind>,

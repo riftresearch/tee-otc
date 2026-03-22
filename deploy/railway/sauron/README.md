@@ -3,6 +3,10 @@
 This directory contains the operator workflow for running `sauron` on Railway
 as a background worker deployed directly from the `tee-otc` GitHub repo.
 
+For the private Bitcoin connectivity plan that brokers `bitcoind` RPC and ZMQ
+into Railway through a `rathole` service, see `RATHOLE_TOPOLOGY.md` in this
+directory.
+
 ## Service Topology
 
 Provision or reuse these Railway services:
@@ -10,6 +14,7 @@ Provision or reuse these Railway services:
 1. `tee-otc-primary-tunnel`
 2. `tee-otc-replica-db`
 3. `sauron-worker`
+4. `sauron-bitcoin-rathole-broker` (when brokering private Bitcoin RPC + ZMQ)
 
 Responsibilities:
 
@@ -19,6 +24,9 @@ Responsibilities:
   Railway.
 - `sauron-worker` runs the `sauron` binary, watches the replica, ingests chain
   data, and submits candidate deposits back to OTC.
+- `sauron-bitcoin-rathole-broker` terminates the public `rathole` client
+  connection from the isolated Bitcoin host and re-exposes brokered Bitcoin
+  RPC + ZMQ ports over Railway private networking.
 
 If you already run `tee-otc-primary-tunnel` for analytics, reuse it. In the
 shared periphery checkout, the existing tunnel assets live at
@@ -46,6 +54,10 @@ Required runtime variables:
 - `OTC_DETECTOR_API_ID`
 - `OTC_DETECTOR_API_SECRET`
 - `ELECTRUM_HTTP_SERVER_URL`
+- `BITCOIN_RPC_URL`
+- `BITCOIN_RPC_AUTH`
+- `BITCOIN_ZMQ_RAWTX_ENDPOINT`
+- `BITCOIN_ZMQ_SEQUENCE_ENDPOINT`
 - `EVM_RPC_URL`
 - `ETHEREUM_TOKEN_INDEXER_URL`
 - `ETHEREUM_ALLOWED_TOKEN`
@@ -82,6 +94,52 @@ Operational notes:
   detector record compiled into `crates/otc-auth/src/api_keys.rs`. The
   `OTC_DETECTOR_API_ID` and `OTC_DETECTOR_API_SECRET` values on Railway must
   match the OTC image you deploy.
+- `sauron` now supports a mixed Bitcoin mode: Esplora remains the indexed
+  lookup and fallback path, while `BITCOIN_RPC_URL` lets block/tip reads prefer
+  Bitcoin Core and `BITCOIN_ZMQ_RAWTX_ENDPOINT` enables live mempool deposit
+  detection. When both RPC and ZMQ are configured, Sauron also keeps a local
+  in-process Bitcoin mempool mirror by ingesting `rawtx` updates and
+  refreshing from `getrawmempool` on tip changes. If you broker private Bitcoin
+  connectivity through `rathole`, wire all four Bitcoin vars to the
+  broker endpoints.
+- `BITCOIN_RPC_AUTH` is now mandatory. Use the literal value `none` if the
+  brokered RPC endpoint is unauthenticated or already embeds credentials in the
+  URL.
+
+## Deploy The Broker
+
+Create `sauron-bitcoin-rathole-broker` as a repo-backed Railway service
+connected to the same `tee-otc` GitHub repository.
+
+Set this required Railway service variable on the broker:
+
+- `RAILWAY_DOCKERFILE_PATH=etc/Dockerfile.rathole-broker`
+
+Required runtime variables:
+
+- `RATHOLE_BITCOIN_RPC_TOKEN`
+- `RATHOLE_ZMQ_RAWTX_TOKEN`
+- `RATHOLE_ZMQ_SEQUENCE_TOKEN`
+
+Recommended runtime variables:
+
+- `RUST_LOG=info`
+- `RATHOLE_TRANSPORT_TYPE=noise`
+- `RATHOLE_BITCOIN_RPC_BIND_PORT=40031`
+- `RATHOLE_ZMQ_RAWTX_BIND_PORT=40032`
+- `RATHOLE_ZMQ_SEQUENCE_BIND_PORT=40033`
+
+Operational notes:
+
+- Railway should expose exactly one public TCP proxy for the service control
+  port provided in `PORT`. The broker binds that automatically.
+- The broker also listens on the three internal-only bind ports above. Do not
+  create public proxies for those service ports.
+- Point the isolated Bitcoin host's `rathole client` at the broker's public TCP
+  proxy host and port.
+- Point `sauron-worker` at the broker's internal Railway hostname:
+  `rathole-broker.railway.internal` or the actual service DNS name Railway
+  assigns.
 
 ## Smoke Checks
 

@@ -576,12 +576,13 @@ fn build_sauron_test_args(
         otc_internal_base_url: format!("http://127.0.0.1:{otc_port}"),
         otc_detector_api_id: TEST_DETECTOR_API_ID.to_string(),
         otc_detector_api_secret: TEST_DETECTOR_API_SECRET.to_string(),
+        electrum_http_server_url: devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
         bitcoin_rpc_url: devnet.bitcoin.rpc_url_with_cookie.clone(),
         bitcoin_rpc_auth: Auth::CookieFile(devnet.bitcoin.cookie.clone()),
-        untrusted_esplora_http_server_url: devnet.bitcoin.esplora_url.as_ref().unwrap().to_string(),
-        bitcoin_network: bitcoin::Network::Regtest,
+        bitcoin_zmq_rawtx_endpoint: devnet.bitcoin.zmq_rawtx_endpoint.clone(),
+        bitcoin_zmq_sequence_endpoint: devnet.bitcoin.zmq_sequence_endpoint.clone(),
         ethereum_mainnet_rpc_url: devnet.ethereum.anvil.endpoint(),
-        untrusted_ethereum_mainnet_token_indexer_url: devnet
+        ethereum_token_indexer_url: devnet
             .ethereum
             .token_indexer
             .as_ref()
@@ -590,7 +591,7 @@ fn build_sauron_test_args(
             .clone(),
         ethereum_allowed_token: devnet.ethereum.cbbtc_contract.address().to_string(),
         base_rpc_url: devnet.base.anvil.endpoint(),
-        untrusted_base_token_indexer_url: devnet
+        base_token_indexer_url: devnet
             .base
             .token_indexer
             .as_ref()

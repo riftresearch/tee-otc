@@ -77,6 +77,10 @@ pub trait DiscoveryBackend: Send + Sync {
     fn poll_interval(&self) -> Duration;
     fn indexed_lookup_concurrency(&self) -> usize;
 
+    async fn sync_watches(&self, _watches: &[SharedWatchEntry]) -> Result<()> {
+        Ok(())
+    }
+
     async fn indexed_lookup(&self, watch: &WatchEntry) -> Result<Option<DetectedDeposit>>;
 
     async fn current_cursor(&self) -> Result<BlockCursor>;
@@ -129,6 +133,13 @@ async fn run_backend_loop(
         ticker.tick().await;
 
         let backend_watches = context.watches.snapshot_for_chain(backend.chain()).await;
+        if let Err(error) = backend.sync_watches(&backend_watches).await {
+            warn!(
+                backend = backend.name(),
+                %error,
+                "Failed to sync backend-local watch state; keeping previous snapshot"
+            );
+        }
         let backend_watch_map = backend_watches
             .iter()
             .map(|watch| (watch.swap_id, watch.clone()))

@@ -434,6 +434,89 @@ async fn sauron_detects_bitcoin_deposit_end_to_end(
 }
 
 #[sqlx::test]
+async fn sauron_detects_bitcoin_deposit_from_mempool_without_mining(
+    _: PoolOptions<sqlx::Postgres>,
+    connect_options: PgConnectOptions,
+) {
+    let mut fixture =
+        setup_external_detection_fixture(connect_options, true, ChainType::Ethereum).await;
+    let client = reqwest::Client::new();
+
+    let initial_height = fixture
+        .devnet
+        .bitcoin
+        .rpc_client
+        .get_block_count()
+        .await
+        .unwrap();
+
+    let swap = request_and_create_btc_to_eth_swap(
+        &client,
+        fixture.otc_port,
+        fixture.rfq_port,
+        &fixture.devnet,
+        &fixture.user_account,
+    )
+    .await;
+
+    let tx_hash = fixture
+        .user_bitcoin_wallet
+        .create_batch_payment(
+            vec![Payment {
+                lot: Lot {
+                    currency: swap.quote.from.currency.clone(),
+                    amount: swap.quote.min_input,
+                },
+                to_address: swap.deposit_vault_address.clone(),
+            }],
+            None,
+        )
+        .await
+        .unwrap();
+
+    let swap = wait_for_swap_statuses(
+        &client,
+        fixture.otc_port,
+        swap.id,
+        &[
+            "WaitingUserDepositConfirmed",
+            "WaitingMMDepositInitiated",
+            "WaitingMMDepositConfirmed",
+            "Settled",
+        ],
+    )
+    .await;
+
+    assert!(matches!(
+        swap.status,
+        SwapStatus::WaitingUserDepositConfirmed
+            | SwapStatus::WaitingMMDepositInitiated
+            | SwapStatus::WaitingMMDepositConfirmed
+            | SwapStatus::Settled
+    ));
+    let deposit_status = swap.user_deposit_status.as_ref().unwrap();
+    assert_eq!(deposit_status.tx_hash, tx_hash);
+    assert_eq!(
+        deposit_status.confirmations, 0,
+        "Sauron should detect the Bitcoin deposit from mempool before any new Bitcoin block is mined"
+    );
+
+    let final_height = fixture
+        .devnet
+        .bitcoin
+        .rpc_client
+        .get_block_count()
+        .await
+        .unwrap();
+    assert_eq!(
+        final_height, initial_height,
+        "the mempool detection test should not mine any additional Bitcoin blocks"
+    );
+
+    fixture.shutdown().await;
+}
+
+#[sqlx::test]
 async fn sauron_detects_ethereum_deposit_end_to_end(
     _: PoolOptions<sqlx::Postgres>,
     connect_options: PgConnectOptions,

@@ -1,0 +1,21 @@
+FROM debian:trixie
+
+ARG RATHOLE_VERSION=v0.5.0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    curl \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -fsSL "https://github.com/rathole-org/rathole/releases/download/${RATHOLE_VERSION}/rathole-x86_64-unknown-linux-gnu.zip" \
+      -o /tmp/rathole.zip \
+    && unzip /tmp/rathole.zip -d /usr/local/bin \
+    && chmod +x /usr/local/bin/rathole \
+    && rm -f /tmp/rathole.zip
+
+COPY deploy/railway/sauron/start-rathole-broker.sh /usr/local/bin/start-rathole-broker.sh
+RUN chmod +x /usr/local/bin/start-rathole-broker.sh
+
+ENTRYPOINT ["/usr/local/bin/start-rathole-broker.sh"]
