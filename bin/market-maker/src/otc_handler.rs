@@ -5,7 +5,10 @@ use crate::payment_manager::PaymentManager;
 use crate::websocket_client::MessageHandler;
 use async_trait::async_trait;
 use otc_protocols::mm::{MMRequest, MMResponse, NetworkBatch, ProtocolMessage};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use tracing::{error, info, warn};
 
 #[derive(Clone)]
@@ -16,6 +19,7 @@ pub struct OTCMessageHandler {
     payment_repository: Arc<PaymentRepository>,
     liquidity_lock_manager: Arc<LiquidityLockManager>,
     standing_requests: StandingRequestRegistry,
+    quoting_enabled: Arc<AtomicBool>,
 }
 
 impl OTCMessageHandler {
@@ -26,6 +30,7 @@ impl OTCMessageHandler {
         payment_repository: Arc<PaymentRepository>,
         liquidity_lock_manager: Arc<LiquidityLockManager>,
         standing_requests: StandingRequestRegistry,
+        quoting_enabled: Arc<AtomicBool>,
     ) -> Self {
         Self {
             quote_repository,
@@ -34,6 +39,7 @@ impl OTCMessageHandler {
             payment_repository,
             liquidity_lock_manager,
             standing_requests,
+            quoting_enabled,
         }
     }
 
@@ -198,7 +204,10 @@ impl OTCMessageHandler {
                 );
 
                 // Verify the quote exists in our database
-                let (accepted, rejection_reason) =
+                let (accepted, rejection_reason) = if !self.quoting_enabled.load(Ordering::Relaxed)
+                {
+                    (false, Some("quoting disabled".to_string()))
+                } else {
                     match self.quote_repository.get_quote(*quote_id).await {
                         Ok(quote) => {
                             let stored_hash = quote.hash();
@@ -237,7 +246,8 @@ impl OTCMessageHandler {
                             warn!("Failed to retrieve quote {} from database: {}", quote_id, e);
                             (false, Some("Quote not found in database".to_string()))
                         }
-                    };
+                    }
+                };
 
                 info!(
                     "Quote {} validation result: accepted={}, reason={:?}",
@@ -277,6 +287,7 @@ impl OTCMessageHandler {
                 match self.quote_repository.get_quote(*quote_id).await {
                     Ok(quote) => {
                         let locked = LockedLiquidity {
+                            quote_id: *quote_id,
                             from: quote.from.currency.clone(),
                             to: quote.to.currency.clone(),
                             amount: *deposit_amount,

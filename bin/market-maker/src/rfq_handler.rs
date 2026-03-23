@@ -1,6 +1,12 @@
 use async_trait::async_trait;
 use otc_protocols::rfq::{ProtocolMessage, RFQRequest, RFQResponse, RFQResult};
-use std::{sync::Arc, time::Instant};
+use std::{
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -16,6 +22,7 @@ pub struct RFQMessageHandler {
     wrapped_bitcoin_quoter: Arc<WrappedBitcoinQuoter>,
     quote_repository: Arc<QuoteRepository>,
     liquidity_cache: Arc<LiquidityCache>,
+    quoting_enabled: Arc<AtomicBool>,
 }
 
 impl RFQMessageHandler {
@@ -24,12 +31,14 @@ impl RFQMessageHandler {
         wrapped_bitcoin_quoter: Arc<WrappedBitcoinQuoter>,
         quote_repository: Arc<QuoteRepository>,
         liquidity_cache: Arc<LiquidityCache>,
+        quoting_enabled: Arc<AtomicBool>,
     ) -> Self {
         Self {
             market_maker_id,
             wrapped_bitcoin_quoter,
             quote_repository,
             liquidity_cache,
+            quoting_enabled,
         }
     }
 
@@ -45,6 +54,22 @@ impl RFQMessageHandler {
                 timestamp: _,
             } => {
                 let start = Instant::now();
+                if !self.quoting_enabled.load(Ordering::Relaxed) {
+                    record_quote_latency(&start, "error", "quoting_disabled");
+
+                    let response = RFQResponse::QuoteResponse {
+                        request_id: *request_id,
+                        quote: RFQResult::MakerUnavailable("quoting disabled".to_string()),
+                        timestamp: utc::now(),
+                    };
+
+                    return Some(ProtocolMessage {
+                        version: msg.version.clone(),
+                        sequence: msg.sequence,
+                        payload: response,
+                    });
+                }
+
                 debug!(
                     "Received RFQ quote request: request_id={}, from_chain={:?}, to_chain={:?}, mode={:?}",
                     request_id, request.from.chain, request.to.chain, request.mode

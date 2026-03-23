@@ -73,7 +73,17 @@ pub struct PaymentManager {
     base_tx: UnboundedSender<MarketMakerQueuedPayment>,
     /// Tracks swap_ids that are currently queued but not yet broadcast
     /// Prevents duplicate queueing during websocket reconnect replays
-    in_flight_payments: Arc<DashMap<Uuid, ()>>,
+    in_flight_payments: Arc<DashMap<Uuid, InFlightPaymentSnapshot>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct InFlightPaymentSnapshot {
+    pub swap_id: Uuid,
+    pub quote_id: Uuid,
+    pub chain: ChainType,
+    pub amount: U256,
+    pub queued_at: DateTime<Utc>,
+    pub user_deposit_confirmed_at: DateTime<Utc>,
 }
 
 impl PaymentManager {
@@ -225,7 +235,14 @@ impl PaymentManager {
             }
             Entry::Vacant(entry) => {
                 // Mark payment as in-flight by inserting into map
-                entry.insert(());
+                entry.insert(InFlightPaymentSnapshot {
+                    swap_id: *swap_id,
+                    quote_id: *quote_id,
+                    chain: expected_lot.currency.chain,
+                    amount: expected_lot.amount,
+                    queued_at: utc::now(),
+                    user_deposit_confirmed_at,
+                });
             }
         }
 
@@ -272,6 +289,21 @@ impl PaymentManager {
     pub fn payment_repository(&self) -> Arc<PaymentRepository> {
         self.payment_repository.clone()
     }
+
+    pub fn in_flight_payments(&self) -> Vec<InFlightPaymentSnapshot> {
+        let mut payments: Vec<_> = self
+            .in_flight_payments
+            .iter()
+            .map(|entry| entry.value().clone())
+            .collect();
+        payments.sort_by_key(|payment| payment.queued_at);
+        payments
+    }
+
+    #[cfg(test)]
+    pub fn insert_in_flight_payment_for_test(&self, payment: InFlightPaymentSnapshot) {
+        self.in_flight_payments.insert(payment.swap_id, payment);
+    }
 }
 
 /// Spawns a background task that periodically processes batched payments for a specific chain
@@ -283,7 +315,7 @@ fn spawn_batch_processor(
     config: BatchConfig,
     balance_strategy: Arc<QuoteBalanceStrategy>,
     otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
-    in_flight_payments: Arc<DashMap<Uuid, ()>>,
+    in_flight_payments: Arc<DashMap<Uuid, InFlightPaymentSnapshot>>,
     cancellation_token: CancellationToken,
     join_set: &mut JoinSet<crate::Result<()>>,
 ) {
@@ -311,10 +343,10 @@ fn spawn_batch_processor(
 
             let mut queued_payments: Vec<MarketMakerQueuedPayment> = Vec::new();
             let mut pending_payments: Vec<MarketMakerQueuedPayment> = Vec::new();
-            
+
             // First, collect retry payments from previous iteration
             pending_payments.append(&mut retry_payments);
-            
+
             // Then drain up to batch_size items from the channel
             while pending_payments.len() < config.batch_size {
                 match rx.try_recv() {
@@ -330,21 +362,24 @@ fn spawn_batch_processor(
             }
 
             // Get wallet balance for balance checking
-            let total_wallet_balance = wallet.balance(&pending_payments[0].lot.currency.token).await?.total_balance;
-            
+            let total_wallet_balance = wallet
+                .balance(&pending_payments[0].lot.currency.token)
+                .await?
+                .total_balance;
+
             // Process each payment, adding to batch if it fits within balance constraints
             let mut cumulative_amount = U256::ZERO;
             let mut processed_count = 0;
-            
+
             for payment in &pending_payments {
                 let new_amount = cumulative_amount + payment.lot.amount;
-                
+
                 // Check if adding this payment would exceed balance constraints
                 if balance_strategy.can_fill_quote(new_amount, total_wallet_balance) {
                     cumulative_amount = new_amount;
                     queued_payments.push(payment.clone());
                     processed_count += 1;
-                    
+
                     // Stop if we've reached batch size
                     if queued_payments.len() >= config.batch_size {
                         break;
@@ -355,7 +390,7 @@ fn spawn_batch_processor(
                     processed_count += 1;
                 }
             }
-            
+
             // Move any unprocessed payments back to retry queue
             if processed_count < pending_payments.len() {
                 retry_payments.extend(pending_payments.into_iter().skip(processed_count));
@@ -388,7 +423,7 @@ fn spawn_batch_processor(
                 "Processing batch for {:?}: {} payments, total_amount={}, wallet_balance={}",
                 chain_type, queued_payments.len(), total_batch_amount, total_wallet_balance
             );
-            if !retry_payments.is_empty() { 
+            if !retry_payments.is_empty() {
                 info!(
                     "Retrying {} payments for {:?} on next iteration...",
                     retry_payments.len(),
@@ -423,7 +458,7 @@ async fn process_batch(
     wallet: &Arc<dyn crate::wallet::Wallet>,
     payment_recorder: &Arc<dyn BatchPaymentRecorder>,
     otc_response_tx: &UnboundedSender<ProtocolMessage<MMResponse>>,
-    in_flight_payments: &Arc<DashMap<Uuid, ()>>,
+    in_flight_payments: &Arc<DashMap<Uuid, InFlightPaymentSnapshot>>,
     queued_payments: &[MarketMakerQueuedPayment],
 ) -> crate::Result<()> {
     // Split queued payments into eligible and ineligible (near refund window)
@@ -746,8 +781,28 @@ mod tests {
             protocol_fee: U256::from(300),
         };
 
-        in_flight.insert(eligible_swap, ());
-        in_flight.insert(ineligible_swap, ());
+        in_flight.insert(
+            eligible_swap,
+            InFlightPaymentSnapshot {
+                swap_id: eligible_swap,
+                quote_id: eligible_payment.quote_id,
+                chain: chain_type,
+                amount: eligible_payment.lot.amount,
+                queued_at: now,
+                user_deposit_confirmed_at: eligible_payment.user_deposit_confirmed_at.unwrap(),
+            },
+        );
+        in_flight.insert(
+            ineligible_swap,
+            InFlightPaymentSnapshot {
+                swap_id: ineligible_swap,
+                quote_id: ineligible_payment.quote_id,
+                chain: chain_type,
+                amount: ineligible_payment.lot.amount,
+                queued_at: now,
+                user_deposit_confirmed_at: ineligible_payment.user_deposit_confirmed_at.unwrap(),
+            },
+        );
 
         tx.send(eligible_payment).unwrap();
         tx.send(ineligible_payment).unwrap();

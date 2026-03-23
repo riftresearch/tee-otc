@@ -19,6 +19,17 @@ const CLEANUP_INTERVAL: StdDuration = StdDuration::from_secs(60);
 /// Represents locked liquidity for a specific swap
 #[derive(Debug, Clone)]
 pub struct LockedLiquidity {
+    pub quote_id: Uuid,
+    pub from: Currency,
+    pub to: Currency,
+    pub amount: U256,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+pub struct LockedLiquiditySnapshot {
+    pub swap_id: Uuid,
+    pub quote_id: Uuid,
     pub from: Currency,
     pub to: Currency,
     pub amount: U256,
@@ -190,6 +201,23 @@ impl LiquidityLockManager {
         sums.get(&pair_key).copied().unwrap_or(U256::ZERO)
     }
 
+    pub async fn snapshot_locks(&self) -> Vec<LockedLiquiditySnapshot> {
+        let locks = self.locks.read().await;
+        let mut snapshots: Vec<_> = locks
+            .iter()
+            .map(|(swap_id, locked)| LockedLiquiditySnapshot {
+                swap_id: *swap_id,
+                quote_id: locked.quote_id,
+                from: locked.from.clone(),
+                to: locked.to.clone(),
+                amount: locked.amount,
+                created_at: locked.created_at,
+            })
+            .collect();
+        snapshots.sort_by_key(|lock| lock.created_at);
+        snapshots
+    }
+
     /// Check if a swap has locked liquidity
     #[allow(dead_code)]
     pub async fn has_lock(&self, swap_id: &Uuid) -> bool {
@@ -290,6 +318,7 @@ mod tests {
         let amount = U256::from(1000u64);
 
         let locked = LockedLiquidity {
+            quote_id: Uuid::now_v7(),
             from: from.clone(),
             to: to.clone(),
             amount,
@@ -324,6 +353,7 @@ mod tests {
         for i in 0..5 {
             let swap_id = Uuid::now_v7();
             let locked = LockedLiquidity {
+                quote_id: Uuid::now_v7(),
                 from: from.clone(),
                 to: to.clone(),
                 amount: U256::from(100u64 * (i + 1)),
@@ -341,6 +371,7 @@ mod tests {
     async fn test_different_trading_pairs() {
         let manager = LiquidityLockManager::with_ttl(DEFAULT_LOCK_TTL);
         let btc_to_eth = LockedLiquidity {
+            quote_id: Uuid::now_v7(),
             from: create_test_currency(ChainType::Bitcoin, TokenIdentifier::Native),
             to: create_test_currency(ChainType::Ethereum, TokenIdentifier::Native),
             amount: U256::from(1000u64),
@@ -348,6 +379,7 @@ mod tests {
         };
 
         let eth_to_btc = LockedLiquidity {
+            quote_id: Uuid::now_v7(),
             from: create_test_currency(ChainType::Ethereum, TokenIdentifier::Native),
             to: create_test_currency(ChainType::Bitcoin, TokenIdentifier::Native),
             amount: U256::from(2000u64),
@@ -378,6 +410,7 @@ mod tests {
 
         // Create lock with old timestamp
         let old_lock = LockedLiquidity {
+            quote_id: Uuid::now_v7(),
             from: from.clone(),
             to: to.clone(),
             amount: U256::from(1000u64),
@@ -417,6 +450,7 @@ mod tests {
         let amount = U256::from(1000u64);
 
         let locked = LockedLiquidity {
+            quote_id: Uuid::now_v7(),
             from: from.clone(),
             to: to_checksummed.clone(),
             amount,

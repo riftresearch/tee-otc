@@ -20,9 +20,16 @@ use blockchain_utils::shutdown_signal;
 pub use wallet::WalletError;
 pub use wallet::WalletResult;
 
-use std::{net::SocketAddr, sync::Arc, sync::OnceLock, time::Duration};
+use std::{
+    net::SocketAddr,
+    sync::{atomic::AtomicBool, Arc, OnceLock},
+    time::Duration,
+};
 
-use alloy::{providers::Provider, signers::local::PrivateKeySigner};
+use alloy::{
+    providers::{Provider, WalletProvider},
+    signers::local::PrivateKeySigner,
+};
 use bdk_wallet::bitcoin;
 use blockchain_utils::{create_websocket_wallet_provider, handle_background_thread_result};
 use clap::Parser;
@@ -490,6 +497,12 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     // Validate that the RPC URL is for the correct chain
     validate_chain_id(&provider, args.evm_chain).await?;
 
+    info!(
+        chain = ?args.evm_chain,
+        address = %provider.default_signer_address(),
+        "EVM wallet initialized"
+    );
+
     let evm_wallet = Arc::new(EVMWallet::new(
         provider.clone(),
         args.evm_rpc_ws_url.clone(),
@@ -506,18 +519,6 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         )
         .await
         .expect("Should have been able to ensure EIP-7702 delegation");
-
-    // Setup admin API server if address is provided
-    if let Some(addr) = args.admin_api_listen_addr {
-        info!("Setting up admin API listener on {}", addr);
-        setup_admin_api(
-            &mut join_set,
-            addr,
-            deposit_repository.clone(),
-            bitcoin_wallet.clone(),
-            evm_wallet.clone(),
-        )?;
-    }
 
     let mut wallet_manager = WalletManager::new();
 
@@ -597,6 +598,25 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         cancellation_token.clone(),
         &mut payment_manager_join_set,
     ));
+    let quoting_enabled = Arc::new(AtomicBool::new(true));
+
+    // Setup admin API server if address is provided
+    if let Some(addr) = args.admin_api_listen_addr {
+        info!("Setting up admin API listener on {}", addr);
+        setup_admin_api(
+            &mut join_set,
+            addr,
+            deposit_repository.clone(),
+            payment_repository.clone(),
+            payment_manager.clone(),
+            liquidity_lock_manager.clone(),
+            wallet_manager.clone(),
+            quoting_enabled.clone(),
+            args.evm_chain,
+            args.bitcoin_max_deposits_per_lot,
+            args.ethereum_max_deposits_per_lot,
+        )?;
+    }
 
     // Set up OTC WebSocket client
     let standing_requests = fee_settlement::StandingRequestRegistry::new();
@@ -607,6 +627,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         payment_repository.clone(),
         liquidity_lock_manager.clone(),
         standing_requests.clone(),
+        quoting_enabled.clone(),
     );
     let otc_ws_client = websocket_client::WebSocketClient::new(
         args.otc_ws_url.clone(),
@@ -661,6 +682,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         wrapped_bitcoin_quoter.clone(),
         quote_repository,
         liquidity_cache,
+        quoting_enabled,
     );
     let rfq_ws_client = websocket_client::WebSocketClient::new(
         args.rfq_ws_url,
@@ -818,13 +840,25 @@ fn setup_admin_api(
     join_set: &mut JoinSet<Result<()>>,
     addr: SocketAddr,
     deposit_repository: Arc<crate::db::DepositRepository>,
-    bitcoin_wallet: Arc<BitcoinWallet>,
-    evm_wallet: Arc<EVMWallet>,
+    payment_repository: Arc<crate::db::PaymentRepository>,
+    payment_manager: Arc<PaymentManager>,
+    liquidity_lock_manager: Arc<liquidity_lock::LiquidityLockManager>,
+    wallet_manager: Arc<WalletManager>,
+    quoting_enabled: Arc<AtomicBool>,
+    evm_chain: ChainType,
+    bitcoin_max_deposits_per_iteration: usize,
+    evm_max_deposits_per_iteration: usize,
 ) -> Result<()> {
     let state = admin_api::AdminApiState {
         deposit_repository,
-        bitcoin_wallet,
-        evm_wallet,
+        payment_repository,
+        payment_manager,
+        liquidity_lock_manager,
+        wallet_manager,
+        quoting_enabled,
+        evm_chain,
+        bitcoin_max_deposits_per_iteration,
+        evm_max_deposits_per_iteration,
     };
 
     let app = admin_api::create_admin_router(state);
