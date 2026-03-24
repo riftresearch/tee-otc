@@ -229,7 +229,7 @@ async fn run_backend_loop(
             Err(error) => {
                 warn!(
                     backend = backend.name(),
-                    %error,
+                    error = %error,
                     "Block scan failed; keeping existing cursor"
                 );
                 histogram!(

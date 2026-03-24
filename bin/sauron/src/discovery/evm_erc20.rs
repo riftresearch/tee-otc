@@ -27,6 +27,7 @@ sol! {
 }
 
 const EVM_REORG_RESCAN_DEPTH: u64 = 32;
+const EVM_MAX_LOG_SCAN_BLOCK_SPAN: u64 = 128;
 
 pub struct EvmErc20DiscoveryBackend {
     name: &'static str,
@@ -355,12 +356,33 @@ impl DiscoveryBackend for EvmErc20DiscoveryBackend {
             }
         }
 
+        let scan_from_height = from_exclusive.height.saturating_add(1);
+        let scan_to_height = next_scan_to_height(from_exclusive.height, current_height);
+        let scan_to_hash = if scan_to_height == current_height {
+            current_hash.clone()
+        } else {
+            self.block_hash_at(scan_to_height).await?.ok_or_else(|| {
+                crate::error::Error::ChainInit {
+                    chain: self.chain_type.to_db_string().to_string(),
+                    message: format!(
+                        "missing block hash while advancing discovery cursor at height {scan_to_height}"
+                    ),
+                }
+            })?
+        };
+
         let filter = Filter::new()
             .address(self.allowed_token)
             .event_signature(self.transfer_signature)
-            .from_block(from_exclusive.height + 1)
-            .to_block(current_height);
-        let logs = self.provider.get_logs(&filter).await.context(EvmRpcSnafu)?;
+            .from_block(scan_from_height)
+            .to_block(scan_to_height);
+        let logs = self.provider.get_logs(&filter).await.map_err(|source| {
+            crate::error::Error::EvmLogScan {
+                from_height: scan_from_height,
+                to_height: scan_to_height,
+                source,
+            }
+        })?;
 
         let mut detections = Vec::new();
         for log in logs {
@@ -403,12 +425,16 @@ impl DiscoveryBackend for EvmErc20DiscoveryBackend {
 
         Ok(BlockScan {
             new_cursor: BlockCursor {
-                height: current_height,
-                hash: current_hash,
+                height: scan_to_height,
+                hash: scan_to_hash,
             },
             detections,
         })
     }
+}
+
+fn next_scan_to_height(from_exclusive_height: u64, current_height: u64) -> u64 {
+    current_height.min(from_exclusive_height.saturating_add(EVM_MAX_LOG_SCAN_BLOCK_SPAN))
 }
 
 fn extract_transfer_index(
@@ -427,4 +453,22 @@ fn extract_transfer_index(
         }
         decoded.log_index
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{next_scan_to_height, EVM_MAX_LOG_SCAN_BLOCK_SPAN};
+
+    #[test]
+    fn caps_scan_window_to_max_span() {
+        assert_eq!(
+            next_scan_to_height(10, 10 + EVM_MAX_LOG_SCAN_BLOCK_SPAN + 500),
+            10 + EVM_MAX_LOG_SCAN_BLOCK_SPAN
+        );
+    }
+
+    #[test]
+    fn uses_tip_when_backlog_fits_in_one_window() {
+        assert_eq!(next_scan_to_height(10, 42), 42);
+    }
 }

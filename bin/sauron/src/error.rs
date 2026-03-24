@@ -44,8 +44,17 @@ pub enum Error {
         source: bitcoincore_rpc_async::Error,
     },
 
-    #[snafu(display("EVM RPC request failed"))]
+    #[snafu(display("EVM RPC request failed: {source}"))]
     EvmRpc {
+        source: alloy::transports::RpcError<alloy::transports::TransportErrorKind>,
+    },
+
+    #[snafu(display(
+        "EVM log scan request failed for blocks {from_height}..={to_height}: {source}"
+    ))]
+    EvmLogScan {
+        from_height: u64,
+        to_height: u64,
         source: alloy::transports::RpcError<alloy::transports::TransportErrorKind>,
     },
 
