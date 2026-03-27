@@ -33,6 +33,7 @@ target/
 !.env.test
 .env.otc
 .env.mm
+etc/compose.electrs.rathole.env
 !bin/otc-server/.env
 
 # Temporary files
