@@ -167,11 +167,17 @@ Esplora path. The Railway-side environment should look like:
 
 ```env
 BITCOIN_RPC_URL=http://rathole-broker.railway.internal:40031
-BITCOIN_RPC_AUTH=user:pass-or-none
+BITCOIN_RPC_AUTH=user:pass
 BITCOIN_ZMQ_RAWTX_ENDPOINT=tcp://rathole-broker.railway.internal:40032
 BITCOIN_ZMQ_SEQUENCE_ENDPOINT=tcp://rathole-broker.railway.internal:40033
 ELECTRUM_HTTP_SERVER_URL=https://your-esplora-http-endpoint
 ```
+
+Use fixed credentials here. Do not point Railway at a rotating bitcoind `.cookie`
+value across the rathole tunnel; host restarts will invalidate it. On the
+Bitcoin host, prefer `rpcauth` generated from Bitcoin Core's
+`share/rpcauth/rpcauth.py`, while Railway keeps the plain client-side
+`user:pass` in `BITCOIN_RPC_AUTH`.
 
 Behavior in this mixed mode:
 

@@ -127,6 +127,8 @@ services:
     command:
       - "-server=1"
       - "-txindex=1"
+      # Use stable rpcauth credentials so Railway consumers do not break when bitcoind rotates .cookie on restart.
+      - "-rpcauth=${BITCOIN_RPC_AUTH_SERVER:?set BITCOIN_RPC_AUTH_SERVER}"
       - "-rpcthreads=64"
       - "-rpcworkqueue=256"
       - "-dbcache=24576"

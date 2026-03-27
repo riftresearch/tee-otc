@@ -101,7 +101,9 @@ Operational notes:
   in-process Bitcoin mempool mirror by ingesting `rawtx` updates and
   refreshing from `getrawmempool` on tip changes. If you broker private Bitcoin
   connectivity through `rathole`, wire all four Bitcoin vars to the
-  broker endpoints.
+  broker endpoints and use fixed Bitcoin RPC credentials rather than a rotating
+  `.cookie` value. Prefer server-side `rpcauth` on the Bitcoin host and keep
+  the client-side `user:pass` in Railway.
 - `BITCOIN_RPC_AUTH` is now mandatory. Use the literal value `none` if the
   brokered RPC endpoint is unauthenticated or already embeds credentials in the
   URL.
