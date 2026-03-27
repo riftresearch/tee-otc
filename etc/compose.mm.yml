@@ -58,6 +58,13 @@ services:
       timeout: 5s
       retries: 5
     shm_size: 1g
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWSLOGS_REGION:-us-west-1}
+        awslogs-group: /rift/prod/mm-postgres
+        awslogs-stream: ${AWSLOGS_HOST_ID:?set AWSLOGS_HOST_ID}-mm-postgres
+        awslogs-create-group: "true"
     networks:
       - mm-network
 
@@ -110,6 +117,13 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - market_maker_bitcoin_wallet_db_data:/app/bitcoin-wallet-db
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWSLOGS_REGION:-us-west-1}
+        awslogs-group: /rift/prod/market-maker
+        awslogs-stream: ${AWSLOGS_HOST_ID:?set AWSLOGS_HOST_ID}-market-maker
+        awslogs-create-group: "true"
 
   mm-node-exporter:
     image: prom/node-exporter:v1.8.2
@@ -126,6 +140,13 @@ services:
       - /proc:/host/proc:ro
       - /sys:/host/sys:ro
       - /var/lib/docker/:/var/lib/docker:ro
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWSLOGS_REGION:-us-west-1}
+        awslogs-group: /rift/prod/mm-node-exporter
+        awslogs-stream: ${AWSLOGS_HOST_ID:?set AWSLOGS_HOST_ID}-mm-node-exporter
+        awslogs-create-group: "true"
     networks:
       - mm-network
 
@@ -145,6 +166,13 @@ services:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.path=/prometheus"
       - "--web.enable-lifecycle"
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWSLOGS_REGION:-us-west-1}
+        awslogs-group: /rift/prod/mm-prometheus
+        awslogs-stream: ${AWSLOGS_HOST_ID:?set AWSLOGS_HOST_ID}-mm-prometheus
+        awslogs-create-group: "true"
     networks:
       - mm-network
 
@@ -161,6 +189,13 @@ services:
         target: /etc/loki/local-config.yaml
     command:
       - "-config.file=/etc/loki/local-config.yaml"
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWSLOGS_REGION:-us-west-1}
+        awslogs-group: /rift/prod/mm-loki
+        awslogs-stream: ${AWSLOGS_HOST_ID:?set AWSLOGS_HOST_ID}-mm-loki
+        awslogs-create-group: "true"
     networks:
       - mm-network
 
@@ -182,6 +217,13 @@ services:
         target: /etc/grafana/provisioning/dashboards/provider.yml
       - source: grafana-node-dashboard-mm
         target: /etc/grafana/provisioning/dashboards/mm-system-metrics.json
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWSLOGS_REGION:-us-west-1}
+        awslogs-group: /rift/prod/mm-grafana
+        awslogs-stream: ${AWSLOGS_HOST_ID:?set AWSLOGS_HOST_ID}-mm-grafana
+        awslogs-create-group: "true"
     networks:
       - mm-network
 

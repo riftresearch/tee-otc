@@ -159,6 +159,13 @@ services:
       - "28332"   # ZMQ to electrs only (internal network)
       - "28333"
       - "28334"
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWSLOGS_REGION:-us-west-1}
+        awslogs-group: /rift/prod/bitcoin-core
+        awslogs-stream: ${AWSLOGS_HOST_ID:?set AWSLOGS_HOST_ID}-bitcoin-core
+        awslogs-create-group: "true"
     networks:
       - bitcoin-network
     platform: linux/amd64
@@ -225,6 +232,13 @@ services:
         hard: 1048576
     sysctls:
       net.core.somaxconn: "4096"
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWSLOGS_REGION:-us-west-1}
+        awslogs-group: /rift/prod/electrs
+        awslogs-stream: ${AWSLOGS_HOST_ID:?set AWSLOGS_HOST_ID}-electrs
+        awslogs-create-group: "true"
     networks:
       - bitcoin-network
     platform: linux/amd64
@@ -243,6 +257,13 @@ services:
       bitcoin-core:
         condition: service_healthy
     restart: unless-stopped
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWSLOGS_REGION:-us-west-1}
+        awslogs-group: /rift/prod/rathole-client
+        awslogs-stream: ${AWSLOGS_HOST_ID:?set AWSLOGS_HOST_ID}-rathole-client
+        awslogs-create-group: "true"
     networks:
       - bitcoin-network
     platform: linux/amd64
