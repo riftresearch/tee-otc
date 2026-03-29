@@ -112,12 +112,23 @@ impl BitcoinTransactionBroadcaster {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ForeignUtxo {
     pub outpoint: bdk_esplora::esplora_client::OutPoint,
     pub psbt_input: bdk_wallet::bitcoin::psbt::Input,
     pub satisfaction_weight: bdk_wallet::bitcoin::Weight,
     pub foreign_descriptor: String,
+}
+
+impl std::fmt::Debug for ForeignUtxo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ForeignUtxo")
+            .field("outpoint", &self.outpoint)
+            .field("satisfaction_weight", &self.satisfaction_weight)
+            .field("psbt_input", &"<redacted>")
+            .field("foreign_descriptor", &"<redacted>")
+            .finish()
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -136,10 +147,14 @@ async fn process_transaction(
     let start_time = Instant::now();
 
     let is_consolidation_tx = if payments.len() > 1 {
-        info!("Processing batch bitcoin payments to {:?}", payments);
+        info!("Processing batch bitcoin payments: count={}", payments.len());
         false
     } else if payments.len() == 1 {
-        info!("Processing bitcoin payment to {:?}", payments[0]);
+        info!(
+            to_address = %payments[0].to_address,
+            amount = %payments[0].lot.amount,
+            "Processing bitcoin payment"
+        );
         false
     } else {
         info!("Processing a consolidation transaction");
@@ -251,8 +266,8 @@ async fn process_transaction(
     let mut fully_finalized = finalized;
     for foreign_utxo in &foreign_utxos {
         info!(
-            "Signing transaction with foreign descriptor: {:?}",
-            foreign_utxo.foreign_descriptor
+            outpoint = %foreign_utxo.outpoint,
+            "Signing transaction with foreign UTXO"
         );
         let temp_wallet = Wallet::create_with_params(CreateParams::new_single(
             foreign_utxo.foreign_descriptor.clone(),
