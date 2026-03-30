@@ -89,8 +89,8 @@ The first answers "where is this swap in its lifecycle?"
 
 The second answers:
 
-- what liquidity is free
-- what liquidity is reserved
+- what inventory is currently available
+- what inventory is already committed
 - which swaps can be filled now
 - which swaps are blocked
 - what rebalances should happen
@@ -147,7 +147,7 @@ failure/refund path.
 Quote-time reservation before the user deposit confirms is explicitly out of
 scope for v1. In v1:
 
-- quoting reads planner-derived free capacity
+- quoting reads planner-derived available inventory
 - quoting does not itself create durable reservations
 
 This keeps the first version smaller while still giving deterministic behavior
@@ -191,6 +191,29 @@ This document avoids assuming that inbound swap proceeds are automatically
 controlled at the same moment the obligation is created. If inbound funds become
 usable only later, that transition must be represented explicitly as an event.
 
+### Current Reference Model
+
+The current executable reference model uses five MM-local state variables:
+
+- `obligations`
+- `available_inventory`
+- `outbound_batches`
+- `pending_settlements`
+- `rebalances`
+
+Their intended lifecycle is:
+
+1. An `open` obligation is committed into an `outbound_batch`, consuming
+   `available_inventory`.
+2. If the outbound batch succeeds, that obligation leaves the payout path and
+   becomes a `pending_settlement`.
+3. When the inbound settlement is realized, the corresponding asset is credited
+   back into `available_inventory`.
+
+This is intentionally smaller than the broader bucket taxonomy discussed below.
+The bucket taxonomy still describes possible future refinement, but the current
+model state should be understood in terms of the five variables above.
+
 ## Planner State
 
 The planner state has four parts:
@@ -202,7 +225,19 @@ The planner state has four parts:
 
 ### 1. Inventory Buckets
 
-For each asset, the planner tracks:
+In the current reference model, for each asset the planner explicitly tracks:
+
+- `available_inventory`
+
+The current reference model does not separately store bucketized reservations.
+Instead, inventory already committed to payout or rebalance actions is made
+explicit through:
+
+- `outbound_batches`
+- `pending_settlements`
+- `rebalances`
+
+A possible future refinement is to split that further into buckets such as:
 
 - `controlled_free`
 - `reserved_for_fill`
@@ -215,8 +250,8 @@ Optional future buckets:
 - `held_for_open_swaps`
 - `expected_inbound_not_yet_controlled`
 
-For v1, only buckets needed for confirmed obligations and rebalances are
-required.
+For v1, the smaller `available_inventory` plus explicit action records is the
+working abstraction.
 
 ### 2. Obligations
 
@@ -225,20 +260,23 @@ Each obligation record contains:
 - `swap_id`
 - `payout_asset`
 - `payout_amount`
-- `inbound_asset`
-- `inbound_amount`
+- `settlement_asset`
+- `settlement_amount`
 - `confirmed_at`
 - `status`
 - `blocked_reason`
 
 Required statuses:
 
-- `blocked`
-- `ready`
-- `committed_for_fill`
-- `fill_in_flight`
+- `open`
+- `outbound`
+- `pending_settlement`
 - `completed`
-- `failed`
+
+An `open` obligation may also be dropped before it is committed into an
+`outbound_batch` if MM policy decides it is no longer fillable. Once an
+obligation is in an `outbound_batch`, it is immutable from the planner's point
+of view.
 
 ### 3. Actions
 
@@ -253,7 +291,7 @@ Each planner action contains:
 
 Action types:
 
-- `FillBatch`
+- `OutboundBatch`
 - `Rebalance`
 
 Action statuses:

@@ -9,6 +9,7 @@ mod liquidity_cache;
 mod liquidity_lock;
 mod otc_handler;
 pub mod payment_manager;
+pub mod planner;
 pub mod price_oracle;
 mod rebalancer;
 mod rfq_handler;

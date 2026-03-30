@@ -128,3 +128,26 @@ replica +args:
 # Run clippy
 clippy:
     cargo clippy --fix --allow-dirty --allow-staged
+
+# Run the market-maker TLA+ model checker
+mm-tla config="MMPlanner.cfg":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ROOT="{{justfile_directory()}}"
+    TLA_JAR="${ROOT}/.cache/tla2tools.jar"
+    CONFIG="{{config}}"
+
+    # Allow both `just mm-tla MMPlanner.cfg` and
+    # `just mm-tla config=MMPlanner.cfg`.
+    CONFIG="${CONFIG#config=}"
+
+    mkdir -p "${ROOT}/.cache"
+
+    if [[ ! -f "${TLA_JAR}" ]]; then
+        echo "Downloading tla2tools.jar..."
+        curl -L --fail -o "${TLA_JAR}" \
+            https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
+    fi
+
+    cd "${ROOT}/bin/market-maker/spec"
+    java -cp "${TLA_JAR}" tlc2.TLC MMPlanner.tla -config "${CONFIG}"
