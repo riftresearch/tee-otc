@@ -3,6 +3,8 @@ dc_files := "COMPOSE_BAKE=true docker compose -f etc/compose.devnet.yml -f etc/c
 
 dc_mm_files := "COMPOSE_BAKE=true docker compose --env-file .env.mm -f etc/compose.mm.yml"
 
+dc_electrs_files := "COMPOSE_BAKE=true docker compose --env-file .env.electrs -f etc/compose.electrs.yml"
+
 dc_replica_files := "COMPOSE_BAKE=true docker compose --env-file .env.replica -f etc/compose.replica.yml"
 
 # Docker compose for test database
@@ -120,6 +122,10 @@ mm +args:
         fi
     fi
     {{dc_mm_files}} {{args}}
+
+# Docker compose prefix command for electrs with all config files - passes through any arguments
+electrs +args:
+    {{dc_electrs_files}} {{args}}
 
 # Docker compose prefix command for read replica
 replica +args:

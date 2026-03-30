@@ -65,7 +65,7 @@ impl From<Whatever> for Error {
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 pub type BackgroundTaskResult = std::result::Result<(), String>;
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Clone)]
 #[command(name = "otc-server")]
 #[command(about = "TEE-OTC server for cross-chain swaps")]
 pub struct OtcServerArgs {

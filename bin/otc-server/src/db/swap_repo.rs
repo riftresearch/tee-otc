@@ -23,7 +23,7 @@ pub const SWAP_VOLUME_TOTAL_METRIC: &str = "otc_swap_volume_total";
 pub const SWAP_FEES_TOTAL_METRIC: &str = "otc_swap_fees_total";
 const ACTIVE_SWAP_MAX_AGE: chrono::Duration = chrono::Duration::days(365);
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct PendingMMDepositSwap {
     pub swap_id: Uuid,
     pub quote_id: Uuid,
@@ -34,7 +34,7 @@ pub struct PendingMMDepositSwap {
     pub user_deposit_confirmed_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SettledSwapNotification {
     pub swap_id: Uuid,
     pub deposit_vault_salt: [u8; 32],
@@ -44,7 +44,7 @@ pub struct SettledSwapNotification {
     pub swap_settlement_timestamp: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ForceSwapNotification {
     pub swap_id: Uuid,
     pub market_maker_id: Uuid,

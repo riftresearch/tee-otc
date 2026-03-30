@@ -22,7 +22,7 @@ use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
 use otc_models::{ChainType, Currency, Lot, TokenIdentifier};
 use snafu::location;
 use tokio::task::JoinSet;
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::{
     db::{Deposit, DepositRepository, DepositStore, FillStatus},
@@ -221,7 +221,10 @@ impl Wallet for EVMWallet {
         // now make sure all payments lots currencies are the same
         for payment in &payments {
             if payment.lot.currency != first_payment.lot.currency {
-                tracing::error!("Payment set has different currencies: {:?}", payments);
+                tracing::error!(
+                    "Payment set has different currencies; refusing batch of {} payment(s)",
+                    payments.len()
+                );
                 return Err(WalletError::InvalidBatchPaymentRequest { loc: location!() });
             }
         }
@@ -651,8 +654,6 @@ pub fn build_transaction_with_validation(
     executions: Vec<Execution>,
     mm_payment_validation: Option<&MarketMakerPaymentVerification>,
 ) -> Result<TransactionRequest, WalletError> {
-    debug!("executions: {executions:?}");
-
     let delegator_contract = EIP7702DelegatorInstance::new(
         Address::from_str(EIP7702_DELEGATOR_CROSSCHAIN_ADDRESS).unwrap(),
         provider,
@@ -782,9 +783,9 @@ impl DepositToAuthorizedERC20Transfer for Deposit {
         provider: &DynProvider,
         recipient: &Address,
     ) -> Result<Execution, WalletError> {
-        let lot_signer = PrivateKeySigner::from_str(&self.private_key).map_err(|e| {
+        let lot_signer = PrivateKeySigner::from_str(&self.private_key).map_err(|_| {
             WalletError::InvalidDescriptor {
-                reason: e.to_string(),
+                reason: "invalid deposit signing key".to_string(),
                 loc: location!(),
             }
         })?;

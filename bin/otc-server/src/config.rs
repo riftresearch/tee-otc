@@ -23,10 +23,9 @@ pub enum SettingsError {
 
 type Result<T> = std::result::Result<T, SettingsError>;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct MasterKey([u8; 64]);
 
-#[derive(Debug)]
 pub struct Settings {
     pub master_key: SecretBox<MasterKey>,
 }

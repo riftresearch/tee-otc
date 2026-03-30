@@ -653,8 +653,6 @@ async fn handle_socket(mut socket: WebSocket) {
         if let Ok(msg) = msg {
             match msg {
                 axum::extract::ws::Message::Text(text) => {
-                    info!("Received: {}", text);
-
                     if socket
                         .send(axum::extract::ws::Message::Text(format!("Echo: {text}")))
                         .await

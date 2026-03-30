@@ -266,7 +266,11 @@ impl BitcoinWallet {
         let tx = match tx {
             Some(tx) => tx,
             None => {
-                warn!("Transaction not found for deposit: {:?}", deposit);
+                warn!(
+                    funding_tx_hash = %deposit.funding_tx_hash,
+                    amount = %deposit.holdings.amount,
+                    "Transaction not found for deposit"
+                );
                 return Ok(Vec::new());
             }
         };
@@ -282,8 +286,8 @@ impl BitcoinWallet {
         // Parse the descriptor with secret keys using BDK's parse_descriptor
         let (public_desc, _key_map) =
             descriptor::Descriptor::<DescriptorPublicKey>::parse_descriptor(&secp, &descriptor_str)
-                .map_err(|e| WalletError::InvalidDescriptor {
-                    reason: format!("Failed to parse descriptor with secret keys: {e}"),
+                .map_err(|_| WalletError::InvalidDescriptor {
+                    reason: "failed to parse deposit descriptor".to_string(),
                     loc: location!(),
                 })?;
 
@@ -291,16 +295,16 @@ impl BitcoinWallet {
         let derived_desc =
             public_desc
                 .at_derivation_index(0)
-                .map_err(|e| WalletError::InvalidDescriptor {
-                    reason: format!("Failed to derive descriptor at index 0: {e}"),
+                .map_err(|_| WalletError::InvalidDescriptor {
+                    reason: "failed to derive deposit descriptor".to_string(),
                     loc: location!(),
                 })?;
 
         let deposit_address =
             derived_desc
                 .address(network)
-                .map_err(|e| WalletError::InvalidDescriptor {
-                    reason: format!("Failed to get address from descriptor: {e}"),
+                .map_err(|_| WalletError::InvalidDescriptor {
+                    reason: "failed to derive address from deposit descriptor".to_string(),
                     loc: location!(),
                 })?;
 
@@ -527,7 +531,12 @@ impl WalletTrait for BitcoinWallet {
 
         let batch_id = alloy::hex::encode(rand::thread_rng().gen::<[u8; 8]>());
         for payment in &payments {
-            println!("[{}] queuing payment: {:?}", batch_id, payment);
+            info!(
+                batch_id = %batch_id,
+                to_address = %payment.to_address,
+                amount = %payment.lot.amount,
+                "Queueing bitcoin payment"
+            );
         }
 
         let mut foreign_utxos = Vec::new();
@@ -555,7 +564,7 @@ impl WalletTrait for BitcoinWallet {
                         }
                     }
                     FillStatus::Empty => {
-                        println!("FillStatus::Empty");
+                        info!("No matching deposit UTXOs found for payment");
                         // No foreign utxos to add
                     }
                 }
@@ -563,8 +572,8 @@ impl WalletTrait for BitcoinWallet {
         }
 
         info!(
-            "Broadcasting bitcoin tx w/ foreign_utxos: {:?}",
-            foreign_utxos
+            "Broadcasting bitcoin tx with {} foreign UTXO(s)",
+            foreign_utxos.len()
         );
 
         // Send transaction request to the broadcaster

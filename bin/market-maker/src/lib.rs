@@ -182,7 +182,7 @@ pub enum FeeSettlementRail {
     Bitcoin,
 }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Parser, Clone)]
 #[command(name = "market-maker")]
 #[command(about = "Market Maker client for TEE-OTC")]
 pub struct MarketMakerArgs {

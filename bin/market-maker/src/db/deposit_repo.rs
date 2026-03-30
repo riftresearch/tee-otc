@@ -6,7 +6,7 @@ use sqlx::{postgres::PgRow, PgPool, Row};
 use tracing::info;
 use uuid::Uuid;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Deposit {
     pub private_key: String,
     pub holdings: Lot,
@@ -129,6 +129,16 @@ impl Deposit {
     }
     pub fn private_key(&self) -> &str {
         &self.private_key
+    }
+}
+
+impl std::fmt::Debug for Deposit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Deposit")
+            .field("private_key", &"<redacted>")
+            .field("holdings", &self.holdings)
+            .field("funding_tx_hash", &self.funding_tx_hash)
+            .finish()
     }
 }
 
@@ -318,7 +328,11 @@ impl DepositStore for DepositRepository {
             });
         }
 
-        info!("Collected Deposits to fill {lot:?}: {deposits:?}");
+        info!(
+            "Collected {} deposit(s) to fill lot {:?}",
+            deposits.len(),
+            lot
+        );
         if sum >= lot.amount {
             Ok(FillStatus::Full(deposits))
         } else {
