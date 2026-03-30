@@ -42,7 +42,7 @@ struct Cli {
 enum Command {
     /// Export one monthly revenue CSV row.
     Monthly {
-        /// Month to export in YYYY-MM format.
+        /// Month to export in MM-YYYY format.
         #[arg(long)]
         month: String,
 
@@ -56,11 +56,11 @@ enum Command {
     },
     /// Export one CSV row per month for an inclusive month range.
     Range {
-        /// Start month in YYYY-MM format.
+        /// Start month in MM-YYYY format.
         #[arg(long)]
         from_month: String,
 
-        /// End month in YYYY-MM format.
+        /// End month in MM-YYYY format.
         #[arg(long)]
         to_month: String,
 
@@ -97,19 +97,15 @@ enum SourceSchema {
 #[derive(Debug)]
 struct MonthlySummary {
     month: String,
-    timezone: String,
-    settled_swap_count: usize,
     btc_fee_sats: i64,
     cbbtc_fee_sats: i64,
     usd_total_cents_at_swap_time: i64,
 }
 
 impl MonthlySummary {
-    fn new(month: String, timezone: String) -> Self {
+    fn new(month: String) -> Self {
         Self {
             month,
-            timezone,
-            settled_swap_count: 0,
             btc_fee_sats: 0,
             cbbtc_fee_sats: 0,
             usd_total_cents_at_swap_time: 0,
@@ -119,7 +115,7 @@ impl MonthlySummary {
     fn write_csv_header<W: Write>(mut writer: W) -> Result<()> {
         writeln!(
             writer,
-            "month,timezone,settled_swap_count,btc_fee_sats,btc_fee_btc,cbbtc_fee_sats,cbbtc_fee_cbbtc,usd_total_at_swap_time"
+            "month,btc_fee,cbbtc_fee,usd_fee_aggregate"
         )
         .context("failed to write CSV header")?;
         Ok(())
@@ -128,13 +124,9 @@ impl MonthlySummary {
     fn write_csv_row<W: Write>(&self, mut writer: W) -> Result<()> {
         writeln!(
             writer,
-            "{},{},{},{},{},{},{},{}",
+            "{},{},{},{}",
             self.month,
-            self.timezone,
-            self.settled_swap_count,
-            self.btc_fee_sats,
             sats_to_btc_string(self.btc_fee_sats),
-            self.cbbtc_fee_sats,
             sats_to_btc_string(self.cbbtc_fee_sats),
             cents_to_usd_string(self.usd_total_cents_at_swap_time),
         )
@@ -252,10 +244,7 @@ async fn export_month_range(
 
     let mut summaries = BTreeMap::new();
     for month_label in month_labels {
-        summaries.insert(
-            month_label.clone(),
-            MonthlySummary::new(month_label, timezone.to_string()),
-        );
+        summaries.insert(month_label.clone(), MonthlySummary::new(month_label));
     }
 
     let mut swaps =
@@ -300,7 +289,6 @@ async fn export_month_range(
             .with_context(|| format!("missing exact BTC/USD candle for {}", swap.confirmed_at))?;
         let fee_usd_cents = sats_and_price_to_cents(swap.protocol_fee_sats, price)?;
 
-        summary.settled_swap_count += 1;
         summary.usd_total_cents_at_swap_time += fee_usd_cents;
 
         match swap.fee_asset {
@@ -682,8 +670,8 @@ fn month_range_utc(
 }
 
 fn parse_year_month(input: &str) -> Result<(i32, u32)> {
-    let date = NaiveDate::parse_from_str(&format!("{input}-01"), "%Y-%m-%d")
-        .with_context(|| format!("invalid month format, expected YYYY-MM: {input}"))?;
+    let date = NaiveDate::parse_from_str(&format!("01-{input}"), "%d-%m-%Y")
+        .with_context(|| format!("invalid month format, expected MM-YYYY: {input}"))?;
     Ok((date.year(), date.month()))
 }
 
@@ -706,7 +694,7 @@ fn month_labels_inclusive(
     let mut month = start_month;
 
     loop {
-        labels.push(format!("{year:04}-{month:02}"));
+        labels.push(format!("{month:02}-{year:04}"));
         if (year, month) == (end_year, end_month) {
             break;
         }
@@ -718,7 +706,7 @@ fn month_labels_inclusive(
 
 fn month_label_for_timestamp(timestamp: DateTime<Utc>, tz: Tz) -> String {
     let local = timestamp.with_timezone(&tz);
-    format!("{:04}-{:02}", local.year(), local.month())
+    format!("{:02}-{:04}", local.month(), local.year())
 }
 
 fn write_summaries(summaries: &[MonthlySummary], output: Option<PathBuf>) -> Result<()> {
@@ -788,5 +776,11 @@ mod tests {
 
         let deduped = dedupe_swaps(vec![swap.clone(), swap]).expect("dedupe should succeed");
         assert_eq!(deduped.len(), 1);
+    }
+
+    #[test]
+    fn parses_month_year_input_format() {
+        let (year, month) = parse_year_month("11-2025").expect("parse should succeed");
+        assert_eq!((year, month), (2025, 11));
     }
 }
