@@ -19,13 +19,15 @@ rpc_bind_port="${RATHOLE_BITCOIN_RPC_BIND_PORT:-40031}"
 rawtx_bind_port="${RATHOLE_ZMQ_RAWTX_BIND_PORT:-40032}"
 sequence_bind_port="${RATHOLE_ZMQ_SEQUENCE_BIND_PORT:-40033}"
 websocket_tls="${RATHOLE_WEBSOCKET_TLS:-false}"
-private_bind_host="${RATHOLE_PRIVATE_BIND_HOST:-127.0.0.1}"
+private_bind_host="${RATHOLE_PRIVATE_BIND_HOST:-0.0.0.0}"
+# Keep the IPv6 bridge pointed at loopback even when rathole binds 0.0.0.0.
+bridge_target_host="127.0.0.1"
 
 start_ipv6_bridge() {
   local port="$1"
   socat \
     "TCP6-LISTEN:${port},bind=[::],fork,reuseaddr,ipv6only=1" \
-    "TCP4:${private_bind_host}:${port}" &
+    "TCP4:${bridge_target_host}:${port}" &
 }
 
 mkdir -p /etc/rathole
@@ -60,6 +62,7 @@ echo "  control port: ${control_port}"
 echo "  transport: ${transport_type}"
 echo "  websocket tls: ${websocket_tls}"
 echo "  private bind host: ${private_bind_host}"
+echo "  bridge target host: ${bridge_target_host}"
 echo "  bitcoin_rpc bind port: ${rpc_bind_port}"
 echo "  zmq_rawtx bind port: ${rawtx_bind_port}"
 echo "  zmq_sequence bind port: ${sequence_bind_port}"
