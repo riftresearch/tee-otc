@@ -23,8 +23,8 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         .unwrap()
         .0;
 
-    // Don't fund the market maker - we want to test that it correctly rejects quotes
-    // when it has insufficient balance
+    // Leave the MM with no BTC but fund cbBTC. For BTC->cbBTC quoting, the first-cut
+    // capacity model should gate on the boot-time route cap derived from payout-side cbBTC.
     println!("Market maker starting with 0 BTC balance");
 
     let mut join_set = JoinSet::new();
@@ -84,7 +84,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
     // Wait for market maker to connect to RFQ server
     wait_for_market_maker_to_connect_to_rfq_server(rfq_port).await;
 
-    // Test: Request for any amount when MM has no balance - should fail
+    // Test: Request for an amount well above the boot-time route capacity - should fail
     let test_amount = U256::from(1_000_000_000); // 10 BTC in sats
 
     // Send a quote request (that will fail)
@@ -142,7 +142,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         "Should contact 1 market maker"
     );
 
-    // Verify the quote is MakerUnavailable due to insufficient balance
+    // Verify the quote is MakerUnavailable because it exceeds the route capacity
     let quote = &quote_response.quote;
     println!("Quote response for 0.1 BTC with 0 balance: {quote:?}");
 
@@ -150,13 +150,13 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
     match quote.as_ref().unwrap() {
         RFQResult::MakerUnavailable(reason) => {
             assert!(
-                reason.contains("Insufficient") || reason.contains("liquidity"),
-                "Should indicate insufficient balance/liquidity, got: {reason}"
+                reason.contains("route capacity") || reason.contains("max is"),
+                "Should indicate route capacity exceeded, got: {reason}"
             );
-            println!("✓ Correctly rejected quote due to insufficient balance/liquidity");
+            println!("✓ Correctly rejected quote due to route capacity");
         }
         RFQResult::Success(_) => {
-            panic!("Quote should not succeed when market maker has insufficient balance");
+            panic!("Quote should not succeed when it exceeds route capacity");
         }
         RFQResult::InvalidRequest(reason) => {
             panic!("Quote should not be invalid request, got: {reason}");
@@ -203,7 +203,7 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         .await
         .expect("Should be able to parse quote response");
 
-    // Verify the quote fails because it exceeds max_input
+    // Verify the quote fails because it exceeds the route-capacity-derived max_input
     let quote = &quote_response.quote;
     println!("Quote response for {test_amount} sats with 1 BTC balance: {quote:?}");
 
@@ -214,8 +214,8 @@ async fn test_rfq_flow(_: PoolOptions<sqlx::Postgres>, connect_options: PgConnec
         }
         RFQResult::MakerUnavailable(reason) => {
             assert!(
-                reason.contains("Insufficient") || reason.contains("liquidity"),
-                "Should indicate insufficient balance/liquidity, got: {reason}"
+                reason.contains("route capacity") || reason.contains("max is"),
+                "Should indicate route capacity exceeded, got: {reason}"
             );
             println!("✓ Correctly rejected quote that exceeds max_input");
         }

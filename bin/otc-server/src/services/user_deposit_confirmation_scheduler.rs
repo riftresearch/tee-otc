@@ -469,6 +469,14 @@ impl UserDepositConfirmationScheduler {
         swap: &Swap,
         user_deposit_confirmed_at: chrono::DateTime<chrono::Utc>,
     ) -> SchedulerResult<()> {
+        let user_deposit =
+            swap.user_deposit_status
+                .as_ref()
+                .ok_or_else(|| SchedulerError::InvalidState {
+                    swap_id: swap.id,
+                    reason: "missing user deposit status".to_string(),
+                    loc: location!(),
+                })?;
         let realized = swap
             .realized
             .as_ref()
@@ -482,6 +490,10 @@ impl UserDepositConfirmationScheduler {
             currency: swap.quote.to.currency.clone(),
             amount: realized.mm_output,
         };
+        let settlement_lot = Lot {
+            currency: swap.quote.from.currency.clone(),
+            amount: user_deposit.amount,
+        };
 
         self.mm_registry
             .notify_user_deposit_confirmed(
@@ -491,6 +503,7 @@ impl UserDepositConfirmationScheduler {
                 &swap.user_destination_address,
                 swap.mm_nonce,
                 &expected_lot,
+                &settlement_lot,
                 realized.protocol_fee,
                 user_deposit_confirmed_at,
             )

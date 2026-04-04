@@ -14,6 +14,12 @@ pub struct Deposit {
 }
 
 #[derive(Debug, Clone)]
+pub struct AssociatedSwapDeposit {
+    pub associated_swap_id: Uuid,
+    pub holdings: Lot,
+}
+
+#[derive(Debug, Clone)]
 pub enum FillStatus {
     Full(Vec<Deposit>),
     Partial(Vec<Deposit>),
@@ -108,6 +114,46 @@ impl DepositRepository {
             token: token_id,
             decimals: decimals as u8,
         }
+    }
+
+    pub async fn list_deposits_by_swap_ids(
+        &self,
+        swap_ids: &[Uuid],
+    ) -> DepositRepositoryResult<Vec<AssociatedSwapDeposit>> {
+        if swap_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let rows = sqlx::query(
+            r#"
+            SELECT associated_swap_id, chain, token, decimals, amount::TEXT
+            FROM mm_deposits
+            WHERE associated_swap_id = ANY($1)
+            ORDER BY created_at ASC, private_key ASC
+            "#,
+        )
+        .bind(swap_ids)
+        .fetch_all(&self.pool)
+        .await
+        .context(DatabaseSnafu)?;
+
+        let mut deposits = Vec::with_capacity(rows.len());
+        for row in rows {
+            let chain: String = row.get("chain");
+            let token: serde_json::Value = row.get("token");
+            let decimals: i16 = row.get("decimals");
+            let amount_str: String = row.get("amount");
+            let amount = U256::from_str_radix(&amount_str, 10)
+                .map_err(|_| DepositRepositoryError::InvalidU256 { value: amount_str })?;
+            let currency = Self::deserialize_currency(&chain, &token, decimals);
+
+            deposits.push(AssociatedSwapDeposit {
+                associated_swap_id: row.get("associated_swap_id"),
+                holdings: Lot { currency, amount },
+            });
+        }
+
+        Ok(deposits)
     }
 }
 

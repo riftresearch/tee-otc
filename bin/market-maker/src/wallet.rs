@@ -8,6 +8,7 @@ use snafu::{Location, Snafu};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::oneshot;
 
+use crate::bitcoin_wallet::transaction_broadcaster::ForeignUtxo;
 use crate::bitcoin_wallet::BitcoinWalletError;
 
 #[derive(Debug, Snafu)]
@@ -132,6 +133,57 @@ pub enum WalletError {
 pub type WalletResult<T, E = WalletError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone)]
+pub enum PreparedBatchPayment {
+    Bitcoin {
+        txid: String,
+        txdata: Vec<u8>,
+        foreign_utxos: Vec<ForeignUtxo>,
+        absolute_fee: u64,
+        reserved_deposit_keys: Vec<String>,
+    },
+    Evm {
+        txid: String,
+        txdata: Vec<u8>,
+        reserved_deposit_keys: Vec<String>,
+    },
+}
+
+impl PreparedBatchPayment {
+    pub fn txid(&self) -> &str {
+        match self {
+            Self::Bitcoin { txid, .. } | Self::Evm { txid, .. } => txid,
+        }
+    }
+
+    pub fn txdata(&self) -> &[u8] {
+        match self {
+            Self::Bitcoin { txdata, .. } | Self::Evm { txdata, .. } => txdata,
+        }
+    }
+
+    pub fn absolute_fee(&self) -> u64 {
+        match self {
+            Self::Bitcoin { absolute_fee, .. } => *absolute_fee,
+            Self::Evm { .. } => 0,
+        }
+    }
+
+    pub fn bitcoin_foreign_utxos(&self) -> Option<Vec<ForeignUtxo>> {
+        match self {
+            Self::Bitcoin { foreign_utxos, .. } => Some(foreign_utxos.clone()),
+            Self::Evm { .. } => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionState {
+    Missing,
+    Pending,
+    Confirmed(u64),
+}
+
+#[derive(Debug, Clone)]
 pub struct WalletBalance {
     // total balance of the wallet, native_balance + deposit_key_balance
     pub total_balance: U256,
@@ -150,13 +202,42 @@ pub struct ConsolidationSummary {
 
 #[async_trait]
 pub trait Wallet: Send + Sync {
+    async fn prepare_batch_payment(
+        &self,
+        payments: Vec<Payment>,
+        mm_payment_validation: Option<MarketMakerPaymentVerification>,
+    ) -> WalletResult<PreparedBatchPayment>;
+
+    async fn broadcast_prepared_batch(
+        &self,
+        prepared_batch: &PreparedBatchPayment,
+    ) -> WalletResult<String>;
+
+    async fn discard_prepared_batch(
+        &self,
+        _prepared_batch: &PreparedBatchPayment,
+    ) -> WalletResult<()> {
+        Ok(())
+    }
+
     /// Creates a transaction to send funds to the specified addresses
     /// Optionally includes market maker payment validation (fee + embedded nonce)
     async fn create_batch_payment(
         &self,
         payments: Vec<Payment>,
         mm_payment_validation: Option<MarketMakerPaymentVerification>,
-    ) -> WalletResult<String>;
+    ) -> WalletResult<String> {
+        let prepared = self
+            .prepare_batch_payment(payments, mm_payment_validation)
+            .await?;
+        match self.broadcast_prepared_batch(&prepared).await {
+            Ok(txid) => Ok(txid),
+            Err(error) => {
+                let _ = self.discard_prepared_batch(&prepared).await;
+                Err(error)
+            }
+        }
+    }
 
     /// Waits until the given transaction reaches the specified number of confirmations.
     ///
@@ -203,6 +284,8 @@ pub trait Wallet: Send + Sync {
     /// Check the number of confirmations for a given transaction.
     /// Returns 0 if the transaction is not confirmed or not found.
     async fn check_tx_confirmations(&self, tx_hash: &str) -> WalletResult<u64>;
+
+    async fn lookup_transaction_state(&self, tx_hash: &str) -> WalletResult<TransactionState>;
 
     /// Get the chain type of the wallet
     fn chain_type(&self) -> ChainType;
@@ -266,10 +349,23 @@ mod tests {
 
     #[async_trait]
     impl Wallet for MockWallet {
-        async fn create_batch_payment(
+        async fn prepare_batch_payment(
             &self,
             _payments: Vec<Payment>,
             _mm_payment_validation: Option<MarketMakerPaymentVerification>,
+        ) -> WalletResult<PreparedBatchPayment> {
+            Ok(PreparedBatchPayment::Bitcoin {
+                txid: "mock_txid_123".to_string(),
+                txdata: vec![1, 2, 3],
+                foreign_utxos: Vec::new(),
+                absolute_fee: 0,
+                reserved_deposit_keys: Vec::new(),
+            })
+        }
+
+        async fn broadcast_prepared_batch(
+            &self,
+            _prepared_batch: &PreparedBatchPayment,
         ) -> WalletResult<String> {
             Ok("mock_txid_123".to_string())
         }
@@ -317,6 +413,10 @@ mod tests {
 
         async fn check_tx_confirmations(&self, _tx_hash: &str) -> WalletResult<u64> {
             Ok(6) // Mock: always 6 confirmations
+        }
+
+        async fn lookup_transaction_state(&self, _tx_hash: &str) -> WalletResult<TransactionState> {
+            Ok(TransactionState::Confirmed(6))
         }
     }
 

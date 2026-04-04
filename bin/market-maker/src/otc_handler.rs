@@ -1,7 +1,7 @@
 use crate::db::{Deposit, DepositRepository, DepositStore, PaymentRepository, QuoteRepository};
 use crate::fee_settlement::{FeeStandingStatus, StandingRequestRegistry};
 use crate::liquidity_lock::{LiquidityLockManager, LockedLiquidity};
-use crate::payment_manager::PaymentManager;
+use crate::planner::PlannerService;
 use crate::websocket_client::MessageHandler;
 use async_trait::async_trait;
 use otc_protocols::mm::{MMRequest, MMResponse, NetworkBatch, ProtocolMessage};
@@ -15,7 +15,7 @@ use tracing::{error, info, warn};
 pub struct OTCMessageHandler {
     quote_repository: Arc<QuoteRepository>,
     deposit_repository: Arc<DepositRepository>,
-    payment_manager: Arc<PaymentManager>,
+    planner_service: Arc<PlannerService>,
     payment_repository: Arc<PaymentRepository>,
     liquidity_lock_manager: Arc<LiquidityLockManager>,
     standing_requests: StandingRequestRegistry,
@@ -26,7 +26,7 @@ impl OTCMessageHandler {
     pub fn new(
         quote_repository: Arc<QuoteRepository>,
         deposit_repository: Arc<DepositRepository>,
-        payment_manager: Arc<PaymentManager>,
+        planner_service: Arc<PlannerService>,
         payment_repository: Arc<PaymentRepository>,
         liquidity_lock_manager: Arc<LiquidityLockManager>,
         standing_requests: StandingRequestRegistry,
@@ -35,7 +35,7 @@ impl OTCMessageHandler {
         Self {
             quote_repository,
             deposit_repository,
-            payment_manager,
+            planner_service,
             payment_repository,
             liquidity_lock_manager,
             standing_requests,
@@ -160,6 +160,46 @@ impl OTCMessageHandler {
                 }
 
                 None
+            }
+            MMRequest::ActiveObligationsSnapshot {
+                request_id,
+                obligations,
+                ..
+            } => {
+                info!(
+                    obligation_count = obligations.len(),
+                    "Received authoritative active-obligation snapshot from OTC"
+                );
+
+                match self
+                    .planner_service
+                    .sync_from_authoritative_snapshot(
+                        obligations.clone(),
+                        self.deposit_repository.as_ref(),
+                    )
+                    .await
+                {
+                    Ok(()) => None,
+                    Err(error) => {
+                        error!(
+                            error = %error,
+                            obligation_count = obligations.len(),
+                            "Failed to apply authoritative active-obligation snapshot"
+                        );
+                        Some(ProtocolMessage {
+                            version: msg.version.clone(),
+                            sequence: msg.sequence + 1,
+                            payload: MMResponse::Error {
+                                request_id: *request_id,
+                                error_code: otc_protocols::mm::MMErrorCode::InternalError,
+                                message: format!(
+                                    "Failed to apply authoritative active-obligation snapshot: {error}"
+                                ),
+                                timestamp: utc::now(),
+                            },
+                        })
+                    }
+                }
             }
             MMRequest::LatestDepositVaultTimestamp { request_id, .. } => {
                 info!("Received latest deposit vault timestamp request",);
@@ -321,43 +361,71 @@ impl OTCMessageHandler {
                 user_destination_address,
                 mm_nonce,
                 expected_lot,
+                settlement_lot,
                 protocol_fee,
                 user_deposit_confirmed_at,
                 ..
             } => {
                 info!(
-                    message = "Making payment",
+                    message = "Registering confirmed planner obligation",
                     swap_id = swap_id.to_string(),
                     quote_id = quote_id.to_string(),
                 );
 
-                let response = self
-                    .payment_manager
-                    .queue_payment(
-                        request_id,
-                        swap_id,
-                        quote_id,
-                        user_destination_address,
+                let locked_liquidity = self.liquidity_lock_manager.unlock(*swap_id).await;
+                let response = match self
+                    .planner_service
+                    .register_confirmed_obligation(
+                        *swap_id,
+                        *quote_id,
+                        user_destination_address.clone(),
+                        *mm_nonce,
+                        expected_lot.clone(),
+                        settlement_lot.clone(),
                         *user_deposit_confirmed_at,
-                        mm_nonce,
-                        expected_lot,
                         *protocol_fee,
+                        locked_liquidity.clone(),
                     )
-                    .await;
+                    .await
+                {
+                    Ok(()) => {
+                        if let Some(locked) = locked_liquidity {
+                            info!(
+                                message = "Unlocked liquidity for planner obligation",
+                                swap_id = %swap_id,
+                                amount = %locked.amount
+                            );
+                        }
 
-                // Unlock liquidity if payment was queued successfully
-                if matches!(response, MMResponse::PaymentQueued { .. }) {
-                    if let Some(locked) = self.liquidity_lock_manager.unlock(*swap_id).await {
-                        info!(
-                            message = "Unlocked liquidity for swap",
-                            swap_id = %swap_id,
-                            amount = %locked.amount
-                        );
+                        MMResponse::PaymentQueued {
+                            request_id: *request_id,
+                            swap_id: *swap_id,
+                            timestamp: utc::now(),
+                        }
                     }
-                }
+                    Err(error) => {
+                        if let Some(locked) = locked_liquidity {
+                            self.liquidity_lock_manager.lock(*swap_id, locked).await;
+                        }
+
+                        error!(
+                            message = "Planner failed to register confirmed obligation",
+                            swap_id = %swap_id,
+                            quote_id = %quote_id,
+                            error = %error
+                        );
+
+                        MMResponse::Error {
+                            request_id: *request_id,
+                            error_code: otc_protocols::mm::MMErrorCode::InternalError,
+                            message: format!("Failed to register planner obligation: {error}"),
+                            timestamp: utc::now(),
+                        }
+                    }
+                };
 
                 info!(
-                    message = "Payment manager response",
+                    message = "Planner response",
                     response = ?response,
                 );
 
@@ -378,13 +446,11 @@ impl OTCMessageHandler {
                 ..
             } => {
                 tracing::info!(
-                    message = "Swap complete, storing user deposit credentials",
+                    message = "Swap complete, storing settlement and notifying planner",
                     swap_id = %swap_id,
                     user_deposit_tx_hash = %user_deposit_tx_hash
                 );
-                // what's the easiest way to get the amount of btc in the user's deposit on either chain?
-
-                match self
+                let store_result = self
                     .deposit_repository
                     .store_deposit(
                         &Deposit {
@@ -395,22 +461,48 @@ impl OTCMessageHandler {
                         *swap_settlement_timestamp,
                         *swap_id,
                     )
-                    .await
-                {
-                    Ok(_) => {}
-                    Err(e) => {
-                        error!(
-                            message = format!("Failed to store deposit: {e}"),
-                            swap_id = %swap_id,
-                            user_deposit_tx_hash = %user_deposit_tx_hash
-                        );
-                    }
-                }
+                    .await;
 
-                let response = MMResponse::SwapCompleteAck {
-                    request_id: *request_id,
-                    swap_id: *swap_id,
-                    timestamp: utc::now(),
+                let response = match store_result {
+                    Ok(()) => match self
+                        .planner_service
+                        .record_swap_complete(*swap_id, lot)
+                        .await
+                    {
+                        Ok(()) => MMResponse::SwapCompleteAck {
+                            request_id: *request_id,
+                            swap_id: *swap_id,
+                            timestamp: utc::now(),
+                        },
+                        Err(error) => {
+                            error!(
+                                message = "Planner failed to record swap completion",
+                                swap_id = %swap_id,
+                                user_deposit_tx_hash = %user_deposit_tx_hash,
+                                error = %error
+                            );
+                            MMResponse::Error {
+                                request_id: *request_id,
+                                error_code: otc_protocols::mm::MMErrorCode::InternalError,
+                                message: format!("Failed to record planner settlement: {error}"),
+                                timestamp: utc::now(),
+                            }
+                        }
+                    },
+                    Err(error) => {
+                        error!(
+                            message = "Failed to store deposit",
+                            swap_id = %swap_id,
+                            user_deposit_tx_hash = %user_deposit_tx_hash,
+                            error = %error
+                        );
+                        MMResponse::Error {
+                            request_id: *request_id,
+                            error_code: otc_protocols::mm::MMErrorCode::InternalError,
+                            message: format!("Failed to store settlement deposit: {error}"),
+                            timestamp: utc::now(),
+                        }
+                    }
                 };
 
                 Some(ProtocolMessage {

@@ -157,3 +157,21 @@ mm-tla config="MMPlanner.cfg":
 
     cd "${ROOT}/bin/market-maker/spec"
     java -cp "${TLA_JAR}" tlc2.TLC MMPlanner.tla -config "${CONFIG}"
+
+# Run the market-maker TLC-backed Rust trace validation tests
+mm-tla-trace-tests:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ROOT="{{justfile_directory()}}"
+    TLA_JAR="${ROOT}/.cache/tla2tools.jar"
+
+    mkdir -p "${ROOT}/.cache"
+
+    if [[ ! -f "${TLA_JAR}" ]]; then
+        echo "Downloading tla2tools.jar..."
+        curl -L --fail -o "${TLA_JAR}" \
+            https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
+    fi
+
+    cd "${ROOT}"
+    TLA_JAR="${TLA_JAR}" cargo test -p market-maker --test planner_tla_trace_validation -- --ignored

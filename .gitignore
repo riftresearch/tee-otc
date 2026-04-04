@@ -52,3 +52,6 @@ tmp/
 **/postgres-data/
 tx-flood-dedicated-wallets/
 rift-api/
+
+# Generated TLC state dumps for the market-maker spec
+bin/market-maker/spec/states/

@@ -5,6 +5,8 @@ use sqlx::PgPool;
 use sqlx::Row;
 use uuid::Uuid;
 
+use crate::wallet::PreparedBatchPayment;
+
 // Provides `utc::now()` for consistent UTC time across the crate.
 use utc;
 
@@ -27,12 +29,16 @@ pub enum PaymentRepositoryError {
 
     #[snafu(display("Unknown fee settlement ack status value: {value}"))]
     UnknownFeeSettlementAckStatus { value: String },
+
+    #[snafu(display("Serialization error: {source}"))]
+    Serialization { source: serde_json::Error },
 }
 
 pub type PaymentRepositoryResult<T, E = PaymentRepositoryError> = std::result::Result<T, E>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BatchStatus {
+    Built,
     Created,
     Confirmed,
     Cancelled,
@@ -128,6 +134,26 @@ impl PaymentRepository {
         batch_nonce_digest: [u8; 32],
         aggregated_fee_sats: u64,
     ) -> PaymentRepositoryResult<()> {
+        self.set_batch_payment_with_status(
+            swap_ids,
+            txid,
+            chain,
+            batch_nonce_digest,
+            aggregated_fee_sats,
+            BatchStatus::Created,
+        )
+        .await
+    }
+
+    pub async fn set_batch_payment_with_status(
+        &self,
+        swap_ids: Vec<Uuid>,
+        txid: impl Into<String>,
+        chain: ChainType,
+        batch_nonce_digest: [u8; 32],
+        aggregated_fee_sats: u64,
+        status: BatchStatus,
+    ) -> PaymentRepositoryResult<()> {
         let txid = txid.into();
 
         let mut transaction = self.pool.begin().await.context(DatabaseSnafu)?;
@@ -152,7 +178,7 @@ impl PaymentRepository {
         .bind(&swap_ids)
         .bind(batch_nonce_digest.as_slice())
         .bind(aggregated_fee_sats as i64)
-        .bind(batch_status_to_db(&BatchStatus::Created))
+        .bind(batch_status_to_db(&status))
         .bind(created_at)
         .execute(&mut *transaction)
         .await
@@ -173,6 +199,91 @@ impl PaymentRepository {
             .await
             .context(DatabaseSnafu)?;
         }
+
+        transaction.commit().await.context(DatabaseSnafu)?;
+
+        Ok(())
+    }
+
+    pub async fn persist_prepared_batch(
+        &self,
+        swap_ids: Vec<Uuid>,
+        chain: ChainType,
+        batch_nonce_digest: [u8; 32],
+        aggregated_fee_sats: u64,
+        prepared_batch: &PreparedBatchPayment,
+    ) -> PaymentRepositoryResult<()> {
+        let txid = prepared_batch.txid().to_string();
+        let mut transaction = self.pool.begin().await.context(DatabaseSnafu)?;
+        let created_at = utc::now();
+
+        sqlx::query(
+            r#"
+            INSERT INTO mm_batches (txid, chain, swap_ids, batch_nonce_digest, aggregated_fee_sats, status, created_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+            ON CONFLICT (txid)
+            DO UPDATE SET
+                chain = EXCLUDED.chain,
+                swap_ids = EXCLUDED.swap_ids,
+                batch_nonce_digest = EXCLUDED.batch_nonce_digest,
+                aggregated_fee_sats = EXCLUDED.aggregated_fee_sats,
+                status = EXCLUDED.status,
+                created_at = EXCLUDED.created_at
+            "#,
+        )
+        .bind(&txid)
+        .bind(chain.to_db_string())
+        .bind(&swap_ids)
+        .bind(batch_nonce_digest.as_slice())
+        .bind(aggregated_fee_sats as i64)
+        .bind(batch_status_to_db(&BatchStatus::Built))
+        .bind(created_at)
+        .execute(&mut *transaction)
+        .await
+        .context(DatabaseSnafu)?;
+
+        for swap_id in swap_ids {
+            sqlx::query(
+                r#"
+                INSERT INTO mm_payments (swap_id, txid)
+                VALUES ($1, $2)
+                ON CONFLICT (swap_id)
+                DO UPDATE SET txid = EXCLUDED.txid
+                "#,
+            )
+            .bind(swap_id)
+            .bind(&txid)
+            .execute(&mut *transaction)
+            .await
+            .context(DatabaseSnafu)?;
+        }
+
+        let bitcoin_foreign_utxos = prepared_batch
+            .bitcoin_foreign_utxos()
+            .map(serde_json::to_value)
+            .transpose()
+            .context(SerializationSnafu)?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO mm_broadcasted_transactions (txid, chain, txdata, bitcoin_tx_foreign_utxos, absolute_fee)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (txid)
+            DO UPDATE SET
+                chain = EXCLUDED.chain,
+                txdata = EXCLUDED.txdata,
+                bitcoin_tx_foreign_utxos = EXCLUDED.bitcoin_tx_foreign_utxos,
+                absolute_fee = EXCLUDED.absolute_fee
+            "#,
+        )
+        .bind(&txid)
+        .bind(chain.to_db_string())
+        .bind(prepared_batch.txdata().to_vec())
+        .bind(bitcoin_foreign_utxos)
+        .bind(prepared_batch.absolute_fee() as i64)
+        .execute(&mut *transaction)
+        .await
+        .context(DatabaseSnafu)?;
 
         transaction.commit().await.context(DatabaseSnafu)?;
 
@@ -506,6 +617,7 @@ impl PaymentRepository {
             SELECT txid, chain, swap_ids, batch_nonce_digest, aggregated_fee_sats, fee_settlement_txid, created_at, status
             FROM mm_batches
             WHERE created_at > $1
+              AND status != 'built'
             ORDER BY created_at ASC
             "#,
         )
@@ -560,6 +672,7 @@ impl PaymentRepository {
 
 fn batch_status_to_db(status: &BatchStatus) -> &'static str {
     match status {
+        BatchStatus::Built => "built",
         BatchStatus::Created => "created",
         BatchStatus::Confirmed => "confirmed",
         BatchStatus::Cancelled => "cancelled",
@@ -568,6 +681,7 @@ fn batch_status_to_db(status: &BatchStatus) -> &'static str {
 
 fn batch_status_from_db(value: &str) -> PaymentRepositoryResult<BatchStatus> {
     match value {
+        "built" => Ok(BatchStatus::Built),
         "created" => Ok(BatchStatus::Created),
         "confirmed" => Ok(BatchStatus::Confirmed),
         "cancelled" => Ok(BatchStatus::Cancelled),
@@ -622,6 +736,40 @@ mod tests {
         assert_eq!(batches.len(), 1);
         assert_eq!(batches[0].txid, fee_bearing_txid);
         assert_eq!(batches[0].aggregated_fee_sats, 42);
+
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn test_list_batches_excludes_built_batches(pool: sqlx::PgPool) -> sqlx::Result<()> {
+        let db = crate::db::Database::from_pool(pool).await.unwrap();
+        let repo = db.payments();
+        let before_inserts = utc::now() - chrono::Duration::seconds(1);
+
+        repo.set_batch_payment_with_status(
+            vec![Uuid::now_v7()],
+            "built-batch",
+            ChainType::Bitcoin,
+            [3u8; 32],
+            0,
+            BatchStatus::Built,
+        )
+        .await
+        .unwrap();
+
+        repo.set_batch_payment(
+            vec![Uuid::now_v7()],
+            "created-batch",
+            ChainType::Bitcoin,
+            [4u8; 32],
+            0,
+        )
+        .await
+        .unwrap();
+
+        let batches = repo.list_batches(Some(before_inserts)).await.unwrap();
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].txid, "created-batch");
 
         Ok(())
     }

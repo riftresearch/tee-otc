@@ -36,6 +36,7 @@ use axum::{
     Json,
 };
 use chainalysis_address_screener::{ChainalysisAddressScreener, RiskLevel};
+use chrono::Utc;
 use dstack_sdk::dstack_client::{DstackClient, GetQuoteResponse, InfoResponse};
 use metrics::{describe_counter, describe_gauge, describe_histogram, gauge, histogram};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
@@ -92,6 +93,7 @@ struct SuspendedMarketMakersResponse {
 }
 
 const QUOTE_LATENCY_METRIC: &str = "otc_quote_response_seconds";
+const MM_PROTOCOL_VERSION: &str = "1.0.0";
 static PROMETHEUS_HANDLE: OnceLock<Arc<PrometheusHandle>> = OnceLock::new();
 
 pub async fn run_server(args: OtcServerArgs) -> Result<()> {
@@ -1264,99 +1266,9 @@ impl MessageHandler for OTCMessageHandler {
 
     async fn on_connect(
         &self,
-        mm_id: Uuid,
+        _mm_id: Uuid,
         _sender: &MessageSender,
     ) -> Result<(), mm_websocket_server::handler::MessageError> {
-        // Send pending swaps awaiting MM deposit
-        match self.db.swaps().get_waiting_mm_deposit_swaps(mm_id).await {
-            Ok(pending_swaps) => {
-                for swap in pending_swaps {
-                    if let Err(err) = self
-                        .mm_registry
-                        .notify_user_deposit_confirmed(
-                            &mm_id,
-                            &swap.swap_id,
-                            &swap.quote_id,
-                            swap.user_destination_address.as_str(),
-                            swap.mm_nonce,
-                            &swap.expected_lot,
-                            swap.protocol_fee,
-                            swap.user_deposit_confirmed_at,
-                        )
-                        .await
-                    {
-                        error!(
-                            market_maker_id = %mm_id,
-                            swap_id = %swap.swap_id,
-                            error = %err,
-                            "Failed to deliver pending user deposit confirmation to market maker on connect"
-                        );
-                    }
-                }
-            }
-            Err(err) => {
-                error!(
-                    market_maker_id = %mm_id,
-                    error = %err,
-                    "Failed to fetch swaps awaiting MM deposit"
-                );
-            }
-        }
-
-        // Request latest deposit vault timestamp
-        if let Err(e) = self
-            .mm_registry
-            .request_latest_deposit_vault_timestamp(&mm_id)
-            .await
-        {
-            error!(
-                market_maker_id = %mm_id,
-                error = %e,
-                "Failed to request latest deposit vault timestamp"
-            );
-        } else {
-            info!(
-                "Requested latest deposit vault timestamp from market maker {}",
-                mm_id
-            );
-        }
-
-        // Get and request new batches
-        match self
-            .db
-            .batches()
-            .get_latest_known_batch_timestamp_by_market_maker(&mm_id)
-            .await
-        {
-            Ok(newest_batch_timestamp) => {
-                info!(
-                    "Latest known batch timestamp for market maker {} is {:#?}",
-                    mm_id, newest_batch_timestamp
-                );
-
-                if let Err(e) = self
-                    .mm_registry
-                    .request_new_batches(&mm_id, newest_batch_timestamp)
-                    .await
-                {
-                    error!(
-                        market_maker_id = %mm_id,
-                        error = %e,
-                        "Failed to request new batches"
-                    );
-                } else {
-                    info!("Requested new batches from market maker {}", mm_id);
-                }
-            }
-            Err(err) => {
-                error!(
-                    market_maker_id = %mm_id,
-                    error = %err,
-                    "Failed to get latest known batch timestamp"
-                );
-            }
-        }
-
         Ok(())
     }
 
@@ -1380,10 +1292,14 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     // Convert ProtocolMessage channel from registry into Message channel
     let (protocol_tx, mut protocol_rx) = mpsc::channel::<ProtocolMessage<MMRequest>>(100);
 
-    // Register the MM with the registry
-    state
-        .mm_registry
-        .register(mm_uuid, connection_id, protocol_tx, "1.0.0".to_string());
+    // Register the MM first in pending mode so live OTC messages can be buffered
+    // while bootstrap is assembled, then flushed in deterministic order.
+    state.mm_registry.register_pending(
+        mm_uuid,
+        connection_id,
+        protocol_tx,
+        MM_PROTOCOL_VERSION.to_string(),
+    );
 
     // Spawn task to convert ProtocolMessage to Message
     let tx_clone = tx.clone();
@@ -1397,6 +1313,28 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
         }
     });
 
+    let initial_requests = build_initial_mm_requests(&state, mm_uuid).await;
+    if let Err(err) = state
+        .mm_registry
+        .queue_bootstrap_requests(mm_uuid, connection_id, initial_requests)
+        .await
+    {
+        error!(
+            market_maker_id = %mm_uuid,
+            connection_id = %connection_id,
+            error = %err,
+            "Failed to queue market-maker bootstrap requests"
+        );
+    }
+    if let Err(err) = state.mm_registry.mark_ready(mm_uuid, connection_id).await {
+        error!(
+            market_maker_id = %mm_uuid,
+            connection_id = %connection_id,
+            error = %err,
+            "Failed to flush market-maker bootstrap requests"
+        );
+    }
+
     // Create handler
     let handler = Arc::new(OTCMessageHandler {
         db: state.db.clone(),
@@ -1409,6 +1347,74 @@ async fn handle_mm_socket(socket: WebSocket, state: AppState, mm_uuid: Uuid) {
     // Use the mm-websocket-server crate to handle the connection
     let _ = mm_websocket_server::handle_mm_connection(socket, mm_uuid, connection_id, handler, rx)
         .await;
+}
+
+async fn build_initial_mm_requests(
+    state: &AppState,
+    mm_id: Uuid,
+) -> Vec<ProtocolMessage<MMRequest>> {
+    let mut requests = Vec::new();
+
+    match state.db.swaps().get_active_mm_obligations(mm_id).await {
+        Ok(obligations) => {
+            requests.push(ProtocolMessage {
+                version: MM_PROTOCOL_VERSION.to_string(),
+                sequence: 0,
+                payload: MMRequest::ActiveObligationsSnapshot {
+                    request_id: Uuid::now_v7(),
+                    obligations,
+                    timestamp: Utc::now(),
+                },
+            });
+        }
+        Err(err) => {
+            error!(
+                market_maker_id = %mm_id,
+                error = %err,
+                "Failed to fetch authoritative active-obligation snapshot"
+            );
+        }
+    }
+
+    requests.push(ProtocolMessage {
+        version: MM_PROTOCOL_VERSION.to_string(),
+        sequence: 0,
+        payload: MMRequest::LatestDepositVaultTimestamp {
+            request_id: Uuid::now_v7(),
+        },
+    });
+
+    match state
+        .db
+        .batches()
+        .get_latest_known_batch_timestamp_by_market_maker(&mm_id)
+        .await
+    {
+        Ok(newest_batch_timestamp) => {
+            info!(
+                "Latest known batch timestamp for market maker {} is {:#?}",
+                mm_id, newest_batch_timestamp
+            );
+
+            requests.push(ProtocolMessage {
+                version: MM_PROTOCOL_VERSION.to_string(),
+                sequence: 0,
+                payload: MMRequest::NewBatches {
+                    request_id: Uuid::now_v7(),
+                    newest_batch_timestamp,
+                },
+            });
+        }
+        Err(err) => {
+            error!(
+                market_maker_id = %mm_id,
+                error = %err,
+                "Failed to get latest known batch timestamp"
+            );
+        }
+    }
+
+    requests
 }
 
 #[derive(Deserialize)]

@@ -17,41 +17,59 @@ use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 use uuid::Uuid;
 
-use crate::{balance_strat::QuoteBalanceStrategy, db::PaymentRepository, wallet::WalletManager};
+use crate::{
+    balance_strat::QuoteBalanceStrategy,
+    db::{BatchStatus, BroadcastedTransactionRepository, PaymentRepository},
+    wallet::{PreparedBatchPayment, TransactionState, WalletManager},
+};
 use otc_protocols::mm::ProtocolMessage;
 
 // For tests
 #[async_trait]
 trait BatchPaymentRecorder: Send + Sync {
-    async fn record_batch_payment(
+    async fn persist_prepared_batch(
         &self,
         swap_ids: Vec<Uuid>,
-        txid: String,
         chain: ChainType,
         batch_nonce_digest: [u8; 32],
         aggregated_fee_sats: u64,
+        prepared_batch: &PreparedBatchPayment,
+    ) -> crate::db::PaymentRepositoryResult<()>;
+
+    async fn update_batch_status(
+        &self,
+        txid: &str,
+        status: BatchStatus,
     ) -> crate::db::PaymentRepositoryResult<()>;
 }
 
 #[async_trait]
 impl BatchPaymentRecorder for PaymentRepository {
-    async fn record_batch_payment(
+    async fn persist_prepared_batch(
         &self,
         swap_ids: Vec<Uuid>,
-        txid: String,
         chain: ChainType,
         batch_nonce_digest: [u8; 32],
         aggregated_fee_sats: u64,
+        prepared_batch: &PreparedBatchPayment,
     ) -> crate::db::PaymentRepositoryResult<()> {
-        PaymentRepository::set_batch_payment(
+        PaymentRepository::persist_prepared_batch(
             self,
             swap_ids,
-            txid,
             chain,
             batch_nonce_digest,
             aggregated_fee_sats,
+            prepared_batch,
         )
         .await
+    }
+
+    async fn update_batch_status(
+        &self,
+        txid: &str,
+        status: BatchStatus,
+    ) -> crate::db::PaymentRepositoryResult<()> {
+        PaymentRepository::update_batch_status(self, txid, status).await
     }
 }
 
@@ -67,6 +85,8 @@ pub struct BatchConfig {
 pub struct PaymentManager {
     wallet_manager: Arc<WalletManager>,
     payment_repository: Arc<PaymentRepository>,
+    broadcasted_transaction_repository: Arc<BroadcastedTransactionRepository>,
+    otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
     /// Channels for queuing payments per chain
     bitcoin_tx: UnboundedSender<MarketMakerQueuedPayment>,
     ethereum_tx: UnboundedSender<MarketMakerQueuedPayment>,
@@ -90,6 +110,7 @@ impl PaymentManager {
     pub fn new(
         wallet_manager: Arc<WalletManager>,
         payment_repository: Arc<PaymentRepository>,
+        broadcasted_transaction_repository: Arc<BroadcastedTransactionRepository>,
         batch_configs: HashMap<ChainType, BatchConfig>,
         balance_strategy: Arc<QuoteBalanceStrategy>,
         otc_response_tx: UnboundedSender<ProtocolMessage<MMResponse>>,
@@ -159,6 +180,8 @@ impl PaymentManager {
         Self {
             wallet_manager,
             payment_repository,
+            broadcasted_transaction_repository,
+            otc_response_tx,
             bitcoin_tx,
             ethereum_tx,
             base_tx,
@@ -288,6 +311,140 @@ impl PaymentManager {
 
     pub fn payment_repository(&self) -> Arc<PaymentRepository> {
         self.payment_repository.clone()
+    }
+
+    pub async fn recover_prepared_batches(&self) -> crate::Result<()> {
+        let built_batches = self
+            .payment_repository
+            .get_batches_by_status(BatchStatus::Built)
+            .await
+            .map_err(|source| crate::Error::PaymentRepository { source })?;
+
+        for batch in built_batches {
+            let wallet =
+                self.wallet_manager
+                    .get(batch.chain)
+                    .ok_or_else(|| crate::Error::GenericWallet {
+                        source: Box::new(crate::WalletError::WalletNotRegistered {
+                            chain_type: batch.chain,
+                        }),
+                    })?;
+            let stored_tx = self
+                .broadcasted_transaction_repository
+                .get_broadcasted_transaction(&batch.txid)
+                .await
+                .map_err(|source| crate::Error::GenericWallet {
+                    source: Box::new(crate::WalletError::TransactionCreationFailed {
+                        reason: format!(
+                            "failed to load prepared transaction {} for built batch recovery: {source}",
+                            batch.txid
+                        ),
+                    }),
+                })?
+                .ok_or_else(|| crate::Error::GenericWallet {
+                    source: Box::new(crate::WalletError::TransactionCreationFailed {
+                        reason: format!(
+                            "missing persisted transaction bytes for built batch {}",
+                            batch.txid
+                        ),
+                    }),
+                })?;
+
+            let prepared_batch = match batch.chain {
+                ChainType::Bitcoin => PreparedBatchPayment::Bitcoin {
+                    txid: stored_tx.txid.clone(),
+                    txdata: stored_tx.txdata.clone(),
+                    foreign_utxos: stored_tx.bitcoin_tx_foreign_utxos.unwrap_or_default(),
+                    absolute_fee: stored_tx.absolute_fee,
+                    reserved_deposit_keys: Vec::new(),
+                },
+                ChainType::Ethereum | ChainType::Base => PreparedBatchPayment::Evm {
+                    txid: stored_tx.txid.clone(),
+                    txdata: stored_tx.txdata.clone(),
+                    reserved_deposit_keys: Vec::new(),
+                },
+            };
+
+            match wallet.lookup_transaction_state(&batch.txid).await? {
+                TransactionState::Missing => {
+                    wallet.broadcast_prepared_batch(&prepared_batch).await?;
+                }
+                TransactionState::Pending | TransactionState::Confirmed(_) => {}
+            }
+
+            self.payment_repository
+                .update_batch_status(&batch.txid, BatchStatus::Created)
+                .await
+                .map_err(|source| crate::Error::PaymentRepository { source })?;
+        }
+
+        Ok(())
+    }
+
+    pub async fn has_durable_batch_for_swaps(&self, swap_ids: &[Uuid]) -> bool {
+        for swap_id in swap_ids {
+            match self.payment_repository.has_payment_been_made(*swap_id).await {
+                Ok(Some(_)) => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+
+    pub async fn execute_planned_batch(
+        &self,
+        queued_payments: Vec<MarketMakerQueuedPayment>,
+    ) -> crate::Result<String> {
+        let Some(first_payment) = queued_payments.first() else {
+            return Err(crate::Error::GenericWallet {
+                source: Box::new(crate::WalletError::TransactionCreationFailed {
+                    reason: "planner attempted to execute an empty outbound batch".to_string(),
+                }),
+            });
+        };
+
+        let chain_type = first_payment.lot.currency.chain;
+        let wallet =
+            self.wallet_manager
+                .get(chain_type)
+                .ok_or_else(|| crate::Error::GenericWallet {
+                    source: Box::new(crate::WalletError::WalletNotRegistered { chain_type }),
+                })?;
+
+        for payment in &queued_payments {
+            self.in_flight_payments.insert(
+                payment.swap_id,
+                InFlightPaymentSnapshot {
+                    swap_id: payment.swap_id,
+                    quote_id: payment.quote_id,
+                    chain: payment.lot.currency.chain,
+                    amount: payment.lot.amount,
+                    queued_at: utc::now(),
+                    user_deposit_confirmed_at: payment
+                        .user_deposit_confirmed_at
+                        .unwrap_or_else(utc::now),
+                },
+            );
+        }
+
+        match process_batch(
+            chain_type,
+            &wallet,
+            self.payment_repository.as_ref(),
+            &self.otc_response_tx,
+            &self.in_flight_payments,
+            &queued_payments,
+        )
+        .await
+        {
+            Ok(Some(txid)) => Ok(txid),
+            Ok(None) => Err(crate::Error::GenericWallet {
+                source: Box::new(crate::WalletError::TransactionCreationFailed {
+                    reason: "planner batch became ineligible before execution".to_string(),
+                }),
+            }),
+            Err(error) => Err(error),
+        }
     }
 
     pub fn in_flight_payments(&self) -> Vec<InFlightPaymentSnapshot> {
@@ -435,7 +592,7 @@ fn spawn_batch_processor(
             if let Err(e) = process_batch(
                 chain_type,
                 &wallet,
-                &payment_recorder,
+                payment_recorder.as_ref(),
                 &otc_response_tx,
                 &in_flight_payments,
                 &queued_payments,
@@ -456,11 +613,11 @@ fn spawn_batch_processor(
 async fn process_batch(
     chain_type: ChainType,
     wallet: &Arc<dyn crate::wallet::Wallet>,
-    payment_recorder: &Arc<dyn BatchPaymentRecorder>,
+    payment_recorder: &dyn BatchPaymentRecorder,
     otc_response_tx: &UnboundedSender<ProtocolMessage<MMResponse>>,
     in_flight_payments: &Arc<DashMap<Uuid, InFlightPaymentSnapshot>>,
     queued_payments: &[MarketMakerQueuedPayment],
-) -> crate::Result<()> {
+) -> crate::Result<Option<String>> {
     // Split queued payments into eligible and ineligible (near refund window)
     let (eligible_payments, ineligible_payments): (Vec<_>, Vec<_>) =
         queued_payments.into_iter().partition(|p| {
@@ -483,7 +640,7 @@ async fn process_batch(
     }
 
     if eligible_payments.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     info!(
@@ -501,7 +658,7 @@ async fn process_batch(
                 "No market maker batch could be created for {:?}: queued_payments={:?}",
                 chain_type, eligible_payments
             );
-            return Ok(());
+            return Ok(None);
         }
     };
 
@@ -512,43 +669,77 @@ async fn process_batch(
         .to::<u64>();
 
     // Execute the batch payment
-    match wallet
-        .create_batch_payment(
+    let prepared_batch = match wallet
+        .prepare_batch_payment(
             payment_batch.ordered_payments,
             Some(payment_batch.payment_verification),
         )
         .await
     {
-        Ok(tx_hash) => {
+        Ok(prepared_batch) => prepared_batch,
+        Err(error) => {
             let swap_ids: Vec<Uuid> = eligible_payments.iter().map(|qp| qp.swap_id).collect();
+            error!(
+                "Batch payment preparation failed for {:?}: swap_ids={:?}, error={}",
+                chain_type, swap_ids, error
+            );
+            for swap_id in &swap_ids {
+                in_flight_payments.remove(swap_id);
+            }
+            return Err(error.into());
+        }
+    };
+
+    let tx_hash = prepared_batch.txid().to_string();
+    let swap_ids: Vec<Uuid> = eligible_payments.iter().map(|qp| qp.swap_id).collect();
+
+    if let Err(error) = payment_recorder
+        .persist_prepared_batch(
+            swap_ids.clone(),
+            chain_type,
+            batch_nonce_digest,
+            aggregated_fee_sats,
+            &prepared_batch,
+        )
+        .await
+    {
+        error!(
+            "Failed to persist prepared batch for {:?}: tx_hash={}, swap_ids={:?}, error={}",
+            chain_type, tx_hash, swap_ids, error
+        );
+        let _ = wallet.discard_prepared_batch(&prepared_batch).await;
+        for swap_id in &swap_ids {
+            in_flight_payments.remove(swap_id);
+        }
+        return Err(crate::Error::PaymentRepository { source: error });
+    }
+
+    match wallet.broadcast_prepared_batch(&prepared_batch).await {
+        Ok(broadcast_tx_hash) => {
+            if broadcast_tx_hash != tx_hash {
+                return Err(crate::Error::GenericWallet {
+                    source: Box::new(crate::WalletError::TransactionCreationFailed {
+                        reason: format!(
+                            "prepared txid {tx_hash} did not match broadcast txid {broadcast_tx_hash}"
+                        ),
+                    }),
+                });
+            }
+
+            payment_recorder
+                .update_batch_status(&tx_hash, BatchStatus::Created)
+                .await
+                .map_err(|source| crate::Error::PaymentRepository { source })?;
+
             info!(
                 "Batch payment successful for {:?}: tx_hash={}, swap_ids={:?}",
                 chain_type, tx_hash, swap_ids
             );
 
-            // Store all payments with the same tx_hash
-            if let Err(e) = payment_recorder
-                .record_batch_payment(
-                    swap_ids.clone(),
-                    tx_hash.clone(),
-                    chain_type,
-                    batch_nonce_digest,
-                    aggregated_fee_sats,
-                )
-                .await
-            {
-                error!(
-                    "Failed to store batch payment in database for {:?}: swap_ids={:?}, error={}",
-                    chain_type, swap_ids, e
-                );
-            }
-
-            // Clear in-flight tracking now that payments are broadcast
             for swap_id in &swap_ids {
                 in_flight_payments.remove(swap_id);
             }
 
-            // Send batch payment notification to OTC server
             let response = MMResponse::Batches {
                 request_id: Uuid::now_v7(),
                 batches: vec![NetworkBatch {
@@ -560,14 +751,14 @@ async fn process_batch(
 
             let protocol_msg = ProtocolMessage {
                 version: "1.0.0".to_string(),
-                sequence: 0, // Unsolicited message, sequence doesn't matter
+                sequence: 0,
                 payload: response,
             };
 
-            if let Err(e) = otc_response_tx.send(protocol_msg) {
+            if let Err(error) = otc_response_tx.send(protocol_msg) {
                 error!(
                     "Failed to send batch payment notification to OTC server for {:?}: swap_ids={:?}, error={}",
-                    chain_type, swap_ids, e
+                    chain_type, swap_ids, error
                 );
             } else {
                 info!(
@@ -575,25 +766,17 @@ async fn process_batch(
                     chain_type, tx_hash, swap_ids
                 );
             }
+
+            Ok(Some(tx_hash))
         }
-        Err(e) => {
-            let swap_ids: Vec<Uuid> = eligible_payments.iter().map(|qp| qp.swap_id).collect();
+        Err(error) => {
             error!(
-                "Batch payment failed for {:?}: swap_ids={:?}, error={}",
-                chain_type, swap_ids, e
+                "Batch payment broadcast failed after durable prepare for {:?}: tx_hash={}, swap_ids={:?}, error={}",
+                chain_type, tx_hash, swap_ids, error
             );
-
-            // Clear in-flight tracking before crashing
-            for swap_id in &swap_ids {
-                in_flight_payments.remove(swap_id);
-            }
-
-            // Return error to crash the market maker
-            return Err(e.into());
+            Err(error.into())
         }
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -605,52 +788,111 @@ mod tests {
     use otc_models::{
         Currency, Lot, TokenIdentifier, MM_DEPOSIT_RISK_WINDOW, MM_NEVER_DEPOSITS_TIMEOUT,
     };
-    use std::sync::{Arc, Mutex};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    };
     use tokio::sync::mpsc;
     use tokio::task::{yield_now, JoinSet};
     use tokio::time::sleep;
 
     #[derive(Default)]
     struct RecordingBatchStore {
-        recorded: Mutex<Vec<Vec<Uuid>>>,
+        persisted: Mutex<Vec<Vec<Uuid>>>,
+        status_updates: Mutex<Vec<(String, BatchStatus)>>,
+        fail_persist: AtomicBool,
+        persisted_flag: Arc<AtomicBool>,
     }
 
     #[async_trait]
     impl BatchPaymentRecorder for RecordingBatchStore {
-        async fn record_batch_payment(
+        async fn persist_prepared_batch(
             &self,
             swap_ids: Vec<Uuid>,
-            _txid: String,
             _chain: ChainType,
             _batch_nonce_digest: [u8; 32],
             _aggregated_fee_sats: u64,
+            _prepared_batch: &PreparedBatchPayment,
         ) -> crate::db::PaymentRepositoryResult<()> {
-            self.recorded.lock().unwrap().push(swap_ids);
+            if self.fail_persist.load(Ordering::Relaxed) {
+                return Err(crate::db::PaymentRepositoryError::UnknownBatchStatus {
+                    value: "persist failed".to_string(),
+                });
+            }
+            self.persisted.lock().unwrap().push(swap_ids);
+            self.persisted_flag.store(true, Ordering::Relaxed);
+            Ok(())
+        }
+
+        async fn update_batch_status(
+            &self,
+            txid: &str,
+            status: BatchStatus,
+        ) -> crate::db::PaymentRepositoryResult<()> {
+            self.status_updates
+                .lock()
+                .unwrap()
+                .push((txid.to_string(), status));
             Ok(())
         }
     }
 
     impl RecordingBatchStore {
         fn swap_ids(&self) -> Vec<Vec<Uuid>> {
-            self.recorded.lock().unwrap().clone()
+            self.persisted.lock().unwrap().clone()
+        }
+
+        fn statuses(&self) -> Vec<(String, BatchStatus)> {
+            self.status_updates.lock().unwrap().clone()
         }
     }
 
     struct RecordingWallet {
         chain: ChainType,
-        calls: Mutex<Vec<Vec<Payment>>>,
+        prepared_calls: Mutex<Vec<Vec<Payment>>>,
+        broadcasted_txids: Mutex<Vec<String>>,
+        discarded_txids: Mutex<Vec<String>>,
+        fail_broadcast: AtomicBool,
+        require_persist_before_broadcast: Option<Arc<AtomicBool>>,
+        transaction_state: Mutex<TransactionState>,
     }
 
     impl RecordingWallet {
         fn new(chain: ChainType) -> Self {
             Self {
                 chain,
-                calls: Mutex::new(Vec::new()),
+                prepared_calls: Mutex::new(Vec::new()),
+                broadcasted_txids: Mutex::new(Vec::new()),
+                discarded_txids: Mutex::new(Vec::new()),
+                fail_broadcast: AtomicBool::new(false),
+                require_persist_before_broadcast: None,
+                transaction_state: Mutex::new(TransactionState::Missing),
             }
         }
 
         fn calls(&self) -> Vec<Vec<Payment>> {
-            self.calls.lock().unwrap().clone()
+            self.prepared_calls.lock().unwrap().clone()
+        }
+
+        fn with_persist_assert(mut self, persisted_flag: Arc<AtomicBool>) -> Self {
+            self.require_persist_before_broadcast = Some(persisted_flag);
+            self
+        }
+
+        fn set_fail_broadcast(&self, should_fail: bool) {
+            self.fail_broadcast.store(should_fail, Ordering::Relaxed);
+        }
+
+        fn set_transaction_state(&self, state: TransactionState) {
+            *self.transaction_state.lock().unwrap() = state;
+        }
+
+        fn broadcasted_txids(&self) -> Vec<String> {
+            self.broadcasted_txids.lock().unwrap().clone()
+        }
+
+        fn discarded_txids(&self) -> Vec<String> {
+            self.discarded_txids.lock().unwrap().clone()
         }
     }
 
@@ -676,13 +918,57 @@ mod tests {
             Ok(6) // Mock: always 6 confirmations
         }
 
-        async fn create_batch_payment(
+        async fn prepare_batch_payment(
             &self,
             payments: Vec<Payment>,
             _mm_payment_validation: Option<MarketMakerPaymentVerification>,
+        ) -> crate::wallet::WalletResult<PreparedBatchPayment> {
+            self.prepared_calls.lock().unwrap().push(payments);
+            Ok(match self.chain {
+                ChainType::Bitcoin => PreparedBatchPayment::Bitcoin {
+                    txid: "mock_tx".to_string(),
+                    txdata: vec![1, 2, 3],
+                    foreign_utxos: Vec::new(),
+                    absolute_fee: 42,
+                    reserved_deposit_keys: vec!["dep_a".to_string()],
+                },
+                ChainType::Ethereum | ChainType::Base => PreparedBatchPayment::Evm {
+                    txid: "mock_tx".to_string(),
+                    txdata: vec![1, 2, 3],
+                    reserved_deposit_keys: vec!["dep_a".to_string()],
+                },
+            })
+        }
+
+        async fn broadcast_prepared_batch(
+            &self,
+            prepared_batch: &PreparedBatchPayment,
         ) -> crate::wallet::WalletResult<String> {
-            self.calls.lock().unwrap().push(payments);
-            Ok("mock_tx".to_string())
+            if let Some(persisted_flag) = &self.require_persist_before_broadcast {
+                assert!(
+                    persisted_flag.load(Ordering::Relaxed),
+                    "broadcast was attempted before durable persistence"
+                );
+            }
+            let txid = prepared_batch.txid().to_string();
+            if self.fail_broadcast.load(Ordering::Relaxed) {
+                return Err(crate::wallet::WalletError::TransactionCreationFailed {
+                    reason: "broadcast failed".to_string(),
+                });
+            }
+            self.broadcasted_txids.lock().unwrap().push(txid.clone());
+            Ok(txid)
+        }
+
+        async fn discard_prepared_batch(
+            &self,
+            prepared_batch: &PreparedBatchPayment,
+        ) -> crate::wallet::WalletResult<()> {
+            self.discarded_txids
+                .lock()
+                .unwrap()
+                .push(prepared_batch.txid().to_string());
+            Ok(())
         }
 
         async fn guarantee_confirmations(
@@ -713,6 +999,13 @@ mod tests {
 
         fn chain_type(&self) -> ChainType {
             self.chain
+        }
+
+        async fn lookup_transaction_state(
+            &self,
+            _tx_hash: &str,
+        ) -> crate::wallet::WalletResult<TransactionState> {
+            Ok(*self.transaction_state.lock().unwrap())
         }
     }
 
@@ -816,6 +1109,10 @@ mod tests {
         assert_eq!(wallet_calls[0][0].to_address, "dest_a");
 
         assert_eq!(storage_inner.swap_ids(), vec![vec![eligible_swap]]);
+        assert_eq!(
+            storage_inner.statuses(),
+            vec![("mock_tx".to_string(), BatchStatus::Created)]
+        );
 
         assert!(in_flight.get(&ineligible_swap).is_none());
         assert!(in_flight.get(&eligible_swap).is_none());
@@ -831,5 +1128,367 @@ mod tests {
 
         join_set.abort_all();
         while join_set.join_next().await.is_some() {}
+    }
+
+    #[tokio::test]
+    async fn persists_built_batch_before_broadcast() {
+        let chain_type = ChainType::Bitcoin;
+        let persisted_flag = Arc::new(AtomicBool::new(false));
+        let wallet_inner = Arc::new(RecordingWallet::new(chain_type).with_persist_assert(
+            persisted_flag.clone(),
+        ));
+        let wallet: Arc<dyn crate::wallet::Wallet> = wallet_inner.clone();
+        let storage_inner = Arc::new(RecordingBatchStore {
+            persisted_flag,
+            ..Default::default()
+        });
+        let storage: Arc<dyn BatchPaymentRecorder> = storage_inner.clone();
+        let (otc_tx, mut otc_rx) = mpsc::unbounded_channel();
+        let in_flight = Arc::new(DashMap::new());
+        let swap_id = Uuid::now_v7();
+        let quote_id = Uuid::now_v7();
+        let payment = MarketMakerQueuedPayment {
+            swap_id,
+            quote_id,
+            lot: Lot {
+                currency: Currency {
+                    chain: chain_type,
+                    token: TokenIdentifier::Native,
+                    decimals: 8,
+                },
+                amount: U256::from(1u64),
+            },
+            destination_address: "dest_a".to_string(),
+            mm_nonce: [1u8; 16],
+            user_deposit_confirmed_at: Some(utc::now()),
+            protocol_fee: U256::from(300),
+        };
+        in_flight.insert(
+            swap_id,
+            InFlightPaymentSnapshot {
+                swap_id,
+                quote_id,
+                chain: chain_type,
+                amount: payment.lot.amount,
+                queued_at: utc::now(),
+                user_deposit_confirmed_at: payment.user_deposit_confirmed_at.unwrap(),
+            },
+        );
+
+        let result = process_batch(
+            chain_type,
+            &wallet,
+            storage.as_ref(),
+            &otc_tx,
+            &in_flight,
+            &[payment],
+        )
+        .await
+        .expect("batch should succeed");
+
+        assert_eq!(result, Some("mock_tx".to_string()));
+        assert_eq!(storage_inner.swap_ids(), vec![vec![swap_id]]);
+        assert_eq!(
+            storage_inner.statuses(),
+            vec![("mock_tx".to_string(), BatchStatus::Created)]
+        );
+        assert_eq!(wallet_inner.broadcasted_txids(), vec!["mock_tx".to_string()]);
+        assert!(in_flight.get(&swap_id).is_none());
+        let response = otc_rx.recv().await.expect("batch response sent");
+        match response.payload {
+            MMResponse::Batches { batches, .. } => {
+                assert_eq!(batches.len(), 1);
+                assert_eq!(batches[0].tx_hash, "mock_tx");
+            }
+            other => panic!("unexpected response: {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn persist_failure_discards_prepared_batch_and_skips_broadcast() {
+        let chain_type = ChainType::Bitcoin;
+        let wallet_inner = Arc::new(RecordingWallet::new(chain_type));
+        let wallet: Arc<dyn crate::wallet::Wallet> = wallet_inner.clone();
+        let storage_inner = Arc::new(RecordingBatchStore::default());
+        storage_inner.fail_persist.store(true, Ordering::Relaxed);
+        let storage: Arc<dyn BatchPaymentRecorder> = storage_inner.clone();
+        let (otc_tx, otc_rx) = mpsc::unbounded_channel();
+        let in_flight = Arc::new(DashMap::new());
+        let swap_id = Uuid::now_v7();
+        let quote_id = Uuid::now_v7();
+        let payment = MarketMakerQueuedPayment {
+            swap_id,
+            quote_id,
+            lot: Lot {
+                currency: Currency {
+                    chain: chain_type,
+                    token: TokenIdentifier::Native,
+                    decimals: 8,
+                },
+                amount: U256::from(1u64),
+            },
+            destination_address: "dest_a".to_string(),
+            mm_nonce: [1u8; 16],
+            user_deposit_confirmed_at: Some(utc::now()),
+            protocol_fee: U256::from(300),
+        };
+        in_flight.insert(
+            swap_id,
+            InFlightPaymentSnapshot {
+                swap_id,
+                quote_id,
+                chain: chain_type,
+                amount: payment.lot.amount,
+                queued_at: utc::now(),
+                user_deposit_confirmed_at: payment.user_deposit_confirmed_at.unwrap(),
+            },
+        );
+
+        let result = process_batch(
+            chain_type,
+            &wallet,
+            storage.as_ref(),
+            &otc_tx,
+            &in_flight,
+            &[payment],
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(wallet_inner.broadcasted_txids(), Vec::<String>::new());
+        assert_eq!(wallet_inner.discarded_txids(), vec!["mock_tx".to_string()]);
+        assert!(in_flight.get(&swap_id).is_none());
+        assert!(otc_rx.is_empty());
+    }
+
+    #[tokio::test]
+    async fn broadcast_failure_after_durable_prepare_keeps_batch_durable() {
+        let chain_type = ChainType::Bitcoin;
+        let wallet_inner = Arc::new(RecordingWallet::new(chain_type));
+        wallet_inner.set_fail_broadcast(true);
+        let wallet: Arc<dyn crate::wallet::Wallet> = wallet_inner.clone();
+        let storage_inner = Arc::new(RecordingBatchStore::default());
+        let storage: Arc<dyn BatchPaymentRecorder> = storage_inner.clone();
+        let (otc_tx, otc_rx) = mpsc::unbounded_channel();
+        let in_flight = Arc::new(DashMap::new());
+        let swap_id = Uuid::now_v7();
+        let quote_id = Uuid::now_v7();
+        let payment = MarketMakerQueuedPayment {
+            swap_id,
+            quote_id,
+            lot: Lot {
+                currency: Currency {
+                    chain: chain_type,
+                    token: TokenIdentifier::Native,
+                    decimals: 8,
+                },
+                amount: U256::from(1u64),
+            },
+            destination_address: "dest_a".to_string(),
+            mm_nonce: [1u8; 16],
+            user_deposit_confirmed_at: Some(utc::now()),
+            protocol_fee: U256::from(300),
+        };
+        in_flight.insert(
+            swap_id,
+            InFlightPaymentSnapshot {
+                swap_id,
+                quote_id,
+                chain: chain_type,
+                amount: payment.lot.amount,
+                queued_at: utc::now(),
+                user_deposit_confirmed_at: payment.user_deposit_confirmed_at.unwrap(),
+            },
+        );
+
+        let result = process_batch(
+            chain_type,
+            &wallet,
+            storage.as_ref(),
+            &otc_tx,
+            &in_flight,
+            &[payment],
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert_eq!(storage_inner.swap_ids(), vec![vec![swap_id]]);
+        assert!(storage_inner.statuses().is_empty());
+        assert_eq!(wallet_inner.discarded_txids(), Vec::<String>::new());
+        assert!(in_flight.get(&swap_id).is_some());
+        assert!(otc_rx.is_empty());
+    }
+
+    #[sqlx::test]
+    async fn recover_prepared_batches_rebroadcasts_missing_transactions(
+        pool: sqlx::PgPool,
+    ) -> sqlx::Result<()> {
+        let db = crate::db::Database::from_pool(pool).await.unwrap();
+        let payment_repository = Arc::new(db.payments());
+        let broadcasted_transaction_repository = Arc::new(db.broadcasted_transactions());
+
+        let wallet_inner = Arc::new(RecordingWallet::new(ChainType::Base));
+        wallet_inner.set_transaction_state(TransactionState::Missing);
+        let wallet: Arc<dyn crate::wallet::Wallet> = wallet_inner.clone();
+
+        let mut wallet_manager = WalletManager::new();
+        wallet_manager.register(ChainType::Base, wallet);
+        let wallet_manager = Arc::new(wallet_manager);
+
+        let (otc_tx, _otc_rx) = mpsc::unbounded_channel();
+        let mut join_set = JoinSet::new();
+        let payment_manager = PaymentManager::new(
+            wallet_manager,
+            payment_repository.clone(),
+            broadcasted_transaction_repository,
+            HashMap::new(),
+            Arc::new(QuoteBalanceStrategy::new(10_000)),
+            otc_tx,
+            CancellationToken::new(),
+            &mut join_set,
+        );
+
+        payment_repository
+            .persist_prepared_batch(
+                vec![Uuid::now_v7()],
+                ChainType::Base,
+                [7u8; 32],
+                0,
+                &PreparedBatchPayment::Evm {
+                    txid: "built_tx".to_string(),
+                    txdata: vec![1, 2, 3],
+                    reserved_deposit_keys: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+
+        payment_manager.recover_prepared_batches().await.unwrap();
+
+        let created = payment_repository
+            .get_batches_by_status(BatchStatus::Created)
+            .await
+            .unwrap();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].txid, "built_tx");
+        assert_eq!(wallet_inner.broadcasted_txids(), vec!["built_tx".to_string()]);
+
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn recover_prepared_bitcoin_batches_rebroadcasts_missing_transactions(
+        pool: sqlx::PgPool,
+    ) -> sqlx::Result<()> {
+        let db = crate::db::Database::from_pool(pool).await.unwrap();
+        let payment_repository = Arc::new(db.payments());
+        let broadcasted_transaction_repository = Arc::new(db.broadcasted_transactions());
+
+        let wallet_inner = Arc::new(RecordingWallet::new(ChainType::Bitcoin));
+        wallet_inner.set_transaction_state(TransactionState::Missing);
+        let wallet: Arc<dyn crate::wallet::Wallet> = wallet_inner.clone();
+
+        let mut wallet_manager = WalletManager::new();
+        wallet_manager.register(ChainType::Bitcoin, wallet);
+        let wallet_manager = Arc::new(wallet_manager);
+
+        let (otc_tx, _otc_rx) = mpsc::unbounded_channel();
+        let mut join_set = JoinSet::new();
+        let payment_manager = PaymentManager::new(
+            wallet_manager,
+            payment_repository.clone(),
+            broadcasted_transaction_repository,
+            HashMap::new(),
+            Arc::new(QuoteBalanceStrategy::new(10_000)),
+            otc_tx,
+            CancellationToken::new(),
+            &mut join_set,
+        );
+
+        payment_repository
+            .persist_prepared_batch(
+                vec![Uuid::now_v7()],
+                ChainType::Bitcoin,
+                [11u8; 32],
+                21,
+                &PreparedBatchPayment::Bitcoin {
+                    txid: "built_btc_tx".to_string(),
+                    txdata: vec![4, 5, 6],
+                    foreign_utxos: Vec::new(),
+                    absolute_fee: 21,
+                    reserved_deposit_keys: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+
+        payment_manager.recover_prepared_batches().await.unwrap();
+
+        let created = payment_repository
+            .get_batches_by_status(BatchStatus::Created)
+            .await
+            .unwrap();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].txid, "built_btc_tx");
+        assert_eq!(wallet_inner.broadcasted_txids(), vec!["built_btc_tx".to_string()]);
+
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn recover_prepared_batches_promotes_pending_transactions_without_rebroadcast(
+        pool: sqlx::PgPool,
+    ) -> sqlx::Result<()> {
+        let db = crate::db::Database::from_pool(pool).await.unwrap();
+        let payment_repository = Arc::new(db.payments());
+        let broadcasted_transaction_repository = Arc::new(db.broadcasted_transactions());
+
+        let wallet_inner = Arc::new(RecordingWallet::new(ChainType::Base));
+        wallet_inner.set_transaction_state(TransactionState::Pending);
+        let wallet: Arc<dyn crate::wallet::Wallet> = wallet_inner.clone();
+
+        let mut wallet_manager = WalletManager::new();
+        wallet_manager.register(ChainType::Base, wallet);
+        let wallet_manager = Arc::new(wallet_manager);
+
+        let (otc_tx, _otc_rx) = mpsc::unbounded_channel();
+        let mut join_set = JoinSet::new();
+        let payment_manager = PaymentManager::new(
+            wallet_manager,
+            payment_repository.clone(),
+            broadcasted_transaction_repository,
+            HashMap::new(),
+            Arc::new(QuoteBalanceStrategy::new(10_000)),
+            otc_tx,
+            CancellationToken::new(),
+            &mut join_set,
+        );
+
+        payment_repository
+            .persist_prepared_batch(
+                vec![Uuid::now_v7()],
+                ChainType::Base,
+                [9u8; 32],
+                0,
+                &PreparedBatchPayment::Evm {
+                    txid: "pending_tx".to_string(),
+                    txdata: vec![1, 2, 3],
+                    reserved_deposit_keys: Vec::new(),
+                },
+            )
+            .await
+            .unwrap();
+
+        payment_manager.recover_prepared_batches().await.unwrap();
+
+        let created = payment_repository
+            .get_batches_by_status(BatchStatus::Created)
+            .await
+            .unwrap();
+        assert_eq!(created.len(), 1);
+        assert_eq!(created[0].txid, "pending_tx");
+        assert!(wallet_inner.broadcasted_txids().is_empty());
+
+        Ok(())
     }
 }

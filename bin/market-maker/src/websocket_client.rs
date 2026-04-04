@@ -2,7 +2,11 @@ use async_trait::async_trait;
 use ezsockets::ClientConfig;
 use serde::Serialize;
 use snafu::{location, prelude::*};
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
+};
+use tokio::sync::mpsc;
 use tracing::{info, warn};
 
 #[derive(Debug, Snafu)]
@@ -18,6 +22,17 @@ pub enum WebSocketError {
 }
 
 pub type Result<T, E = WebSocketError> = std::result::Result<T, E>;
+
+const DEFAULT_ORDERED_INBOUND_QUEUE_CAPACITY: usize = 1024;
+
+#[derive(Clone)]
+pub enum InboundHandlingMode {
+    Concurrent,
+    Ordered {
+        queue_label: &'static str,
+        capacity: usize,
+    },
+}
 
 /// Generic trait for handling WebSocket protocol messages
 ///
@@ -35,6 +50,12 @@ pub struct WebSocketHandle {
     client: ezsockets::Client<EzSocketAdapter>,
 }
 
+impl Drop for WebSocketHandle {
+    fn drop(&mut self) {
+        let _ = self.client.close(None);
+    }
+}
+
 impl WebSocketHandle {
     /// Send a serializable message through the WebSocket
     pub fn send<T: Serialize>(&self, message: &T) -> Result<()> {
@@ -50,6 +71,7 @@ pub struct WebSocketClient<H: MessageHandler> {
     api_key_id: String,
     api_secret: String,
     handler: Arc<H>,
+    inbound_mode: InboundHandlingMode,
 }
 
 impl<H: MessageHandler> WebSocketClient<H> {
@@ -60,7 +82,18 @@ impl<H: MessageHandler> WebSocketClient<H> {
             api_key_id,
             api_secret,
             handler: Arc::new(handler),
+            inbound_mode: InboundHandlingMode::Concurrent,
         }
+    }
+
+    /// Process inbound messages in strict receive order using a bounded queue.
+    #[must_use]
+    pub fn with_ordered_inbound(mut self, queue_label: &'static str) -> Self {
+        self.inbound_mode = InboundHandlingMode::Ordered {
+            queue_label,
+            capacity: DEFAULT_ORDERED_INBOUND_QUEUE_CAPACITY,
+        };
+        self
     }
 
     /// Connect to the WebSocket server and return a handle and future
@@ -86,11 +119,9 @@ impl<H: MessageHandler> WebSocketClient<H> {
         // let _span_guard = span.enter();
 
         let handler = self.handler.clone();
+        let inbound_mode = self.inbound_mode.clone();
         let (client, future) = ezsockets::connect(
-            move |client| EzSocketAdapter {
-                handler: handler.clone(),
-                client,
-            },
+            move |client| EzSocketAdapter::new(handler.clone(), client, inbound_mode.clone()),
             config,
         )
         .await;
@@ -112,6 +143,100 @@ impl<H: MessageHandler> WebSocketClient<H> {
 struct EzSocketAdapter {
     handler: Arc<dyn MessageHandlerErased>,
     client: ezsockets::Client<Self>,
+    ordered_processor: Option<OrderedInboundProcessor>,
+}
+
+struct OrderedInboundProcessor {
+    tx: mpsc::Sender<String>,
+    depth: Arc<AtomicUsize>,
+    queue_label: &'static str,
+}
+
+impl OrderedInboundProcessor {
+    fn new(
+        handler: Arc<dyn MessageHandlerErased>,
+        client: ezsockets::Client<EzSocketAdapter>,
+        queue_label: &'static str,
+        capacity: usize,
+    ) -> Self {
+        let (tx, mut rx) = mpsc::channel::<String>(capacity);
+        let depth = Arc::new(AtomicUsize::new(0));
+        emit_inbound_queue_depth_metric(queue_label, 0);
+
+        let worker_depth = depth.clone();
+        tokio::spawn(async move {
+            while let Some(text) = rx.recv().await {
+                let remaining = worker_depth.fetch_sub(1, Ordering::Relaxed) - 1;
+                emit_inbound_queue_depth_metric(queue_label, remaining);
+
+                if let Some(response_json) = handler.handle_text_message(&text).await {
+                    if let Err(e) = client.text(response_json) {
+                        warn!(
+                            "Failed to send ordered response for {}: {} at {}",
+                            queue_label,
+                            e,
+                            location!()
+                        );
+                    }
+                }
+            }
+
+            emit_inbound_queue_depth_metric(queue_label, 0);
+        });
+
+        Self {
+            tx,
+            depth,
+            queue_label,
+        }
+    }
+
+    async fn enqueue(&self, text: String) -> std::result::Result<(), mpsc::error::SendError<()>> {
+        let permit = self
+            .tx
+            .reserve()
+            .await
+            .map_err(|_| mpsc::error::SendError(()))?;
+        let queued = self.depth.fetch_add(1, Ordering::Relaxed) + 1;
+        emit_inbound_queue_depth_metric(self.queue_label, queued);
+        permit.send(text);
+        Ok(())
+    }
+}
+
+fn emit_inbound_queue_depth_metric(queue_label: &'static str, depth: usize) {
+    metrics::gauge!(
+        "mm_ws_inbound_queue_len",
+        "client" => queue_label.to_string()
+    )
+    .set(depth as f64);
+}
+
+impl EzSocketAdapter {
+    fn new(
+        handler: Arc<dyn MessageHandlerErased>,
+        client: ezsockets::Client<Self>,
+        inbound_mode: InboundHandlingMode,
+    ) -> Self {
+        let ordered_processor = match inbound_mode {
+            InboundHandlingMode::Concurrent => None,
+            InboundHandlingMode::Ordered {
+                queue_label,
+                capacity,
+            } => Some(OrderedInboundProcessor::new(
+                handler.clone(),
+                client.clone(),
+                queue_label,
+                capacity,
+            )),
+        };
+
+        Self {
+            handler,
+            client,
+            ordered_processor,
+        }
+    }
 }
 
 /// Type-erased message handler for use in EzSocketAdapter
@@ -138,6 +263,13 @@ impl ezsockets::ClientExt for EzSocketAdapter {
         &mut self,
         text: ezsockets::Utf8Bytes,
     ) -> std::result::Result<(), ezsockets::Error> {
+        if let Some(processor) = &self.ordered_processor {
+            if processor.enqueue(text.to_string()).await.is_err() {
+                warn!("Ordered inbound queue closed unexpectedly");
+            }
+            return Ok(());
+        }
+
         let handler = self.handler.clone();
         let client = self.client.clone();
         tokio::spawn(async move {
@@ -169,5 +301,87 @@ impl ezsockets::ClientExt for EzSocketAdapter {
             }
         });
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::SinkExt;
+    use std::time::Duration;
+    use tokio::net::TcpListener;
+    use tokio::sync::{Mutex, Notify};
+    use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+    #[derive(Clone)]
+    struct RecordingHandler {
+        processed: Arc<Mutex<Vec<String>>>,
+        notify: Arc<Notify>,
+    }
+
+    #[async_trait]
+    impl MessageHandler for RecordingHandler {
+        async fn handle_text(&self, text: &str) -> Option<String> {
+            if text.contains("snapshot") {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+
+            let mut processed = self.processed.lock().await;
+            processed.push(text.to_string());
+            if processed.len() == 2 {
+                self.notify.notify_waiters();
+            }
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn ordered_inbound_mode_processes_messages_in_receive_order() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let mut websocket = accept_async(stream).await.unwrap();
+            websocket
+                .send(Message::Text("snapshot".to_string()))
+                .await
+                .unwrap();
+            websocket
+                .send(Message::Text("deposit_confirmed".to_string()))
+                .await
+                .unwrap();
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let _ = websocket.close(None).await;
+        });
+
+        let processed = Arc::new(Mutex::new(Vec::new()));
+        let notify = Arc::new(Notify::new());
+        let client = WebSocketClient::new(
+            format!("ws://{}", addr),
+            "test-api-id".to_string(),
+            "test-api-secret".to_string(),
+            RecordingHandler {
+                processed: processed.clone(),
+                notify: notify.clone(),
+            },
+        )
+        .with_ordered_inbound("test_otc");
+
+        let (handle, future) = client.connect().await.unwrap();
+        let client_task = tokio::spawn(future);
+
+        tokio::time::timeout(Duration::from_secs(5), notify.notified())
+            .await
+            .unwrap();
+
+        assert_eq!(
+            *processed.lock().await,
+            vec!["snapshot".to_string(), "deposit_confirmed".to_string()]
+        );
+
+        drop(handle);
+        let _ = server.await;
+        let _ = client_task.await;
     }
 }

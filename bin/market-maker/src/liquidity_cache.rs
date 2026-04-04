@@ -1,26 +1,15 @@
-use crate::balance_strat::QuoteBalanceStrategy;
-use crate::liquidity_lock::LiquidityLockManager;
-use crate::wallet::{WalletBalance, WalletManager, WalletResult};
+use crate::wallet::{WalletManager, WalletResult};
 use alloy::primitives::U256;
-use otc_models::{
-    constants::{CB_BTC_CONTRACT_ADDRESS, SUPPORTED_TOKENS_BY_CHAIN},
-    ChainType, Currency, TokenIdentifier,
-};
+use otc_models::{constants::CB_BTC_CONTRACT_ADDRESS, ChainType, Currency, TokenIdentifier};
 use otc_protocols::rfq::TradingPairLiquidity;
-use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::RwLock;
-use tokio::task::JoinSet;
-use tracing::{error, warn};
+use tracing::warn;
 
-const BALANCE_UPDATE_INTERVAL: Duration = Duration::from_secs(15);
-const LIQUIDITY_COMPUTE_INTERVAL: Duration = Duration::from_secs(1);
+const CAPACITY_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Normalize a TokenIdentifier to lowercase for case-insensitive lookup.
-///
-/// Ethereum addresses can be represented in different cases (checksummed, lowercase, uppercase),
-/// but they all represent the same address. This function normalizes to lowercase.
 #[inline]
 fn normalize_token(token: &TokenIdentifier) -> TokenIdentifier {
     token.normalize()
@@ -28,244 +17,72 @@ fn normalize_token(token: &TokenIdentifier) -> TokenIdentifier {
 
 pub struct LiquidityCache {
     cached_data: Arc<RwLock<Vec<TradingPairLiquidity>>>,
-    balance_map: Arc<RwLock<HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>>>>,
-    balance_strategy: Arc<QuoteBalanceStrategy>,
-    lock_manager: Arc<LiquidityLockManager>,
 }
 
 impl LiquidityCache {
-    /// Create a new liquidity cache and spawn background tasks to keep it updated.
-    ///
-    /// Two background tasks are spawned:
-    /// 1. Balance update task (every 15 seconds): Fetches fresh balances from wallets
-    /// 2. Liquidity computation task (every 1 second): Computes liquidity using cached balances
-    ///
-    /// This separation allows liquidity to reflect lock changes quickly (every 1 second) while
-    /// minimizing wallet API calls (balances only update every 15 seconds).
-    /// `get_liquidity()` will always return the cached data without blocking on computation.
+    /// Create an empty boot-time route-capacity cache.
     #[must_use]
-    pub fn new(
-        wallet_manager: Arc<WalletManager>,
-        balance_strategy: Arc<QuoteBalanceStrategy>,
-        lock_manager: Arc<LiquidityLockManager>,
-        evm_chain: ChainType,
-        join_set: &mut JoinSet<crate::Result<()>>,
-    ) -> Self {
-        let cached_data = Arc::new(RwLock::new(Vec::new()));
-        let balance_map = Arc::new(RwLock::new(HashMap::new()));
-
-        let balance_map_task = balance_map.clone();
-        let wallet_manager_task = wallet_manager.clone();
-
-        // Spawn background task to update balance cache (every 15 seconds)
-        join_set.spawn(async move {
-            let mut interval = tokio::time::interval(BALANCE_UPDATE_INTERVAL);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-            loop {
-                interval.tick().await;
-
-                // Update balance cache by fetching fresh balances from wallets
-                let mut updated_balances: HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>> =
-                    HashMap::new();
-
-                for chain in wallet_manager_task.registered_chains() {
-                    let Some(wallet) = wallet_manager_task.get(chain) else {
-                        continue;
-                    };
-
-                    let Some(tokens) = SUPPORTED_TOKENS_BY_CHAIN.get(&chain) else {
-                        continue;
-                    };
-
-                    let mut token_balances = HashMap::new();
-                    for token in tokens {
-                        match wallet.balance(token).await {
-                            Ok(balance) => {
-                                // Normalize token to lowercase for case-insensitive lookups
-                                token_balances.insert(normalize_token(token), balance);
-                            }
-                            Err(error) => {
-                                warn!(
-                                    "Failed to refresh cached balance for chain {:?}, token {:?}: {:?}",
-                                    chain, token, error
-                                );
-                            }
-                        }
-                    }
-
-                    if !token_balances.is_empty() {
-                        updated_balances.insert(chain, token_balances);
-                    }
-                }
-
-                // Update balance map
-                {
-                    let mut guard = balance_map_task.write().await;
-                    *guard = updated_balances;
-                }
-            }
-        });
-
-        // Spawn separate background task to compute liquidity (every 1 second)
-        // This uses cached balances, so it's fast and reflects lock changes quickly
-        let cached_data_task = cached_data.clone();
-        let balance_map_task = balance_map.clone();
-        let balance_strategy_task = balance_strategy.clone();
-        let lock_manager_task = lock_manager.clone();
-
-        let evm_chain_task = evm_chain;
-
-        join_set.spawn(async move {
-            // Compute liquidity immediately on startup (don't wait for first tick)
-            // This ensures data is available as soon as balances are populated
-            // Emit metrics on startup
-            match Self::compute_liquidity_static(
-                &balance_strategy_task,
-                &lock_manager_task,
-                &balance_map_task,
-                evm_chain_task,
-                true, // emit_metrics on startup
-            )
-            .await
-            {
-                Ok(trading_pairs) => {
-                    let mut cache = cached_data_task.write().await;
-                    *cache = trading_pairs;
-                }
-                Err(e) => {
-                    error!("Failed to compute initial liquidity: {}", e);
-                }
-            }
-
-            let mut interval = tokio::time::interval(LIQUIDITY_COMPUTE_INTERVAL);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-            let mut tick_count = 0u32;
-
-            loop {
-                interval.tick().await;
-                tick_count += 1;
-
-                // Emit metrics every 10 seconds (10 ticks at 1 second interval)
-                let emit_metrics = tick_count % 10 == 0;
-
-                // Compute liquidity using cached balances (reflects lock changes quickly)
-                match Self::compute_liquidity_static(
-                    &balance_strategy_task,
-                    &lock_manager_task,
-                    &balance_map_task,
-                    evm_chain_task,
-                    emit_metrics,
-                )
-                .await
-                {
-                    Ok(trading_pairs) => {
-                        let mut cache = cached_data_task.write().await;
-                        *cache = trading_pairs;
-                    }
-                    Err(e) => {
-                        error!("Failed to compute liquidity in background task: {}", e);
-                    }
-                }
-            }
-        });
-
+    pub fn new() -> Self {
         Self {
-            cached_data,
-            balance_map,
-            balance_strategy,
-            lock_manager,
+            cached_data: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
-    /// Get the current cached liquidity data.
+    /// Populate the boot-time route-capacity snapshot and keep it cached for the process lifetime.
     ///
-    /// This method always returns immediately with the cached data and never blocks on computation.
-    /// The cache is updated asynchronously by a background task.
-    pub async fn get_liquidity(&self) -> Vec<TradingPairLiquidity> {
-        let cache = self.cached_data.read().await;
-        cache.clone()
-    }
-
-    /// Get the cached balance for a specific chain and token.
-    ///
-    /// Token addresses are normalized to lowercase for case-insensitive lookup.
-    /// Returns `None` if the balance is not cached or not available.
-    pub async fn get_cached_balance(
+    /// Capacity is computed from total wallet balances at startup and does not shrink as swaps
+    /// arrive. If balances are not readable yet, initialization retries until successful.
+    pub async fn initialize(
         &self,
-        chain: ChainType,
-        token: &TokenIdentifier,
-    ) -> Option<WalletBalance> {
-        let guard = self.balance_map.read().await;
-        let normalized_token = normalize_token(token);
-        guard.get(&chain)?.get(&normalized_token).cloned()
-    }
-
-    /// Get the available balance for a trading pair (cached balance minus locked amount).
-    ///
-    /// Returns `None` if the balance is not cached or not available.
-    /// Returns the raw available balance (NOT applying balance strategy).
-    pub async fn get_available_balance_for_pair(
-        &self,
-        from: &Currency,
-        to: &Currency,
-    ) -> Option<U256> {
-        let balance = self.get_cached_balance(to.chain, &to.token).await?;
-
-        // Get fresh lock data for this trading pair
-        let locked_amount = self.lock_manager.get_locked_amount(from, to).await;
-
-        // Calculate available balance (what's actually available for new quotes)
-        let available_balance = balance.total_balance.saturating_sub(locked_amount);
-
-        Some(available_balance)
-    }
-
-    /// Get the maximum output amount for a trading pair after applying balance strategy.
-    ///
-    /// This is consistent with what the liquidity endpoint reports.
-    /// Returns `None` if the balance is not cached or not available.
-    pub async fn get_max_output_for_pair(&self, from: &Currency, to: &Currency) -> Option<U256> {
-        let available_balance = self.get_available_balance_for_pair(from, to).await?;
-        Some(self.balance_strategy.max_output_amount(available_balance))
-    }
-
-    /// Check if a quote can be filled for a trading pair.
-    ///
-    /// Returns `true` if the quote can be filled, `false` otherwise.
-    pub async fn can_fill_quote_for_pair(
-        &self,
-        from: &Currency,
-        to: &Currency,
-        quote_amount: U256,
-    ) -> bool {
-        let Some(available_balance) = self.get_available_balance_for_pair(from, to).await else {
-            return false;
-        };
-
-        self.balance_strategy
-            .can_fill_quote(quote_amount, available_balance)
-    }
-
-    /// Compute liquidity for the two supported trading pairs: BTC->cbBTC and cbBTC->BTC.
-    ///
-    /// This is used by the background task and doesn't require `&self`.
-    /// Uses cached balances from balance_map instead of calling wallet.balance() directly.
-    ///
-    /// # Arguments
-    /// * `evm_chain` - The EVM chain (Ethereum or Base) to use for cbBTC
-    /// * `emit_metrics` - If true, emits Prometheus metrics. Set to false to reduce metric update frequency.
-    async fn compute_liquidity_static(
-        balance_strategy: &QuoteBalanceStrategy,
-        lock_manager: &LiquidityLockManager,
-        balance_map: &Arc<RwLock<HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>>>>,
+        wallet_manager: Arc<WalletManager>,
         evm_chain: ChainType,
-        emit_metrics: bool,
-    ) -> WalletResult<Vec<TradingPairLiquidity>> {
-        let mut trading_pairs = Vec::new();
+    ) -> crate::Result<()> {
+        loop {
+            match Self::compute_boot_capacity_snapshot(&wallet_manager, evm_chain).await {
+                Ok(trading_pairs) => {
+                    Self::emit_capacity_metrics(&trading_pairs);
+                    let mut cache = self.cached_data.write().await;
+                    *cache = trading_pairs;
+                    return Ok(());
+                }
+                Err(error) => {
+                    warn!(
+                        "Failed to compute boot-time route capacity snapshot: {}",
+                        error
+                    );
+                    tokio::time::sleep(CAPACITY_RETRY_INTERVAL).await;
+                }
+            }
+        }
+    }
 
-        // Define the two currencies we support
+    pub async fn has_snapshot(&self) -> bool {
+        !self.cached_data.read().await.is_empty()
+    }
+
+    /// Get the cached route-capacity data.
+    pub async fn get_liquidity(&self) -> Vec<TradingPairLiquidity> {
+        self.cached_data.read().await.clone()
+    }
+
+    /// Get the maximum payout amount for a trading pair from the boot-time snapshot.
+    pub async fn get_max_output_for_pair(&self, from: &Currency, to: &Currency) -> Option<U256> {
+        let cache = self.cached_data.read().await;
+        cache
+            .iter()
+            .find(|pair| {
+                pair.from.chain == from.chain
+                    && normalize_token(&pair.from.token) == normalize_token(&from.token)
+                    && pair.to.chain == to.chain
+                    && normalize_token(&pair.to.token) == normalize_token(&to.token)
+            })
+            .map(|pair| pair.max_amount)
+    }
+
+    async fn compute_boot_capacity_snapshot(
+        wallet_manager: &WalletManager,
+        evm_chain: ChainType,
+    ) -> WalletResult<Vec<TradingPairLiquidity>> {
         let btc = Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -277,85 +94,41 @@ impl LiquidityCache {
             decimals: 8,
         };
 
-        // Trading pair 1: BTC -> cbBTC (user sends BTC, MM provides cbBTC)
-        if let Some(available_balance) =
-            Self::get_available_balance_static(&btc, &cbbtc, lock_manager, balance_map).await
-        {
-            let max_amount = balance_strategy.max_output_amount(available_balance);
+        let bitcoin_wallet = wallet_manager
+            .get(ChainType::Bitcoin)
+            .expect("bitcoin wallet must be registered");
+        let evm_wallet = wallet_manager
+            .get(evm_chain)
+            .expect("configured evm wallet must be registered");
 
-            if emit_metrics {
-                let evm_chain_str = match evm_chain {
-                    ChainType::Ethereum => "ethereum",
-                    ChainType::Base => "base",
-                    _ => "unknown",
-                };
-                metrics::gauge!(
-                    "mm_available_liquidity_sats",
-                    "market" => format!("bitcoin:Native-{}:{}", evm_chain_str, CB_BTC_CONTRACT_ADDRESS)
-                )
-                .set(available_balance.to::<u64>() as f64);
-            }
+        let btc_total = bitcoin_wallet
+            .balance(&TokenIdentifier::Native)
+            .await?
+            .total_balance;
+        let cbbtc_total = evm_wallet.balance(&cbbtc.token).await?.total_balance;
 
-            trading_pairs.push(TradingPairLiquidity {
+        Ok(vec![
+            TradingPairLiquidity {
                 from: btc.clone(),
                 to: cbbtc.clone(),
-                max_amount,
-            });
-        }
-
-        // Trading pair 2: cbBTC -> BTC (user sends cbBTC, MM provides BTC)
-        if let Some(available_balance) =
-            Self::get_available_balance_static(&cbbtc, &btc, lock_manager, balance_map).await
-        {
-            let max_amount = balance_strategy.max_output_amount(available_balance);
-
-            if emit_metrics {
-                let evm_chain_str = match evm_chain {
-                    ChainType::Ethereum => "ethereum",
-                    ChainType::Base => "base",
-                    _ => "unknown",
-                };
-                metrics::gauge!(
-                    "mm_available_liquidity_sats",
-                    "market" => format!("{}:{}-bitcoin:Native", evm_chain_str, CB_BTC_CONTRACT_ADDRESS)
-                )
-                .set(available_balance.to::<u64>() as f64);
-            }
-
-            trading_pairs.push(TradingPairLiquidity {
+                max_amount: cbbtc_total,
+            },
+            TradingPairLiquidity {
                 from: cbbtc,
                 to: btc,
-                max_amount,
-            });
-        }
-
-        Ok(trading_pairs)
+                max_amount: btc_total,
+            },
+        ])
     }
 
-    /// Static helper that mimics get_available_balance_for_pair but for background task use.
-    ///
-    /// Gets the available balance for a trading pair (total balance - locked amount).
-    /// Token addresses are normalized to lowercase for case-insensitive lookup.
-    async fn get_available_balance_static(
-        from: &Currency,
-        to: &Currency,
-        lock_manager: &LiquidityLockManager,
-        balance_map: &Arc<RwLock<HashMap<ChainType, HashMap<TokenIdentifier, WalletBalance>>>>,
-    ) -> Option<U256> {
-        // Get cached balance for the "to" token (what MM provides)
-        // Normalize token for case-insensitive lookup
-        let normalized_token = normalize_token(&to.token);
-        let balance_guard = balance_map.read().await;
-        let balance = balance_guard
-            .get(&to.chain)
-            .and_then(|balances| balances.get(&normalized_token))?;
-
-        // Get locked amount for this trading pair
-        let locked_amount = lock_manager.get_locked_amount(from, to).await;
-
-        // Calculate available balance
-        let available_balance = balance.total_balance.saturating_sub(locked_amount);
-
-        Some(available_balance)
+    fn emit_capacity_metrics(trading_pairs: &[TradingPairLiquidity]) {
+        for pair in trading_pairs {
+            metrics::gauge!(
+                "mm_theoretical_route_capacity_sats",
+                "from_chain" => pair.from.chain.to_db_string().to_string(),
+                "to_chain" => pair.to.chain.to_db_string().to_string(),
+            )
+            .set(pair.max_amount.to::<u64>() as f64);
+        }
     }
 }

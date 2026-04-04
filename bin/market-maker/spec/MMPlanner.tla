@@ -84,6 +84,9 @@ vars ==
 
 RECURSIVE ObligationPayoutSum(_)
 RECURSIVE ObligationSettlementSum(_)
+RECURSIVE OutboundBatchPayoutSum(_)
+RECURSIVE PendingSettlementAmountSum(_)
+RECURSIVE RebalanceAmountSum(_)
 
 ObligationPayoutSum(obs) ==
     IF obs = {} THEN
@@ -98,6 +101,27 @@ ObligationSettlementSum(obs) ==
     ELSE
         LET o == CHOOSE x \in obs : TRUE
         IN o.settlement_amount + ObligationSettlementSum(obs \ {o})
+
+OutboundBatchPayoutSum(bs) ==
+    IF bs = {} THEN
+        0
+    ELSE
+        LET b == CHOOSE x \in bs : TRUE
+        IN b.payout_amount + OutboundBatchPayoutSum(bs \ {b})
+
+PendingSettlementAmountSum(ps) ==
+    IF ps = {} THEN
+        0
+    ELSE
+        LET s == CHOOSE x \in ps : TRUE
+        IN s.amount + PendingSettlementAmountSum(ps \ {s})
+
+RebalanceAmountSum(rs) ==
+    IF rs = {} THEN
+        0
+    ELSE
+        LET r == CHOOSE x \in rs : TRUE
+        IN r.amount + RebalanceAmountSum(rs \ {r})
 
 Min2(x, y) == IF x < y THEN x ELSE y
 
@@ -302,6 +326,15 @@ PendingSettlementRecord(batch) ==
       amount         |-> batch.settlement_amount,
       obligation_ids |-> batch.obligation_ids ]
 
+FreeInventoryTotal ==
+    available_inventory[AssetA] + available_inventory[AssetB]
+
+TotalTrackedInventory ==
+    FreeInventoryTotal
+        + OutboundBatchPayoutSum(outbound_batches)
+        + PendingSettlementAmountSum(pending_settlements)
+        + RebalanceAmountSum(rebalances)
+
 Init ==
     /\ obligations = {}
     /\ outbound_batches = {}
@@ -313,7 +346,7 @@ CreateObligation ==
     /\ NextId <= MaxObligationId
     /\ \E asset \in Assets :
         \E payoutAmount \in Amounts :
-            \E settlementAmount \in Amounts :
+            \E settlementAmount \in payoutAmount..MaxAmount :
                 \E createdAt \in AllowedCreatedAts :
                     /\ obligations' =
                         obligations \cup {
@@ -405,6 +438,9 @@ Next ==
 
 Spec ==
     Init /\ [][Next]_vars
+
+NonDecreasingTotalTrackedInventory ==
+    [][TotalTrackedInventory' >= TotalTrackedInventory]_vars
 
 TypeOK ==
     /\ obligations \subseteq ObligationType
@@ -507,6 +543,37 @@ OldestFirstActiveOutboundBatches ==
 \* - a rebalance into AssetB is already active
 \* - a new AssetA obligation arrives while that rebalance is active
 \* - the planner starts an AssetA outbound batch before the rebalance resolves
+
+\* Scenario helper for a targeted deep monotonicity run:
+\* - AssetA starts with enough free inventory to pay one outbound obligation
+\* - AssetB starts blocked
+\* - the first planner step can start both an AssetA outbound batch and an
+\*   AssetA -> AssetB rebalance
+\* - successful outbound completion strictly increases tracked inventory
+\*   because settlement_amount > payout_amount for obligation 1
+
+TargetedDeepMonotonicityInit ==
+    /\ obligations =
+        {
+            [ id                |-> 1,
+              payout_asset      |-> AssetA,
+              payout_amount     |-> 2,
+              settlement_asset  |-> AssetB,
+              settlement_amount |-> 3,
+              created_at        |-> 1,
+              state             |-> "open" ],
+            [ id                |-> 2,
+              payout_asset      |-> AssetB,
+              payout_amount     |-> 2,
+              settlement_asset  |-> AssetA,
+              settlement_amount |-> 2,
+              created_at        |-> 1,
+              state             |-> "open" ]
+        }
+    /\ available_inventory = [a \in Assets |-> IF a = AssetA THEN 5 ELSE 0]
+    /\ outbound_batches = {}
+    /\ pending_settlements = {}
+    /\ rebalances = {}
 
 InterleavingScenarioInit ==
     /\ obligations =

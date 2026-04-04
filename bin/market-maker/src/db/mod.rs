@@ -2,20 +2,25 @@ pub mod broadcasted_transaction_repo;
 pub mod deposit_repo;
 pub mod payment_repo;
 pub mod quote_repo;
+pub mod rebalance_repo;
 
 pub use broadcasted_transaction_repo::{
     BroadcastedTransactionRepository, BroadcastedTransactionRepositoryError,
     BroadcastedTransactionRepositoryResult,
 };
 pub use deposit_repo::{
-    Deposit, DepositRepository, DepositRepositoryError, DepositRepositoryResult, DepositStore,
-    FillStatus,
+    AssociatedSwapDeposit, Deposit, DepositRepository, DepositRepositoryError,
+    DepositRepositoryResult, DepositStore, FillStatus,
 };
 pub use payment_repo::{
     BatchStatus, FeeSettlementAckStatus, PaymentRepository, PaymentRepositoryError,
     PaymentRepositoryResult, StoredBatch, StoredFeeSettlement,
 };
 pub use quote_repo::{QuoteRepository, QuoteRepositoryError, QuoteRepositoryResult};
+pub use rebalance_repo::{
+    RebalanceJobState, RebalanceRepository, RebalanceRepositoryError, RebalanceRepositoryResult,
+    StoredRebalance,
+};
 
 use snafu::prelude::*;
 use sqlx::{
@@ -88,6 +93,11 @@ impl Database {
     #[must_use]
     pub fn payments(&self) -> PaymentRepository {
         PaymentRepository::new(self.pool())
+    }
+
+    #[must_use]
+    pub fn rebalances(&self) -> RebalanceRepository {
+        RebalanceRepository::new(self.pool())
     }
 
     #[must_use]

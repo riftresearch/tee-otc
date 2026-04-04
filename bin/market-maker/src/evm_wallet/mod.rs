@@ -3,6 +3,7 @@ pub mod transaction_broadcaster;
 use std::{str::FromStr, sync::Arc, time::Duration};
 
 use alloy::{
+    eips::Encodable2718,
     hex,
     network::{TransactionBuilder, TransactionBuilder7702},
     primitives::{Address, TxHash, U256},
@@ -26,7 +27,7 @@ use tracing::info;
 
 use crate::{
     db::{Deposit, DepositRepository, DepositStore, FillStatus},
-    wallet::{Wallet, WalletBalance},
+    wallet::{PreparedBatchPayment, TransactionState, Wallet, WalletBalance},
     WalletError, WalletResult,
 };
 
@@ -203,6 +204,214 @@ impl Wallet for EVMWallet {
         };
 
         Ok((current_block - included_block) as u64)
+    }
+
+    async fn prepare_batch_payment(
+        &self,
+        payments: Vec<Payment>,
+        mm_payment_validation: Option<MarketMakerPaymentVerification>,
+    ) -> WalletResult<PreparedBatchPayment> {
+        let first_payment = &payments[0];
+        if first_payment.lot.currency.chain != self.chain_type {
+            return Err(WalletError::UnsupportedToken {
+                token: first_payment.lot.currency.token.clone(),
+                loc: location!(),
+            });
+        }
+        ensure_valid_token(self.chain_type, &first_payment.lot.currency.token)?;
+        for payment in &payments {
+            if payment.lot.currency != first_payment.lot.currency {
+                tracing::error!(
+                    "Payment set has different currencies; refusing batch of {} payment(s)",
+                    payments.len()
+                );
+                return Err(WalletError::InvalidBatchPaymentRequest { loc: location!() });
+            }
+        }
+
+        let mut funding_executions = Vec::new();
+        let mut reserved_deposit_keys = Vec::new();
+
+        if let Some(deposit_repository) = &self.deposit_repository {
+            for payment in &payments {
+                let (consolidation_executions, fill_status) = get_funding_executions_from_deposits(
+                    deposit_repository,
+                    &payment.lot,
+                    &self.provider,
+                    &self.tx_broadcaster.sender,
+                    self.max_deposits_per_lot,
+                )
+                .await?;
+
+                match fill_status {
+                    FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
+                        reserved_deposit_keys
+                            .extend(deposits.iter().map(|d| d.private_key.clone()));
+                    }
+                    FillStatus::Empty => {}
+                }
+
+                funding_executions.extend(consolidation_executions);
+                if funding_executions.len() >= self.max_deposits_per_lot {
+                    break;
+                }
+            }
+        }
+
+        let mut transaction_request = create_evm_transfer_transaction(
+            self.chain_type,
+            &self.tx_broadcaster.sender,
+            &self.provider,
+            payments,
+            mm_payment_validation,
+            funding_executions,
+        )
+        .await?;
+        transaction_request.from = Some(self.tx_broadcaster.sender);
+        transaction_request.nonce = Some(
+            self.provider
+                .get_transaction_count(self.tx_broadcaster.sender)
+                .pending()
+                .await
+                .map_err(|e| WalletError::RpcCallError {
+                    source: e,
+                    loc: location!(),
+                })?,
+        );
+
+        let sendable = self
+            .provider
+            .fill(transaction_request)
+            .await
+            .map_err(|e| WalletError::TransactionCreationFailed {
+                reason: e.to_string(),
+            })?;
+        let envelope = sendable
+            .try_into_envelope()
+            .map_err(|e| WalletError::TransactionCreationFailed {
+                reason: format!("expected prepared envelope, got request: {:?}", e.into_inner()),
+            })?;
+
+        Ok(PreparedBatchPayment::Evm {
+            txid: envelope.tx_hash().to_string(),
+            txdata: envelope.encoded_2718(),
+            reserved_deposit_keys,
+        })
+    }
+
+    async fn broadcast_prepared_batch(
+        &self,
+        prepared_batch: &PreparedBatchPayment,
+    ) -> WalletResult<String> {
+        let (expected_txid, txdata) = match prepared_batch {
+            PreparedBatchPayment::Evm { txid, txdata, .. } => (txid, txdata),
+            PreparedBatchPayment::Bitcoin { .. } => {
+                return Err(WalletError::TransactionCreationFailed {
+                    reason: "attempted to broadcast non-EVM prepared batch with EVM wallet"
+                        .to_string(),
+                });
+            }
+        };
+
+        let pending_tx = self
+            .provider
+            .send_raw_transaction(txdata)
+            .await
+            .map_err(|e| WalletError::RpcCallError {
+                source: e,
+                loc: location!(),
+            })?;
+        let broadcast_txid = pending_tx.tx_hash().to_string();
+        if &broadcast_txid != expected_txid {
+            return Err(WalletError::TransactionCreationFailed {
+                reason: format!(
+                    "prepared txid {expected_txid} did not match broadcast txid {broadcast_txid}"
+                ),
+            });
+        }
+
+        Ok(broadcast_txid)
+    }
+
+    async fn discard_prepared_batch(
+        &self,
+        prepared_batch: &PreparedBatchPayment,
+    ) -> WalletResult<()> {
+        let reserved_deposit_keys = match prepared_batch {
+            PreparedBatchPayment::Evm {
+                reserved_deposit_keys,
+                ..
+            } => reserved_deposit_keys,
+            PreparedBatchPayment::Bitcoin { .. } => {
+                return Err(WalletError::TransactionCreationFailed {
+                    reason: "attempted to discard non-EVM prepared batch with EVM wallet"
+                        .to_string(),
+                });
+            }
+        };
+
+        if !reserved_deposit_keys.is_empty() {
+            if let Some(deposit_repository) = &self.deposit_repository {
+                deposit_repository
+                    .unreserve_deposits(reserved_deposit_keys)
+                    .await
+                    .map_err(|e| WalletError::DepositRepositoryError {
+                        source: e,
+                        loc: location!(),
+                    })?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn lookup_transaction_state(&self, tx_hash: &str) -> WalletResult<TransactionState> {
+        let tx_hash: TxHash =
+            tx_hash
+                .parse()
+                .map_err(|e| WalletError::TransactionCreationFailed {
+                    reason: format!("invalid tx hash: {e}"),
+                })?;
+
+        if let Some(receipt) = self
+            .provider
+            .get_transaction_receipt(tx_hash)
+            .await
+            .map_err(|e| WalletError::RpcCallError {
+                source: e,
+                loc: location!(),
+            })?
+        {
+            if let Some(included_block) = receipt.block_number {
+                let current_block =
+                    self.provider
+                        .get_block_number()
+                        .await
+                        .map_err(|e| WalletError::RpcCallError {
+                            source: e,
+                            loc: location!(),
+                        })?;
+                return Ok(TransactionState::Confirmed(
+                    (current_block - included_block) as u64,
+                ));
+            }
+            return Ok(TransactionState::Pending);
+        }
+
+        let pending = self
+            .provider
+            .get_transaction_by_hash(tx_hash)
+            .await
+            .map_err(|e| WalletError::RpcCallError {
+                source: e,
+                loc: location!(),
+            })?;
+
+        if pending.is_some() {
+            Ok(TransactionState::Pending)
+        } else {
+            Ok(TransactionState::Missing)
+        }
     }
 
     async fn create_batch_payment(

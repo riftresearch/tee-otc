@@ -24,6 +24,7 @@ use crate::{
     db::{BatchStatus, DepositRepository, DepositStore, PaymentRepository},
     liquidity_lock::LiquidityLockManager,
     payment_manager::PaymentManager,
+    planner::PlannerService,
     wallet::{ConsolidationSummary, WalletManager},
 };
 
@@ -32,6 +33,7 @@ pub struct AdminApiState {
     pub deposit_repository: Arc<DepositRepository>,
     pub payment_repository: Arc<PaymentRepository>,
     pub payment_manager: Arc<PaymentManager>,
+    pub planner_service: Arc<PlannerService>,
     pub liquidity_lock_manager: Arc<LiquidityLockManager>,
     pub wallet_manager: Arc<WalletManager>,
     pub quoting_enabled: Arc<AtomicBool>,
@@ -122,12 +124,21 @@ pub struct InFlightSwapsResponse {
     pub broadcast_pending_confirmation: Vec<BroadcastPendingConfirmationBatch>,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct DeterministicDrainPlanQuery {
+    pub max_rounds: Option<usize>,
+}
+
 pub fn create_admin_router(state: AdminApiState) -> Router {
     Router::new()
         .route("/consolidate", post(consolidate_handler))
         .route(
             "/quoting",
             get(get_quoting_handler).post(set_quoting_handler),
+        )
+        .route(
+            "/planner/drain-plan",
+            get(get_deterministic_drain_plan_handler),
         )
         .route("/swaps/in-flight", get(get_in_flight_swaps_handler))
         .with_state(state)
@@ -241,6 +252,28 @@ async fn get_in_flight_swaps_handler(State(state): State<AdminApiState>) -> impl
     };
 
     (StatusCode::OK, Json(response)).into_response()
+}
+
+async fn get_deterministic_drain_plan_handler(
+    State(state): State<AdminApiState>,
+    Query(query): Query<DeterministicDrainPlanQuery>,
+) -> impl IntoResponse {
+    let max_rounds = query.max_rounds.unwrap_or(32).min(256);
+
+    match state
+        .planner_service
+        .deterministic_drain_plan(max_rounds)
+        .await
+    {
+        Ok(plan) => (StatusCode::OK, Json(plan)).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AdminApiErrorResponse {
+                error: format!("Failed to build deterministic drain plan: {error}"),
+            }),
+        )
+            .into_response(),
+    }
 }
 
 async fn consolidate_handler(
@@ -535,6 +568,7 @@ mod tests {
         db::Database,
         db::Deposit,
         liquidity_lock::LockedLiquidity,
+        planner::PlannerPolicy,
         wallet::{Wallet, WalletBalance, WalletError, WalletResult},
     };
 
@@ -564,10 +598,23 @@ mod tests {
 
     #[async_trait]
     impl Wallet for MockWallet {
-        async fn create_batch_payment(
+        async fn prepare_batch_payment(
             &self,
             _payments: Vec<Payment>,
             _mm_payment_validation: Option<MarketMakerPaymentVerification>,
+        ) -> WalletResult<crate::wallet::PreparedBatchPayment> {
+            Ok(crate::wallet::PreparedBatchPayment::Bitcoin {
+                txid: "mock_txid".to_string(),
+                txdata: vec![1, 2, 3],
+                foreign_utxos: Vec::new(),
+                absolute_fee: 0,
+                reserved_deposit_keys: Vec::new(),
+            })
+        }
+
+        async fn broadcast_prepared_batch(
+            &self,
+            _prepared_batch: &crate::wallet::PreparedBatchPayment,
         ) -> WalletResult<String> {
             Err(WalletError::TransactionCreationFailed {
                 reason: "not implemented in test".to_string(),
@@ -615,6 +662,13 @@ mod tests {
             Ok(0)
         }
 
+        async fn lookup_transaction_state(
+            &self,
+            _tx_hash: &str,
+        ) -> WalletResult<crate::wallet::TransactionState> {
+            Ok(crate::wallet::TransactionState::Missing)
+        }
+
         fn chain_type(&self) -> ChainType {
             self.chain
         }
@@ -631,6 +685,7 @@ mod tests {
     fn build_payment_manager(
         wallet_manager: Arc<WalletManager>,
         payment_repository: Arc<PaymentRepository>,
+        broadcasted_transaction_repository: Arc<crate::db::BroadcastedTransactionRepository>,
     ) -> Arc<PaymentManager> {
         let (otc_response_tx, _otc_response_rx) = mpsc::unbounded_channel();
         let mut join_set = JoinSet::new();
@@ -638,12 +693,36 @@ mod tests {
         Arc::new(PaymentManager::new(
             wallet_manager,
             payment_repository,
+            broadcasted_transaction_repository,
             HashMap::new(),
             Arc::new(QuoteBalanceStrategy::new(9_500)),
             otc_response_tx,
             CancellationToken::new(),
             &mut join_set,
         ))
+    }
+
+    async fn build_planner_service(
+        payment_manager: Arc<PaymentManager>,
+        evm_chain: ChainType,
+    ) -> Arc<PlannerService> {
+        Arc::new(
+            PlannerService::new(
+                payment_manager,
+                Arc::new(MockWallet::new(
+                    ChainType::Bitcoin,
+                    "planner-btc-tx",
+                    1_000_000,
+                )) as Arc<dyn Wallet>,
+                Arc::new(MockWallet::new(evm_chain, "planner-evm-tx", 1_000_000))
+                    as Arc<dyn Wallet>,
+                PlannerPolicy::default(),
+                evm_chain,
+                CancellationToken::new(),
+            )
+            .await
+            .unwrap(),
+        )
     }
 
     async fn response_json<T: serde::de::DeserializeOwned>(
@@ -658,6 +737,7 @@ mod tests {
         let db = Database::from_pool(pool).await.unwrap();
         let deposit_repository = Arc::new(db.deposits());
         let payment_repository = Arc::new(db.payments());
+        let broadcasted_transaction_repository = Arc::new(db.broadcasted_transactions());
 
         let bitcoin_wallet = Arc::new(MockWallet::new(ChainType::Bitcoin, "btc-tx", 1));
         let base_wallet = Arc::new(MockWallet::new(ChainType::Base, "base-tx", 42));
@@ -666,7 +746,12 @@ mod tests {
             base_wallet.clone() as Arc<dyn Wallet>,
         ]);
         let payment_manager =
-            build_payment_manager(wallet_manager.clone(), payment_repository.clone());
+            build_payment_manager(
+                wallet_manager.clone(),
+                payment_repository.clone(),
+                broadcasted_transaction_repository,
+            );
+        let planner_service = build_planner_service(payment_manager.clone(), ChainType::Base).await;
 
         deposit_repository
             .store_deposit(
@@ -692,6 +777,7 @@ mod tests {
             deposit_repository,
             payment_repository,
             payment_manager,
+            planner_service,
             liquidity_lock_manager: Arc::new(LiquidityLockManager::with_ttl(
                 chrono::Duration::hours(1),
             )),
@@ -737,11 +823,18 @@ mod tests {
         let db = Database::from_pool(pool).await.unwrap();
         let payment_repository = Arc::new(db.payments());
         let deposit_repository = Arc::new(db.deposits());
+        let broadcasted_transaction_repository = Arc::new(db.broadcasted_transactions());
 
         let bitcoin_wallet = Arc::new(MockWallet::new(ChainType::Bitcoin, "btc-tx", 1));
         let wallet_manager = build_wallet_manager(vec![bitcoin_wallet as Arc<dyn Wallet>]);
         let payment_manager =
-            build_payment_manager(wallet_manager.clone(), payment_repository.clone());
+            build_payment_manager(
+                wallet_manager.clone(),
+                payment_repository.clone(),
+                broadcasted_transaction_repository,
+            );
+        let planner_service =
+            build_planner_service(payment_manager.clone(), ChainType::Ethereum).await;
         let liquidity_lock_manager =
             Arc::new(LiquidityLockManager::with_ttl(chrono::Duration::hours(1)));
 
@@ -795,6 +888,7 @@ mod tests {
             deposit_repository,
             payment_repository,
             payment_manager,
+            planner_service,
             liquidity_lock_manager,
             wallet_manager,
             quoting_enabled: Arc::new(AtomicBool::new(false)),
@@ -838,15 +932,23 @@ mod tests {
         let db = Database::from_pool(pool).await.unwrap();
         let deposit_repository = Arc::new(db.deposits());
         let payment_repository = Arc::new(db.payments());
+        let broadcasted_transaction_repository = Arc::new(db.broadcasted_transactions());
         let bitcoin_wallet = Arc::new(MockWallet::new(ChainType::Bitcoin, "btc-tx", 1));
         let wallet_manager = build_wallet_manager(vec![bitcoin_wallet as Arc<dyn Wallet>]);
         let payment_manager =
-            build_payment_manager(wallet_manager.clone(), payment_repository.clone());
+            build_payment_manager(
+                wallet_manager.clone(),
+                payment_repository.clone(),
+                broadcasted_transaction_repository,
+            );
+        let planner_service =
+            build_planner_service(payment_manager.clone(), ChainType::Ethereum).await;
 
         let state = AdminApiState {
             deposit_repository,
             payment_repository,
             payment_manager,
+            planner_service,
             liquidity_lock_manager: Arc::new(LiquidityLockManager::with_ttl(
                 chrono::Duration::hours(1),
             )),
@@ -873,6 +975,64 @@ mod tests {
         let response: InFlightSwapsResponse = response_json(response).await;
         assert!(response.safe_to_take_down);
         assert_eq!(response.summary.total_blocking_swaps, 0);
+
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn test_planner_drain_plan_endpoint_returns_deterministic_plan(
+        pool: sqlx::PgPool,
+    ) -> sqlx::Result<()> {
+        let db = Database::from_pool(pool).await.unwrap();
+        let deposit_repository = Arc::new(db.deposits());
+        let payment_repository = Arc::new(db.payments());
+        let broadcasted_transaction_repository = Arc::new(db.broadcasted_transactions());
+        let bitcoin_wallet = Arc::new(MockWallet::new(ChainType::Bitcoin, "btc-tx", 1));
+        let wallet_manager = build_wallet_manager(vec![bitcoin_wallet as Arc<dyn Wallet>]);
+        let payment_manager =
+            build_payment_manager(
+                wallet_manager.clone(),
+                payment_repository.clone(),
+                broadcasted_transaction_repository,
+            );
+        let planner_service =
+            build_planner_service(payment_manager.clone(), ChainType::Ethereum).await;
+
+        let state = AdminApiState {
+            deposit_repository,
+            payment_repository,
+            payment_manager,
+            planner_service,
+            liquidity_lock_manager: Arc::new(LiquidityLockManager::with_ttl(
+                chrono::Duration::hours(1),
+            )),
+            wallet_manager,
+            quoting_enabled: Arc::new(AtomicBool::new(true)),
+            evm_chain: ChainType::Ethereum,
+            bitcoin_max_deposits_per_iteration: 100,
+            evm_max_deposits_per_iteration: 200,
+        };
+
+        let response = create_admin_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/planner/drain-plan?max_rounds=5")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let response: crate::planner::DeterministicDrainPlan = response_json(response).await;
+        assert_eq!(response.max_rounds, 5);
+        assert!(response.fully_drained);
+        assert!(!response.truncated);
+        assert!(response.rounds.is_empty());
+        assert_eq!(response.current_state.open_obligations, 0);
+        assert_eq!(response.projected_final_state.open_obligations, 0);
 
         Ok(())
     }

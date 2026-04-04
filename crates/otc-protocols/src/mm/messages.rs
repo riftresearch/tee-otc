@@ -1,7 +1,6 @@
 use alloy::primitives::U256;
 use chrono::{DateTime, Utc};
-use otc_models::ChainType;
-use otc_models::Lot;
+use otc_models::{ChainType, Lot, SwapStatus};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -51,9 +50,21 @@ pub enum MMRequest {
         mm_nonce: [u8; 16],
         /// Expected payment details
         expected_lot: Lot,
+        /// Actual confirmed user deposit details used to reconstruct planner settlement state.
+        settlement_lot: Lot,
         /// Protocol fee for this swap (from realized amounts)
         protocol_fee: U256,
         user_deposit_confirmed_at: DateTime<Utc>,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Authoritative snapshot of obligations that OTC still considers active for this MM.
+    ///
+    /// This is sent on connect so the MM can rebuild its in-memory planner state from OTC's
+    /// source of truth plus the MM's own durable execution facts.
+    ActiveObligationsSnapshot {
+        request_id: Uuid,
+        obligations: Vec<ActiveObligation>,
         timestamp: DateTime<Utc>,
     },
 
@@ -110,6 +121,19 @@ pub struct NetworkBatch {
     pub tx_hash: String,
     pub swap_ids: Vec<Uuid>,
     pub batch_nonce_digest: [u8; 32],
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ActiveObligation {
+    pub swap_id: Uuid,
+    pub quote_id: Uuid,
+    pub status: SwapStatus,
+    pub user_destination_address: String,
+    pub mm_nonce: [u8; 16],
+    pub expected_lot: Lot,
+    pub settlement_lot: Lot,
+    pub protocol_fee: U256,
+    pub user_deposit_confirmed_at: DateTime<Utc>,
 }
 
 /// Messages sent from Market Maker to OTC server

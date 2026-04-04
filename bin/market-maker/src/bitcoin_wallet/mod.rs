@@ -26,7 +26,10 @@ use crate::bitcoin_wallet::transaction_broadcaster::{ForeignUtxo, TransactionReq
 use crate::db::{
     BroadcastedTransactionRepository, Deposit, DepositRepository, DepositStore, FillStatus,
 };
-use crate::wallet::{self, Wallet as WalletTrait, WalletBalance, WalletError};
+use crate::wallet::{
+    self, PreparedBatchPayment, TransactionState, Wallet as WalletTrait, WalletBalance,
+    WalletError,
+};
 use crate::WalletResult;
 
 const PARALLEL_REQUESTS: usize = 5;
@@ -127,6 +130,9 @@ pub enum BitcoinWalletError {
         source: bdk_wallet::bitcoin::psbt::ExtractTxError,
     },
 
+    #[snafu(display("Failed to deserialize transaction: {reason}"))]
+    DeserializeTransaction { reason: String },
+
     #[snafu(display("Failed to broadcast transaction: {}", source))]
     BroadcastTransaction {
         source: bdk_esplora::esplora_client::Error,
@@ -157,6 +163,7 @@ pub struct BitcoinWallet {
     wallet: Arc<Mutex<PersistedWallet<Connection>>>,
     connection: Arc<Mutex<Connection>>,
     esplora_client: Arc<esplora_client::AsyncClient>,
+    main_wallet_descriptor: String,
     receive_address: String,
     deposit_repository: Option<Arc<DepositRepository>>,
     broadcasted_transaction_repository: Option<Arc<BroadcastedTransactionRepository>>,
@@ -241,6 +248,7 @@ impl BitcoinWallet {
             wallet,
             connection,
             esplora_client,
+            main_wallet_descriptor: external_descriptor.to_string(),
             receive_address,
             deposit_repository,
             broadcasted_transaction_repository,
@@ -477,6 +485,190 @@ impl WalletTrait for BitcoinWallet {
                 source: e,
                 loc: location!(),
             })
+    }
+
+    async fn prepare_batch_payment(
+        &self,
+        payments: Vec<Payment>,
+        mm_payment_validation: Option<MarketMakerPaymentVerification>,
+    ) -> WalletResult<PreparedBatchPayment> {
+        for payment in &payments {
+            ensure_valid_lot(&payment.lot)?;
+        }
+
+        let batch_id = alloy::hex::encode(rand::thread_rng().gen::<[u8; 8]>());
+        for payment in &payments {
+            info!(
+                batch_id = %batch_id,
+                to_address = %payment.to_address,
+                amount = %payment.lot.amount,
+                "Preparing bitcoin payment"
+            );
+        }
+
+        let mut foreign_utxos = Vec::new();
+        let mut reserved_deposit_keys = Vec::new();
+
+        if let Some(deposit_repository) = self.deposit_repository.clone() {
+            for payment in &payments {
+                if foreign_utxos.len() >= self.max_deposits_per_lot {
+                    break;
+                }
+                let lot = payment.lot.clone();
+                match deposit_repository
+                    .take_deposits_that_fill_lot(&lot, Some(self.max_deposits_per_lot))
+                    .await
+                    .map_err(|e| WalletError::DepositRepositoryError {
+                        source: e,
+                        loc: location!(),
+                    })? {
+                    FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
+                        for deposit in deposits {
+                            reserved_deposit_keys.push(deposit.private_key.clone());
+                            let utxos = self.deposit_to_foreign_utxos(deposit).await?;
+                            foreign_utxos.extend(utxos);
+                        }
+                    }
+                    FillStatus::Empty => {
+                        info!("No matching deposit UTXOs found for payment");
+                    }
+                }
+            }
+        }
+
+        let network = self.wallet.lock().await.network();
+        let prepared = transaction_broadcaster::prepare_transaction(
+            &self.wallet,
+            &self.main_wallet_descriptor,
+            &self.connection,
+            &self.esplora_client,
+            network,
+            payments,
+            None,
+            foreign_utxos,
+            mm_payment_validation,
+        )
+        .await
+        .map_err(|e| WalletError::BitcoinWalletClient {
+            source: e,
+            loc: location!(),
+        })?;
+
+        Ok(PreparedBatchPayment::Bitcoin {
+            txid: prepared.txid,
+            txdata: prepared.txdata,
+            foreign_utxos: prepared.foreign_utxos,
+            absolute_fee: prepared.absolute_fee,
+            reserved_deposit_keys,
+        })
+    }
+
+    async fn broadcast_prepared_batch(
+        &self,
+        prepared_batch: &PreparedBatchPayment,
+    ) -> WalletResult<String> {
+        let prepared = match prepared_batch {
+            PreparedBatchPayment::Bitcoin {
+                txid,
+                txdata,
+                foreign_utxos,
+                absolute_fee,
+                ..
+            } => transaction_broadcaster::PreparedBitcoinTransaction {
+                txid: txid.clone(),
+                txdata: txdata.clone(),
+                foreign_utxos: foreign_utxos.clone(),
+                absolute_fee: *absolute_fee,
+            },
+            PreparedBatchPayment::Evm { .. } => {
+                return Err(WalletError::TransactionCreationFailed {
+                    reason:
+                        "attempted to broadcast non-bitcoin prepared batch with bitcoin wallet"
+                            .to_string(),
+                });
+            }
+        };
+
+        transaction_broadcaster::broadcast_prepared_transaction(
+            &self.wallet,
+            &self.connection,
+            &self.esplora_client,
+            &self.broadcasted_transaction_repository,
+            &prepared,
+        )
+        .await
+        .map_err(|e| WalletError::BitcoinWalletClient {
+            source: e,
+            loc: location!(),
+        })
+    }
+
+    async fn discard_prepared_batch(
+        &self,
+        prepared_batch: &PreparedBatchPayment,
+    ) -> WalletResult<()> {
+        let reserved_deposit_keys = match prepared_batch {
+            PreparedBatchPayment::Bitcoin {
+                reserved_deposit_keys,
+                ..
+            } => reserved_deposit_keys,
+            PreparedBatchPayment::Evm { .. } => {
+                return Err(WalletError::TransactionCreationFailed {
+                    reason:
+                        "attempted to discard non-bitcoin prepared batch with bitcoin wallet"
+                            .to_string(),
+                });
+            }
+        };
+
+        if !reserved_deposit_keys.is_empty() {
+            if let Some(deposit_repository) = &self.deposit_repository {
+                deposit_repository
+                    .unreserve_deposits(reserved_deposit_keys)
+                    .await
+                    .map_err(|e| WalletError::DepositRepositoryError {
+                        source: e,
+                        loc: location!(),
+                    })?;
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn lookup_transaction_state(&self, tx_hash: &str) -> WalletResult<TransactionState> {
+        let txid = Txid::from_str(tx_hash).map_err(|e| WalletError::ParseAddressFailed {
+            context: e.to_string(),
+        })?;
+
+        let Some(_) = self
+            .esplora_client
+            .get_tx(&txid)
+            .await
+            .map_err(|e| WalletError::EsploraClientError {
+                source: e,
+                loc: location!(),
+            })?
+        else {
+            return Ok(TransactionState::Missing);
+        };
+
+        let status = self
+            .esplora_client
+            .get_tx_status(&txid)
+            .await
+            .map_err(|e| WalletError::EsploraClientError {
+                source: e,
+                loc: location!(),
+            })?;
+
+        if status.confirmed {
+            Ok(TransactionState::Confirmed(
+                self.check_tx_confirmations(tx_hash).await?,
+            ))
+        } else {
+            Ok(TransactionState::Pending)
+        }
     }
 
     async fn guarantee_confirmations(

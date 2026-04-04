@@ -42,6 +42,14 @@ pub struct BitcoinTransactionBroadcaster {
     request_tx: mpsc::UnboundedSender<TransactionRequest>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PreparedBitcoinTransaction {
+    pub txid: String,
+    pub txdata: Vec<u8>,
+    pub foreign_utxos: Vec<ForeignUtxo>,
+    pub absolute_fee: u64,
+}
+
 impl BitcoinTransactionBroadcaster {
     pub fn new(
         wallet: Arc<Mutex<PersistedWallet<bdk_wallet::rusqlite::Connection>>>,
@@ -132,36 +140,37 @@ impl std::fmt::Debug for ForeignUtxo {
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn process_transaction(
+pub async fn prepare_transaction(
     wallet: &Arc<Mutex<PersistedWallet<bdk_wallet::rusqlite::Connection>>>,
     main_wallet_descriptor: &str,
     connection: &Arc<Mutex<bdk_wallet::rusqlite::Connection>>,
     esplora_client: &Arc<esplora_client::AsyncClient>,
     network: bitcoin::Network,
-    broadcasted_transaction_repository: &Option<Arc<BroadcastedTransactionRepository>>,
     payments: Vec<Payment>,
     explicit_absolute_fee: Option<u64>,
     foreign_utxos: Vec<ForeignUtxo>,
     mm_payment_validation: Option<MarketMakerPaymentVerification>,
-) -> Result<String, BitcoinWalletError> {
+) -> Result<PreparedBitcoinTransaction, BitcoinWalletError> {
     let start_time = Instant::now();
 
     let is_consolidation_tx = if payments.len() > 1 {
-        info!("Processing batch bitcoin payments: count={}", payments.len());
+        info!(
+            "Preparing batch bitcoin payments: count={}",
+            payments.len()
+        );
         false
     } else if payments.len() == 1 {
         info!(
             to_address = %payments[0].to_address,
             amount = %payments[0].lot.amount,
-            "Processing bitcoin payment"
+            "Preparing bitcoin payment"
         );
         false
     } else {
-        info!("Processing a consolidation transaction");
+        info!("Preparing a consolidation transaction");
         true
     };
 
-    // Parse the recipient address
     let mut payment_tuple: Vec<(Address, Amount)> = vec![];
 
     for payment in &payments {
@@ -179,20 +188,16 @@ async fn process_transaction(
         payment_tuple.push((address, Amount::from_sat(payment.lot.amount.to::<u64>())));
     }
 
-    // Sync wallet before building transaction
     light_sync_wallet(wallet, connection, esplora_client).await?;
 
-    // Lock wallet for transaction creation and persist immediately after building
     let mut wallet_guard = wallet.lock().await;
     let script_pubkey = wallet_guard
         .next_unused_address(KeychainKind::External)
         .script_pubkey();
 
-    // Check balance
     let balance = wallet_guard.balance();
     info!("Wallet Balance before payment: {:?}", balance);
 
-    // Build transaction
     let mut tx_builder = wallet_guard.build_tx();
 
     if is_consolidation_tx {
@@ -216,7 +221,6 @@ async fn process_transaction(
     tx_builder.nlocktime(crate::bitcoin::absolute::LockTime::ZERO);
     tx_builder.set_exact_sequence(Sequence::ENABLE_RBF_NO_LOCKTIME);
 
-    // Add foreign UTXOs first
     for foreign_utxo in &foreign_utxos {
         tx_builder
             .add_foreign_utxo(
@@ -227,42 +231,33 @@ async fn process_transaction(
             .context(AddForeignUtxoSnafu)?;
     }
 
-    // Then actual recipients
     for (address, amount) in payment_tuple {
         tx_builder.add_recipient(address.script_pubkey(), amount);
     }
 
-    // If this is a market maker payment, embed OP_RETURN with nonce.
-    // Protocol fees are NOT paid in batch transactions (handled via separate settlement txs).
     if let Some(mm_payment_validation) = mm_payment_validation {
-        // OP_RETURN w/ nonce
         let nonce = mm_payment_validation.batch_nonce_digest;
         let op_return_script = create_op_return_script(&nonce);
         tx_builder.add_recipient(op_return_script, Amount::ZERO);
     }
 
-    // Create and sign the transaction
     let build_start = Instant::now();
     let mut psbt = tx_builder.finish().context(BuildTransactionSnafu)?;
 
     info!("Transaction built in {:?}", build_start.elapsed());
 
-    // CRITICAL: Persist immediately after building to lock UTXOs
     let mut conn = connection.lock().await;
     wallet_guard
         .persist(&mut conn)
         .context(PersistWalletSnafu)?;
     drop(conn);
 
-    // Sign with wallet
     let finalized = wallet_guard
         .sign(&mut psbt, SignOptions::default())
         .context(SignTransactionSnafu)?;
 
-    // We no longer need the wallet lock
     drop(wallet_guard);
 
-    // Now loop through all the private keys we have and sign the psbt with each
     let mut fully_finalized = finalized;
     for foreign_utxo in &foreign_utxos {
         info!(
@@ -279,84 +274,148 @@ async fn process_transaction(
     }
 
     if !fully_finalized {
-        // If signing failed, we need to cancel the transaction to free UTXOs
         let mut wallet_guard = wallet.lock().await;
-        if let Ok(tx) = psbt.extract_tx() {
+        if let Ok(tx) = psbt.clone().extract_tx() {
             wallet_guard.cancel_tx(&tx);
             let mut conn = connection.lock().await;
             let _ = wallet_guard.persist(&mut conn);
         }
-        PsbtNotFinalizedSnafu.fail()?
-    } else {
-        let absolute_fee = psbt.fee().unwrap().to_sat();
+        PsbtNotFinalizedSnafu.fail()?;
+    }
 
-        let (tx, fully_qualified_foreign_utxos) = build_tx_and_get_fully_qualified_foreign_utxos(
+    let absolute_fee = psbt.fee().unwrap().to_sat();
+    let (tx, fully_qualified_foreign_utxos) =
+        build_tx_and_get_fully_qualified_foreign_utxos(
             &psbt,
             &foreign_utxos,
             main_wallet_descriptor,
         )
         .map_err(|e| *e)?;
 
-        let txid = tx.compute_txid().to_string();
+    let txid = tx.compute_txid().to_string();
+    let total_duration = start_time.elapsed();
+    info!(
+        "Bitcoin transaction prepared successfully: {} (total time: {:?})",
+        txid, total_duration
+    );
 
-        // Broadcast the transaction with retry logic for mempool chain errors
-        let broadcast_start = Instant::now();
-        const MAX_MEMPOOL_RETRIES: u32 = 10;
-        let mut retry_count = 0;
+    Ok(PreparedBitcoinTransaction {
+        txid,
+        txdata: bitcoin::consensus::serialize(&tx),
+        foreign_utxos: fully_qualified_foreign_utxos,
+        absolute_fee,
+    })
+}
 
-        let broadcast_result = loop {
-            match esplora_client.broadcast(&tx).await {
-                Ok(_) => break Ok(()),
-                Err(e) => {
-                    if is_mempool_chain_error(&e) && retry_count < MAX_MEMPOOL_RETRIES {
-                        retry_count += 1;
-                        info!(
-                            "Mempool chain error detected (attempt {}/{MAX_MEMPOOL_RETRIES}): {:?}. Waiting for new block...",
-                            retry_count, e
-                        );
-                        wait_for_new_block(esplora_client).await?;
-                        continue;
-                    }
-                    break Err(e);
+#[allow(clippy::too_many_arguments)]
+pub async fn broadcast_prepared_transaction(
+    wallet: &Arc<Mutex<PersistedWallet<bdk_wallet::rusqlite::Connection>>>,
+    connection: &Arc<Mutex<bdk_wallet::rusqlite::Connection>>,
+    esplora_client: &Arc<esplora_client::AsyncClient>,
+    broadcasted_transaction_repository: &Option<Arc<BroadcastedTransactionRepository>>,
+    prepared_tx: &PreparedBitcoinTransaction,
+) -> Result<String, BitcoinWalletError> {
+    let tx: bitcoin::Transaction = bitcoin::consensus::deserialize(&prepared_tx.txdata).map_err(
+        |e| BitcoinWalletError::DeserializeTransaction {
+            reason: e.to_string(),
+        },
+    )?;
+
+    let broadcast_start = Instant::now();
+    const MAX_MEMPOOL_RETRIES: u32 = 10;
+    let mut retry_count = 0;
+
+    let broadcast_result = loop {
+        match esplora_client.broadcast(&tx).await {
+            Ok(_) => break Ok(()),
+            Err(e) => {
+                if is_mempool_chain_error(&e) && retry_count < MAX_MEMPOOL_RETRIES {
+                    retry_count += 1;
+                    info!(
+                        "Mempool chain error detected (attempt {}/{MAX_MEMPOOL_RETRIES}): {:?}. Waiting for new block...",
+                        retry_count, e
+                    );
+                    wait_for_new_block(esplora_client).await?;
+                    continue;
                 }
+                break Err(e);
             }
-        };
+        }
+    };
 
-        if let Err(e) = broadcast_result {
+    broadcast_result.map_err(|source| BitcoinWalletError::BroadcastTransaction { source })?;
+
+    info!("Transaction broadcast in {:?}", broadcast_start.elapsed());
+
+    if let Some(broadcasted_transaction_repository) = broadcasted_transaction_repository {
+        broadcasted_transaction_repository
+            .set_broadcasted_transaction(
+                &prepared_tx.txid,
+                ChainType::Bitcoin,
+                prepared_tx.txdata.clone(),
+                Some(prepared_tx.foreign_utxos.clone()),
+                prepared_tx.absolute_fee,
+            )
+            .await
+            .context(crate::bitcoin_wallet::BroadcastedTransactionRepositorySnafu)?;
+    }
+
+    light_sync_wallet(wallet, connection, esplora_client).await?;
+
+    Ok(prepared_tx.txid.clone())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn process_transaction(
+    wallet: &Arc<Mutex<PersistedWallet<bdk_wallet::rusqlite::Connection>>>,
+    main_wallet_descriptor: &str,
+    connection: &Arc<Mutex<bdk_wallet::rusqlite::Connection>>,
+    esplora_client: &Arc<esplora_client::AsyncClient>,
+    network: bitcoin::Network,
+    broadcasted_transaction_repository: &Option<Arc<BroadcastedTransactionRepository>>,
+    payments: Vec<Payment>,
+    explicit_absolute_fee: Option<u64>,
+    foreign_utxos: Vec<ForeignUtxo>,
+    mm_payment_validation: Option<MarketMakerPaymentVerification>,
+) -> Result<String, BitcoinWalletError> {
+    let prepared = prepare_transaction(
+        wallet,
+        main_wallet_descriptor,
+        connection,
+        esplora_client,
+        network,
+        payments,
+        explicit_absolute_fee,
+        foreign_utxos,
+        mm_payment_validation,
+    )
+    .await?;
+
+    match broadcast_prepared_transaction(
+        wallet,
+        connection,
+        esplora_client,
+        broadcasted_transaction_repository,
+        &prepared,
+    )
+    .await
+    {
+        Ok(txid) => Ok(txid),
+        Err(error) => {
+            let tx: bitcoin::Transaction =
+                bitcoin::consensus::deserialize(&prepared.txdata).map_err(|e| {
+                    BitcoinWalletError::DeserializeTransaction {
+                        reason: e.to_string(),
+                    }
+                })?;
             let mut wallet_guard = wallet.lock().await;
             wallet_guard.cancel_tx(&tx);
             let mut conn = connection.lock().await;
             wallet_guard
                 .persist(&mut conn)
                 .context(PersistWalletSnafu)?;
-            return Err(BitcoinWalletError::BroadcastTransaction { source: e });
+            Err(error)
         }
-
-        info!("Transaction broadcast in {:?}", broadcast_start.elapsed());
-
-        if let Some(broadcasted_transaction_repository) = broadcasted_transaction_repository {
-            broadcasted_transaction_repository
-                .set_broadcasted_transaction(
-                    &txid,
-                    ChainType::Bitcoin,
-                    bitcoin::consensus::serialize(&tx),
-                    Some(fully_qualified_foreign_utxos),
-                    absolute_fee,
-                )
-                .await
-                .context(crate::bitcoin_wallet::BroadcastedTransactionRepositorySnafu)?;
-        }
-
-        // Sync after broadcast to update wallet state
-        light_sync_wallet(wallet, connection, esplora_client).await?;
-
-        let total_duration = start_time.elapsed();
-        info!(
-            "Bitcoin transaction created and broadcast successfully: {} (total time: {:?})",
-            txid, total_duration
-        );
-
-        Ok(txid)
     }
 }
 

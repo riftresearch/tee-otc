@@ -27,7 +27,9 @@ pub struct Connected {
 pub struct TradingPairLiquidity {
     pub from: Currency,
     pub to: Currency,
-    /// Maximum from_amount the MM can handle
+    /// Advertised theoretical route capacity for this MM.
+    ///
+    /// This is a route-level cap, not a live free-inventory reading.
     pub max_amount: U256,
 }
 

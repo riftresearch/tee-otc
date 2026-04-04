@@ -18,18 +18,19 @@ use crate::utils::{
     build_bitcoin_wallet_descriptor, build_mm_test_args, build_otc_server_test_args,
     build_rfq_server_test_args, build_tmp_bitcoin_wallet_db_file, get_free_port,
     wait_for_market_maker_to_connect_to_rfq_server, wait_for_otc_server_to_be_ready,
-    wait_for_rfq_server_to_be_ready, wait_for_swap_status, PgConnectOptionsExt,
+    wait_for_rfq_server_to_be_ready, wait_for_swap_status, wait_for_swap_statuses,
+    PgConnectOptionsExt,
 };
 
-/// Test that liquidity locking prevents double-booking of funds
+/// Test that advertised route capacity stays fixed as swaps progress through the pipeline.
 ///
 /// This test verifies:
-/// 1. Initial liquidity is reported correctly
-/// 2. After UserDeposited, liquidity decreases by locked amount
-/// 3. Quote generation respects locked liquidity
-/// 4. After payment is queued, liquidity is restored
+/// 1. Initial route capacity is reported correctly
+/// 2. After `UserDeposited`, advertised capacity does not shrink
+/// 3. Quotes above the advertised capacity are still rejected
+/// 4. After payment is queued, advertised capacity remains stable
 #[sqlx::test]
-async fn test_liquidity_locking_reduces_available_liquidity(
+async fn test_boot_time_capacity_does_not_shrink_as_swaps_progress(
     _: PoolOptions<sqlx::Postgres>,
     connect_options: PgConnectOptions,
 ) {
@@ -212,8 +213,8 @@ async fn test_liquidity_locking_reduces_available_liquidity(
     let swap_id = swap.id;
     info!("Created swap: {}", swap_id);
 
-    // Step 3: Send user deposit (this triggers UserDeposited message and locks liquidity)
-    info!("=== Step 3: Sending user deposit to trigger lock ===");
+    // Step 3: Send user deposit (this advances the swap, but should not shrink route capacity)
+    info!("=== Step 3: Sending user deposit ===");
     let mut wallet_join_set = JoinSet::new();
     let user_bitcoin_wallet = BitcoinWallet::new(
         &build_tmp_bitcoin_wallet_db_file(),
@@ -248,57 +249,52 @@ async fn test_liquidity_locking_reduces_available_liquidity(
     devnet.bitcoin.mine_blocks(1).await.unwrap();
     info!("Mined 1 block - deposit should be detected but not confirmed yet");
 
-    // Wait for swap to detect deposit and send UserDeposited message (lock should be created)
+    // Wait for swap to detect deposit and send UserDeposited message
     wait_for_swap_status(&client, otc_port, swap_id, "WaitingUserDepositConfirmed").await;
-    info!("Swap reached waiting_user_deposit_confirmed - lock should be active");
+    info!("Swap reached waiting_user_deposit_confirmed");
 
-    // Step 4: Verify liquidity decreased after lock (before deposit confirmation)
-    info!("=== Step 4: Verifying liquidity decreased after lock (before confirmation) ===");
+    // Step 4: Verify advertised capacity did not shrink after deposit detection.
+    info!("=== Step 4: Verifying advertised capacity remains stable ===");
 
-    // Poll liquidity endpoint until cache updates (up to 20 seconds to account for 15s cache interval)
-    let mut max_amount_after_lock = None;
-    let mut attempts = 0;
-    let max_attempts = 20;
-    while attempts < max_attempts && max_amount_after_lock.is_none() {
-        tokio::time::sleep(Duration::from_secs(1)).await;
-        let liquidity_response = client
-            .get(format!("http://localhost:{rfq_port}/api/v2/liquidity"))
-            .send()
-            .await
-            .unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let liquidity_response = client
+        .get(format!("http://localhost:{rfq_port}/api/v2/liquidity"))
+        .send()
+        .await
+        .unwrap();
 
-        assert_eq!(liquidity_response.status(), 200);
-        let liquidity: rfq_server::liquidity_aggregator::LiquidityAggregatorResult =
-            liquidity_response.json().await.unwrap();
-
-        info!("Liquidity response: {:#?}", liquidity);
-        let market_maker = &liquidity.market_makers[0];
-        let btc_to_cbbtc = market_maker
-            .trading_pairs
-            .iter()
-            .find(|tp| {
-                tp.from.chain == ChainType::Bitcoin
-                    && tp.from.token == TokenIdentifier::Native
-                    && tp.to.chain == ChainType::Ethereum
-                    && matches!(&tp.to.token, TokenIdentifier::Address(addr) if addr.to_lowercase() == devnet.ethereum.cbbtc_contract.address().to_string().to_lowercase())
-            })
-            .expect("Should have BTC->cbBTC trading pair");
-
-        max_amount_after_lock = Some(btc_to_cbbtc.max_amount);
-        attempts += 1;
-    }
-    let max_amount_after_lock = max_amount_after_lock.expect("Should have max amount after lock");
+    assert_eq!(liquidity_response.status(), 200);
+    let liquidity: rfq_server::liquidity_aggregator::LiquidityAggregatorResult =
+        liquidity_response.json().await.unwrap();
 
     info!(
-        "Max amount after lock: {} (initial: {})",
-        max_amount_after_lock, initial_max_amount
+        "Liquidity response after deposit detection: {:#?}",
+        liquidity
+    );
+    let market_maker = &liquidity.market_makers[0];
+    let btc_to_cbbtc = market_maker
+        .trading_pairs
+        .iter()
+        .find(|tp| {
+            tp.from.chain == ChainType::Bitcoin
+                && tp.from.token == TokenIdentifier::Native
+                && tp.to.chain == ChainType::Ethereum
+                && matches!(&tp.to.token, TokenIdentifier::Address(addr) if addr.to_lowercase() == devnet.ethereum.cbbtc_contract.address().to_string().to_lowercase())
+        })
+        .expect("Should have BTC->cbBTC trading pair");
+
+    let max_amount_after_progress = btc_to_cbbtc.max_amount;
+
+    info!(
+        "Max amount after progress: {} (initial: {})",
+        max_amount_after_progress, initial_max_amount
     );
 
-    // Liquidity should have strictly decreased after locking
+    // Advertised capacity should not change as swaps move through detection/confirmation.
     assert!(
-        max_amount_after_lock < initial_max_amount,
-        "Liquidity should strictly decrease after lock (after: {}, initial: {})",
-        max_amount_after_lock,
+        max_amount_after_progress == initial_max_amount,
+        "Advertised capacity should remain fixed (after progress: {}, initial: {})",
+        max_amount_after_progress,
         initial_max_amount
     );
 
@@ -306,11 +302,10 @@ async fn test_liquidity_locking_reduces_available_liquidity(
     devnet.bitcoin.mine_blocks(3).await.unwrap();
     info!("Mined 3 more blocks to confirm user deposit (total 4 blocks, should be enough for confirmation)");
 
-    // Step 5: Try to request a quote for amount that would exceed locked liquidity
-    // This should fail or return reduced quote
-    info!("=== Step 5: Testing quote request respects locked liquidity ===");
+    // Step 5: Try to request a quote above the advertised payout capacity. This should fail.
+    info!("=== Step 5: Testing quote request respects boot-time capacity ===");
     let large_quote_request = QuoteRequest {
-        mode: SwapMode::ExactInput((max_amount_after_lock + U256::from(1)).to::<u64>()), // Try to exceed available
+        mode: SwapMode::ExactOutput((initial_max_amount + U256::from(1)).to::<u64>()),
         from: Currency {
             chain: ChainType::Bitcoin,
             token: TokenIdentifier::Native,
@@ -339,33 +334,40 @@ async fn test_liquidity_locking_reduces_available_liquidity(
     if let Some(result) = large_quote_response.quote {
         match result {
             RFQResult::Success(_) => {
-                // If we get a quote, it should be for an amount <= max_amount_after_lock
-                // This is acceptable if the strategy allows it
-                info!(
-                    "Got quote even though it exceeds reported max - acceptable if strategy allows"
-                );
+                panic!("Should not get a quote above the advertised boot-time capacity");
             }
             RFQResult::MakerUnavailable(_)
             | RFQResult::InvalidRequest(_)
             | RFQResult::Unsupported(_) => {
-                info!("Got expected error for amount exceeding locked liquidity");
+                info!("Got expected error for amount exceeding advertised capacity");
             }
         }
     } else {
-        info!("Got no quote for amount exceeding locked liquidity (expected)");
+        info!("Got no quote for amount exceeding advertised capacity (expected)");
     }
 
-    // Step 6: Wait for payment to be queued (unlocks liquidity)
-    info!("=== Step 6: Waiting for payment to be queued (unlocks liquidity) ===");
-    // Wait for swap to reach WaitingMMDepositInitiated (payment queued)
-    wait_for_swap_status(&client, otc_port, swap_id, "WaitingMMDepositInitiated").await;
-    info!("Swap reached waiting_mm_deposit_initiated - lock should be released");
+    // Step 6: Wait for payment to be queued.
+    info!("=== Step 6: Waiting for payment to be queued ===");
+    // Planner-driven execution can move the swap to MMDepositConfirmed or even Settled before
+    // this polling loop sees the intermediate WaitingMMDepositInitiated state.
+    wait_for_swap_statuses(
+        &client,
+        otc_port,
+        swap_id,
+        &[
+            "WaitingMMDepositInitiated",
+            "WaitingMMDepositConfirmed",
+            "Settled",
+        ],
+    )
+    .await;
+    info!("Swap advanced beyond user-deposit-confirmed");
 
-    // Give MM time to process UserDepositConfirmed and update liquidity cache
+    // Give MM time to process UserDepositConfirmed
     tokio::time::sleep(Duration::from_secs(3)).await;
 
-    // Step 7: Verify liquidity is restored after unlock
-    info!("=== Step 7: Verifying liquidity restored after unlock ===");
+    // Step 7: Verify advertised capacity is still unchanged.
+    info!("=== Step 7: Verifying advertised capacity remains unchanged ===");
     let liquidity_response_after_unlock = client
         .get(format!("http://localhost:{rfq_port}/api/v2/liquidity"))
         .send()
@@ -390,15 +392,14 @@ async fn test_liquidity_locking_reduces_available_liquidity(
 
     let max_amount_after_unlock = btc_to_cbbtc_after_unlock.max_amount;
     info!(
-        "Max amount after unlock: {} (initial: {}, after lock: {})",
-        max_amount_after_unlock, initial_max_amount, max_amount_after_lock
+        "Max amount after settlement progress: {} (initial: {})",
+        max_amount_after_unlock, initial_max_amount
     );
 
-    // Liquidity should be restored (at least back to initial, possibly higher if balance
-    // cache updated, but we don't assert exact equality due to cache timing)
+    // Advertised capacity should remain fixed for the lifetime of the process.
     assert!(
-        max_amount_after_unlock >= max_amount_after_lock,
-        "Liquidity should increase after unlock"
+        max_amount_after_unlock == initial_max_amount,
+        "Advertised capacity should remain unchanged after settlement progress"
     );
 
     drop(devnet);

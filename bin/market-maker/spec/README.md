@@ -66,6 +66,10 @@ More precisely:
 An `open` obligation may also be dropped before it is committed into an outbound
 batch. Obligations already present in `outbound_batches` cannot be dropped.
 
+For the checked inventory-monotonicity temporal property, the model now
+constrains each obligation so `settlement_amount >= payout_amount`. That makes
+successful outbound completion inventory-non-lossy in BTC-equivalent units.
+
 ## Planner Behavior
 
 `PlannerStep` is the core derived decision rule:
@@ -105,7 +109,7 @@ The default target is `50%`, encoded with `RebalanceTargetNumerator = 1` and
 the rebalance amount moves the majority side toward `50/50` conservatively
 without forcing an overshoot when an exact split is impossible.
 
-## Checked Invariants
+## Checked Invariants And Properties
 
 The starter config checks:
 
@@ -126,6 +130,12 @@ The starter config checks:
 - every non-`pending_settlement` obligation belongs to no active pending
   settlement
 - active outbound batches respect oldest-first ordering within an asset lane
+- total tracked inventory never decreases across steps, where tracked inventory
+  means:
+  - free `available_inventory`
+  - active outbound batch payout inventory
+  - active pending settlement claims
+  - active rebalance commitments
 
 ## Running TLC
 
@@ -144,9 +154,10 @@ The default config is the broad bounded search profile:
 - `MaxAmount = 2`
 - `MaxInventory = 3`
 
-Because payout and settlement amounts now branch independently, this default run
-is no longer a trivial smoke test. It is still the right broad model check, but
-it should be treated as a longer-running verification pass.
+Because payout and settlement amounts still branch, but now under the
+non-lossy constraint `settlement_amount >= payout_amount`, this default run is
+no longer a trivial smoke test. It is still the right broad model check, but it
+should be treated as a longer-running verification pass.
 
 For a deeper run with larger amount and inventory bounds:
 
@@ -163,6 +174,36 @@ java -cp /path/to/tla2tools.jar tlc2.TLC MMPlanner.tla -config MMPlanner.deep.cf
 - `MaxInventory = 5`
 
 The deeper config is slower still and is best treated as an explicit stress run.
+
+For a targeted deep run that still uses larger amount and inventory bounds but
+fixes the initial state to a non-lossy monotonicity scenario that terminates
+much faster:
+
+```bash
+cd bin/market-maker/spec
+java -cp /path/to/tla2tools.jar tlc2.TLC MMPlanner.tla -config MMPlanner.deep.targeted.cfg
+```
+
+`MMPlanner.deep.targeted.cfg` uses:
+
+- `MaxObligationId = 2`
+- `MaxCreatedAt = 1`
+- `MaxAmount = 3`
+- `MaxInventory = 5`
+
+That config starts from a state with:
+
+- one `AssetA` obligation with `payout_amount = 2` and `settlement_amount = 3`
+- one blocked `AssetB` obligation with `payout_amount = 2`
+- `5` units of free `AssetA` inventory and `0` units of free `AssetB`
+
+So the first planner step can simultaneously:
+
+- start an `AssetA` outbound batch
+- start an `AssetA -> AssetB` rebalance
+
+That makes it a good terminating check for the new tracked-inventory
+monotonicity property without replacing the broader stress profile.
 
 For a concrete concurrency scenario where a rebalance is already active, a new
 opposite-side obligation arrives, and the planner starts an outbound batch
@@ -181,6 +222,50 @@ two-step interleaving:
 2. Create a new `AssetA` obligation while the rebalance is still active.
 3. Run `PlannerStep`, which starts an `AssetA` outbound batch concurrently with
    the still-active rebalance.
+
+## Trace Validation
+
+There is also a TLC-backed differential test path for validating real Rust
+planner executions against the TLA+ model, rather than against another Rust
+reference implementation.
+
+Run it from the repo root with:
+
+```bash
+just mm-tla-trace-tests
+```
+
+That recipe:
+
+- ensures `tla2tools.jar` is present in `.cache/`
+- runs the ignored Rust test binary at
+  `bin/market-maker/tests/planner_tla_trace_validation.rs`
+- generates a concrete `MMPlannerTraceData.tla` module per test case
+- checks the recorded Rust before-state, action label, and after-state against
+  `MMPlannerTraceValidation.tla`
+
+The current trace cases cover:
+
+- rebalance fail/retry/succeed, then outbound success, then settlement
+  completion
+- outbound batch failure followed by dropping an open obligation
+- an automatically generated stress corpus of Rust planner traces, each of
+  which is checked by TLC
+
+The generated stress case defaults to:
+
+- `64` generated traces
+- `12` max planner steps per trace
+- RNG seed `1`
+
+You can override those with:
+
+- `MM_TLA_TRACE_CASES`
+- `MM_TLA_TRACE_STEPS`
+- `MM_TLA_TRACE_SEED`
+
+This is a true external-oracle check: TLC only passes if each recorded Rust
+transition is also a valid `MMPlanner` transition with the same observed state.
 
 ## Next Steps
 

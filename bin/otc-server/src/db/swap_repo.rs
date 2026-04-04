@@ -6,6 +6,7 @@ use otc_models::{
     ChainType, LatestRefund, Lot, MMDepositStatus, RealizedSwap, SettlementStatus, Swap,
     SwapStatus, UserDepositStatus,
 };
+use otc_protocols::mm::ActiveObligation;
 use sqlx::postgres::PgPool;
 use sqlx::Row;
 use uuid::Uuid;
@@ -30,6 +31,7 @@ pub struct PendingMMDepositSwap {
     pub user_destination_address: String,
     pub mm_nonce: [u8; 16],
     pub expected_lot: Lot,
+    pub settlement_lot: Lot,
     pub protocol_fee: U256,
     pub user_deposit_confirmed_at: DateTime<Utc>,
 }
@@ -460,6 +462,9 @@ impl SwapRepository {
                 s.mm_nonce,
                 s.user_deposit_status,
                 s.realized_swap,
+                q.from_chain,
+                q.from_token,
+                q.from_decimals,
                 q.to_chain,
                 q.to_token,
                 q.to_decimals
@@ -506,6 +511,11 @@ impl SwapRepository {
                 currency: to_currency,
                 amount: realized.mm_output,
             };
+            let from_currency = currency_from_db(
+                row.try_get::<String, _>("from_chain")?,
+                row.try_get::<serde_json::Value, _>("from_token")?,
+                row.try_get::<i16, _>("from_decimals")? as u8,
+            )?;
 
             let deposit_status_json: serde_json::Value = row.try_get("user_deposit_status")?;
             let deposit_status = user_deposit_status_from_json(deposit_status_json)?;
@@ -522,12 +532,120 @@ impl SwapRepository {
                 user_destination_address: row.try_get("user_destination_address")?,
                 mm_nonce,
                 expected_lot,
+                settlement_lot: Lot {
+                    currency: from_currency,
+                    amount: deposit_status.amount,
+                },
                 protocol_fee: realized.protocol_fee,
                 user_deposit_confirmed_at,
             });
         }
 
         Ok(swaps)
+    }
+
+    pub async fn get_active_mm_obligations(
+        &self,
+        market_maker_id: Uuid,
+    ) -> OtcServerResult<Vec<ActiveObligation>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT
+                s.id AS swap_id,
+                s.quote_id,
+                s.status,
+                s.user_destination_address,
+                s.mm_nonce,
+                s.user_deposit_status,
+                s.realized_swap,
+                q.from_chain,
+                q.from_token,
+                q.from_decimals,
+                q.to_chain,
+                q.to_token,
+                q.to_decimals
+            FROM swaps s
+            JOIN quotes q ON s.quote_id = q.id
+            WHERE s.market_maker_id = $1
+              AND s.status IN ($2, $3)
+              AND s.user_deposit_status IS NOT NULL
+              AND s.realized_swap IS NOT NULL
+            ORDER BY s.created_at ASC, s.id ASC
+            "#,
+        )
+        .bind(market_maker_id)
+        .bind(SwapStatus::WaitingMMDepositInitiated)
+        .bind(SwapStatus::WaitingMMDepositConfirmed)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut obligations = Vec::with_capacity(rows.len());
+        for row in rows {
+            let mm_nonce_vec: Vec<u8> = row.try_get("mm_nonce")?;
+            if mm_nonce_vec.len() != 16 {
+                return Err(OtcServerError::InvalidData {
+                    message: "mm_nonce must be exactly 16 bytes".to_string(),
+                });
+            }
+            let mut mm_nonce = [0u8; 16];
+            mm_nonce.copy_from_slice(&mm_nonce_vec);
+
+            let realized_json: serde_json::Value = row.try_get("realized_swap")?;
+            let realized: RealizedSwap =
+                serde_json::from_value(realized_json).map_err(|e| OtcServerError::InvalidData {
+                    message: format!("Failed to deserialize realized_swap: {e}"),
+                })?;
+
+            let to_currency = currency_from_db(
+                row.try_get::<String, _>("to_chain")?,
+                row.try_get::<serde_json::Value, _>("to_token")?,
+                row.try_get::<i16, _>("to_decimals")? as u8,
+            )?;
+            let from_currency = currency_from_db(
+                row.try_get::<String, _>("from_chain")?,
+                row.try_get::<serde_json::Value, _>("from_token")?,
+                row.try_get::<i16, _>("from_decimals")? as u8,
+            )?;
+
+            let deposit_status_json: serde_json::Value = row.try_get("user_deposit_status")?;
+            let deposit_status = user_deposit_status_from_json(deposit_status_json)?;
+            let user_deposit_confirmed_at =
+                deposit_status
+                    .confirmed_at
+                    .ok_or_else(|| OtcServerError::InvalidData {
+                        message: "user_deposit_status.confirmed_at missing".to_string(),
+                    })?;
+
+            let status: SwapStatus = row.try_get("status")?;
+            if !matches!(
+                status,
+                SwapStatus::WaitingMMDepositInitiated | SwapStatus::WaitingMMDepositConfirmed
+            ) {
+                return Err(OtcServerError::InvalidData {
+                    message: format!("unexpected active MM obligation status: {status:?}"),
+                });
+            }
+
+            obligations.push(ActiveObligation {
+                swap_id: row.try_get("swap_id")?,
+                quote_id: row.try_get("quote_id")?,
+                status,
+                user_destination_address: row.try_get("user_destination_address")?,
+                mm_nonce,
+                expected_lot: Lot {
+                    currency: to_currency,
+                    amount: realized.mm_output,
+                },
+                settlement_lot: Lot {
+                    currency: from_currency,
+                    amount: deposit_status.amount,
+                },
+                protocol_fee: realized.protocol_fee,
+                user_deposit_confirmed_at,
+            });
+        }
+
+        Ok(obligations)
     }
 
     pub async fn get_settled_swaps_for_market_maker(

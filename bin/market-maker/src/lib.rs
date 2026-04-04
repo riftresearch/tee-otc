@@ -12,6 +12,7 @@ pub mod payment_manager;
 pub mod planner;
 pub mod price_oracle;
 mod rebalancer;
+mod rebalancer_actor;
 mod rfq_handler;
 pub mod wallet;
 mod websocket_client;
@@ -43,9 +44,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, Instrument};
 
 use crate::payment_manager::PaymentManager;
+use crate::planner::PlannerPolicy;
 use crate::rebalancer::run_inventory_metrics_reporter;
-use crate::rebalancer::run_rebalancer;
-use crate::rebalancer::BandsParams;
+use crate::rebalancer_actor::build_rebalance_actor;
 use crate::{
     bitcoin_wallet::BitcoinWallet, db::Database, evm_wallet::EVMWallet, wallet::WalletManager,
     wrapped_bitcoin_quoter::WrappedBitcoinQuoter,
@@ -110,6 +111,12 @@ pub enum Error {
     #[snafu(display("Payment repository error: {}", source))]
     PaymentRepository { source: db::PaymentRepositoryError },
 
+    #[snafu(display("Planner error: {}", source))]
+    Planner {
+        #[snafu(source(from(planner::service::PlannerServiceError, Box::new)))]
+        source: Box<planner::service::PlannerServiceError>,
+    },
+
     #[snafu(display("Coinbase exchange client error: {source} at {loc:#?}"))]
     CoinbaseExchangeClientError {
         source: coinbase_exchange_client::CoinbaseExchangeClientError,
@@ -123,6 +130,12 @@ pub enum Error {
         source: Box<rebalancer::RebalancerError>,
         #[snafu(implicit)]
         loc: snafu::Location,
+    },
+
+    #[snafu(display("Rebalance actor error: {source}"))]
+    RebalanceActor {
+        #[snafu(source(from(rebalancer_actor::RebalanceActorError, Box::new)))]
+        source: Box<rebalancer_actor::RebalanceActorError>,
     },
 
     #[snafu(display("Failed to install metrics recorder: {}", source))]
@@ -404,6 +417,32 @@ fn parse_url(s: &str) -> std::result::Result<Url, String> {
     Url::parse(s).map_err(|e| e.to_string())
 }
 
+fn build_planner_policy(args: &MarketMakerArgs) -> Result<PlannerPolicy> {
+    let target_bps = u16::try_from(args.inventory_target_ratio_bps).map_err(|_| Error::Config {
+        context: format!(
+            "inventory_target_ratio_bps {} exceeds u16 range",
+            args.inventory_target_ratio_bps
+        ),
+    })?;
+    let tolerance_bps = u16::try_from(args.rebalance_tolerance_bps).map_err(|_| Error::Config {
+        context: format!(
+            "rebalance_tolerance_bps {} exceeds u16 range",
+            args.rebalance_tolerance_bps
+        ),
+    })?;
+
+    let (trigger_bps, target_bps) = if args.auto_manage_inventory {
+        (
+            target_bps.saturating_add(tolerance_bps).min(10_000),
+            target_bps,
+        )
+    } else {
+        (10_000, 10_000)
+    };
+
+    Ok(PlannerPolicy::new(trigger_bps, target_bps))
+}
+
 async fn validate_chain_id<P>(provider: &P, expected_chain: ChainType) -> Result<()>
 where
     P: alloy::providers::Provider,
@@ -466,6 +505,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
 
     let deposit_repository = Arc::new(database.deposits());
     let broadcasted_transaction_repository = Arc::new(database.broadcasted_transactions());
+    let rebalance_repository = Arc::new(database.rebalances());
 
     let esplora_client = esplora_client::Builder::new(&args.bitcoin_wallet_esplora_url)
         .build_async()
@@ -534,39 +574,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     // Create liquidity lock manager for tracking locked liquidity
     let liquidity_lock_manager = Arc::new(liquidity_lock::LiquidityLockManager::new(&mut join_set));
 
-    // Create liquidity cache BEFORE WrappedBitcoinQuoter (it needs it)
-    let liquidity_cache = Arc::new(liquidity_cache::LiquidityCache::new(
-        wallet_manager.clone(),
-        balance_strategy.clone(),
-        liquidity_lock_manager.clone(),
-        args.evm_chain,
-        &mut join_set,
-    ));
-
-    let btc_eth_price_oracle = price_oracle::BitcoinEtherPriceOracle::new(&mut join_set);
-
-    let wrapped_bitcoin_quoter = Arc::new(WrappedBitcoinQuoter::new(
-        wallet_manager.clone(),
-        liquidity_cache.clone(),
-        btc_eth_price_oracle,
-        esplora_client,
-        provider.clone().erased(),
-        args.trade_spread_bps,
-        args.fee_safety_multiplier,
-        args.evm_chain,
-        &mut join_set,
-    ));
-
     let payment_repository = Arc::new(database.payments());
-
-    // Spawn batch monitor to track and cancel at-risk batches
-    batch_monitor::spawn_batch_monitor(
-        wallet_manager.clone(),
-        payment_repository.clone(),
-        args.batch_monitor_interval_secs,
-        &mut join_set,
-    );
-
     // Configure batch payment processing for each chain
     let mut batch_configs = std::collections::HashMap::new();
     batch_configs.insert(
@@ -593,12 +601,78 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     let payment_manager = Arc::new(PaymentManager::new(
         wallet_manager.clone(),
         payment_repository.clone(),
+        broadcasted_transaction_repository.clone(),
         batch_configs,
         balance_strategy.clone(),
         otc_response_tx,
         cancellation_token.clone(),
         &mut payment_manager_join_set,
     ));
+    payment_manager.recover_prepared_batches().await?;
+    let planner_service = Arc::new(
+        planner::PlannerService::new(
+            payment_manager.clone(),
+            bitcoin_wallet.clone(),
+            evm_wallet.clone(),
+            build_planner_policy(&args)?,
+            args.evm_chain,
+            cancellation_token.clone(),
+        )
+        .await
+        .context(PlannerSnafu)?,
+    );
+    let rebalance_actor = build_rebalance_actor(
+        rebalance_repository,
+        planner_service.clone(),
+        args.evm_chain,
+        CoinbaseClient::new(
+            args.coinbase_exchange_api_base_url.clone(),
+            args.coinbase_exchange_api_key.clone(),
+            args.coinbase_exchange_api_passphrase.clone(),
+            args.coinbase_exchange_api_secret.clone(),
+        )
+        .context(CoinbaseExchangeClientSnafu)?,
+        bitcoin_wallet.clone(),
+        evm_wallet.clone(),
+        Duration::from_secs(args.confirmation_poll_interval_secs),
+        args.btc_coinbase_confirmations,
+        args.cbbtc_coinbase_confirmations,
+        cancellation_token.clone(),
+    );
+    planner_service.attach_rebalance_dispatcher(rebalance_actor.clone());
+    rebalance_actor
+        .restore_and_resume()
+        .await
+        .context(RebalanceActorSnafu)?;
+
+    // Compute the boot-time route capacity snapshot once and keep it fixed for this process.
+    let liquidity_cache = Arc::new(liquidity_cache::LiquidityCache::new());
+    liquidity_cache
+        .initialize(wallet_manager.clone(), args.evm_chain)
+        .await?;
+
+    let btc_eth_price_oracle = price_oracle::BitcoinEtherPriceOracle::new(&mut join_set);
+
+    let wrapped_bitcoin_quoter = Arc::new(WrappedBitcoinQuoter::new(
+        wallet_manager.clone(),
+        liquidity_cache.clone(),
+        btc_eth_price_oracle,
+        esplora_client,
+        provider.clone().erased(),
+        args.trade_spread_bps,
+        args.fee_safety_multiplier,
+        args.evm_chain,
+        &mut join_set,
+    ));
+
+    // Spawn batch monitor to track and cancel at-risk batches
+    batch_monitor::spawn_batch_monitor(
+        wallet_manager.clone(),
+        payment_repository.clone(),
+        Some(planner_service.clone()),
+        args.batch_monitor_interval_secs,
+        &mut join_set,
+    );
     let quoting_enabled = Arc::new(AtomicBool::new(true));
 
     // Setup admin API server if address is provided
@@ -610,6 +684,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
             deposit_repository.clone(),
             payment_repository.clone(),
             payment_manager.clone(),
+            planner_service.clone(),
             liquidity_lock_manager.clone(),
             wallet_manager.clone(),
             quoting_enabled.clone(),
@@ -624,7 +699,7 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
     let otc_handler = otc_handler::OTCMessageHandler::new(
         quote_repository.clone(),
         deposit_repository.clone(),
-        payment_manager.clone(),
+        planner_service.clone(),
         payment_repository.clone(),
         liquidity_lock_manager.clone(),
         standing_requests.clone(),
@@ -635,7 +710,8 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         market_maker_id.to_string(),
         args.api_secret.clone(),
         otc_handler,
-    );
+    )
+    .with_ordered_inbound("otc");
     let (otc_handle, otc_future) = otc_ws_client
         .connect()
         .instrument(tracing::info_span!("ws", client = "otc"))
@@ -699,34 +775,6 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
 
     // Spawn RFQ WebSocket connection (ezsockets handles reconnection automatically)
     join_set.spawn(async move { rfq_future.await.context(WebSocketClientSnafu) });
-
-    let coinbase_client = CoinbaseClient::new(
-        args.coinbase_exchange_api_base_url,
-        args.coinbase_exchange_api_key,
-        args.coinbase_exchange_api_passphrase,
-        args.coinbase_exchange_api_secret,
-    )
-    .context(CoinbaseExchangeClientSnafu)?;
-
-    // Run rebalancer, even if auto manage inventory is disabled
-    // b/c it's still useful to track the balance of the wallets in metrics
-    let conversion_actor = run_rebalancer(
-        args.evm_chain,
-        coinbase_client,
-        bitcoin_wallet.clone(),
-        evm_wallet.clone(),
-        BandsParams {
-            target_bps: args.inventory_target_ratio_bps,
-            band_width_bps: args.rebalance_tolerance_bps,
-            poll_interval: Duration::from_secs(args.rebalance_poll_interval_secs),
-        },
-        args.auto_manage_inventory,
-        Duration::from_secs(args.confirmation_poll_interval_secs),
-        args.btc_coinbase_confirmations,
-        args.cbbtc_coinbase_confirmations,
-    );
-
-    join_set.spawn(async move { conversion_actor.await.context(RebalancerSnafu) });
 
     // run inventory metrics reporter
     let inventory_metrics_reporter = run_inventory_metrics_reporter(
@@ -843,6 +891,7 @@ fn setup_admin_api(
     deposit_repository: Arc<crate::db::DepositRepository>,
     payment_repository: Arc<crate::db::PaymentRepository>,
     payment_manager: Arc<PaymentManager>,
+    planner_service: Arc<planner::PlannerService>,
     liquidity_lock_manager: Arc<liquidity_lock::LiquidityLockManager>,
     wallet_manager: Arc<WalletManager>,
     quoting_enabled: Arc<AtomicBool>,
@@ -854,6 +903,7 @@ fn setup_admin_api(
         deposit_repository,
         payment_repository,
         payment_manager,
+        planner_service,
         liquidity_lock_manager,
         wallet_manager,
         quoting_enabled,

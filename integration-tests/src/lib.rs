@@ -87,4 +87,7 @@ mod taproot_address_test;
 mod external_detection_ingest_test;
 
 #[cfg(test)]
+mod planner_drain_plan_test;
+
+#[cfg(test)]
 mod market_maker_batch_settlement_test;

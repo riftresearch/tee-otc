@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use std::sync::Arc;
 use tokio::task::JoinSet;
 use tokio::time::{interval, Duration};
@@ -9,10 +10,17 @@ use otc_models::{can_be_refunded_soon_bc_mm_not_confirmed, ChainType};
 
 const BITCOIN_MIN_CONFIRMATIONS: u64 = 2;
 
+#[async_trait]
+pub trait BatchStatusListener: Send + Sync {
+    async fn batch_confirmed(&self, batch: &StoredBatch);
+    async fn batch_cancelled(&self, batch: &StoredBatch);
+}
+
 /// Spawns a background task that monitors batches and cancels those approaching refund window
 pub fn spawn_batch_monitor(
     wallet_manager: Arc<WalletManager>,
     payment_repository: Arc<PaymentRepository>,
+    listener: Option<Arc<dyn BatchStatusListener>>,
     polling_interval_secs: u64,
     join_set: &mut JoinSet<crate::Result<()>>,
 ) {
@@ -28,7 +36,9 @@ pub fn spawn_batch_monitor(
         loop {
             tick.tick().await;
 
-            if let Err(e) = monitor_batches(&wallet_manager, &payment_repository).await {
+            if let Err(e) =
+                monitor_batches(&wallet_manager, &payment_repository, listener.as_deref()).await
+            {
                 error!("Error monitoring batches: {}", e);
             }
         }
@@ -38,6 +48,7 @@ pub fn spawn_batch_monitor(
 async fn monitor_batches(
     wallet_manager: &WalletManager,
     payment_repository: &PaymentRepository,
+    listener: Option<&dyn BatchStatusListener>,
 ) -> crate::Result<()> {
     // Query all batches with status='created'
     let batches = payment_repository
@@ -58,7 +69,7 @@ async fn monitor_batches(
     );
 
     for batch in batches {
-        if let Err(e) = process_batch(wallet_manager, payment_repository, &batch).await {
+        if let Err(e) = process_batch(wallet_manager, payment_repository, &batch, listener).await {
             error!(
                 "Error processing batch {} (chain: {:?}): {}",
                 batch.txid, batch.chain, e
@@ -73,6 +84,7 @@ async fn process_batch(
     wallet_manager: &WalletManager,
     payment_repository: &PaymentRepository,
     batch: &StoredBatch,
+    listener: Option<&dyn BatchStatusListener>,
 ) -> crate::Result<()> {
     let wallet = wallet_manager
         .get(batch.chain)
@@ -94,6 +106,9 @@ async fn process_batch(
             .update_batch_status(&batch.txid, BatchStatus::Confirmed)
             .await
             .map_err(|e| crate::Error::PaymentRepository { source: e })?;
+        if let Some(listener) = listener {
+            listener.batch_confirmed(batch).await;
+        }
         return Ok(());
     }
 
@@ -115,6 +130,9 @@ async fn process_batch(
                     .update_batch_status(&batch.txid, BatchStatus::Cancelled)
                     .await
                     .map_err(|e| crate::Error::PaymentRepository { source: e })?;
+                if let Some(listener) = listener {
+                    listener.batch_cancelled(batch).await;
+                }
             }
             Err(e) => {
                 error!(

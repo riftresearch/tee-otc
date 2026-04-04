@@ -98,7 +98,7 @@ impl WrappedBitcoinQuoter {
             if start_time.elapsed() > timeout {
                 return FeeUpdateTimeoutSnafu.fail();
             }
-            if !self.fee_map.read().await.is_empty() {
+            if !self.fee_map.read().await.is_empty() && self.liquidity_cache.has_snapshot().await {
                 return Ok(());
             }
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -276,7 +276,7 @@ impl WrappedBitcoinQuoter {
             }
         };
 
-        // Get max liquidity from cache for this pair (with balance strategy applied)
+        // Get the boot-time theoretical payout cap for this route.
         let max_output = self
             .liquidity_cache
             .get_max_output_for_pair(&quote_request.from, &quote_request.to)
@@ -285,11 +285,11 @@ impl WrappedBitcoinQuoter {
 
         if max_output.is_zero() {
             return Ok(RFQResult::MakerUnavailable(
-                "Insufficient balance to fulfill quote".to_string(),
+                "Route capacity unavailable".to_string(),
             ));
         }
 
-        // Validate against liquidity bounds
+        // Validate against route-capacity bounds
         let max_input = compute_max_input_for_output(max_output.to::<u64>(), &rates);
         let min_input = compute_min_viable_input(&rates);
 
@@ -302,7 +302,7 @@ impl WrappedBitcoinQuoter {
 
         if breakdown.input > max_input {
             return Ok(RFQResult::MakerUnavailable(format!(
-                "Insufficient liquidity: requires {} but max available is {}",
+                "Quote exceeds route capacity: requires {} but max is {}",
                 breakdown.input, max_input
             )));
         }

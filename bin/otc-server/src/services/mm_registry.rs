@@ -3,10 +3,11 @@ use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use otc_models::ChainType;
 use otc_models::Lot;
-use otc_protocols::mm::{MMRequest, ProtocolMessage};
+use otc_protocols::mm::{ActiveObligation, MMRequest, ProtocolMessage};
 use snafu::Snafu;
+use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{mpsc, oneshot, Mutex};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -37,11 +38,19 @@ pub struct MarketMakerConnection {
     pub connection_id: Uuid, // Unique per connection instance
     pub sender: mpsc::Sender<ProtocolMessage<MMRequest>>,
     pub protocol_version: String,
+    delivery: Mutex<ConnectionDeliveryState>,
+}
+
+#[derive(Default)]
+struct ConnectionDeliveryState {
+    ready: bool,
+    bootstrap_queue: VecDeque<ProtocolMessage<MMRequest>>,
+    live_queue: VecDeque<ProtocolMessage<MMRequest>>,
 }
 
 #[derive(Clone)]
 pub struct MMRegistry {
-    connections: Arc<DashMap<Uuid, MarketMakerConnection>>,
+    connections: Arc<DashMap<Uuid, Arc<MarketMakerConnection>>>,
     pending_validations: Arc<DashMap<Uuid, oneshot::Sender<Result<bool>>>>,
 }
 
@@ -67,21 +76,116 @@ impl MMRegistry {
         sender: mpsc::Sender<ProtocolMessage<MMRequest>>,
         protocol_version: String,
     ) {
+        self.insert_connection(
+            market_maker_id,
+            connection_id,
+            sender,
+            protocol_version,
+            true,
+        );
+    }
+
+    pub fn register_pending(
+        &self,
+        market_maker_id: Uuid,
+        connection_id: Uuid,
+        sender: mpsc::Sender<ProtocolMessage<MMRequest>>,
+        protocol_version: String,
+    ) {
+        self.insert_connection(
+            market_maker_id,
+            connection_id,
+            sender,
+            protocol_version,
+            false,
+        );
+    }
+
+    fn insert_connection(
+        &self,
+        market_maker_id: Uuid,
+        connection_id: Uuid,
+        sender: mpsc::Sender<ProtocolMessage<MMRequest>>,
+        protocol_version: String,
+        ready: bool,
+    ) {
         info!(
             market_maker_id = %market_maker_id,
             connection_id = %connection_id,
             protocol_version = %protocol_version,
+            ready,
             "Registering market maker connection"
         );
 
-        let connection = MarketMakerConnection {
+        let connection = Arc::new(MarketMakerConnection {
             id: market_maker_id,
             connection_id,
             sender,
             protocol_version,
-        };
+            delivery: Mutex::new(ConnectionDeliveryState {
+                ready,
+                ..ConnectionDeliveryState::default()
+            }),
+        });
 
         self.connections.insert(market_maker_id, connection);
+    }
+
+    pub async fn queue_bootstrap_requests(
+        &self,
+        market_maker_id: Uuid,
+        connection_id: Uuid,
+        requests: Vec<ProtocolMessage<MMRequest>>,
+    ) -> Result<()> {
+        let connection = self.get_connection(&market_maker_id)?;
+        if connection.connection_id != connection_id {
+            return Ok(());
+        }
+
+        let mut delivery = connection.delivery.lock().await;
+        if delivery.ready {
+            drop(delivery);
+            for request in requests {
+                connection
+                    .sender
+                    .send(request)
+                    .await
+                    .map_err(|source| MMRegistryError::MessageSendError { source })?;
+            }
+            return Ok(());
+        }
+
+        delivery.bootstrap_queue.extend(requests);
+        Ok(())
+    }
+
+    pub async fn mark_ready(&self, market_maker_id: Uuid, connection_id: Uuid) -> Result<()> {
+        let connection = self.get_connection(&market_maker_id)?;
+        if connection.connection_id != connection_id {
+            return Ok(());
+        }
+
+        let mut delivery = connection.delivery.lock().await;
+        if delivery.ready {
+            return Ok(());
+        }
+
+        while let Some(request) = delivery.bootstrap_queue.pop_front() {
+            connection
+                .sender
+                .send(request)
+                .await
+                .map_err(|source| MMRegistryError::MessageSendError { source })?;
+        }
+        while let Some(request) = delivery.live_queue.pop_front() {
+            connection
+                .sender
+                .send(request)
+                .await
+                .map_err(|source| MMRegistryError::MessageSendError { source })?;
+        }
+        delivery.ready = true;
+        Ok(())
     }
 
     /// Unregister a market maker connection only if the connection_id matches
@@ -132,9 +236,9 @@ impl MMRegistry {
         user_tx_hash: &str,
         deposit_amount: U256,
     ) {
-        if let Some(conn) = self.connections.get(market_maker_id) {
-            let request = ProtocolMessage {
-                version: conn.protocol_version.clone(),
+        let request = if let Ok(connection) = self.get_connection(market_maker_id) {
+            ProtocolMessage {
+                version: connection.protocol_version.clone(),
                 sequence: 0,
                 payload: MMRequest::UserDeposited {
                     request_id: Uuid::now_v7(),
@@ -145,10 +249,13 @@ impl MMRegistry {
                     deposit_amount,
                     timestamp: utc::now(),
                 },
-            };
-            if let Err(e) = conn.sender.send(request).await {
-                error!(market_maker_id = %market_maker_id, error = %e, "Failed to send user deposit notification");
             }
+        } else {
+            return;
+        };
+
+        if let Err(e) = self.send_live_request(market_maker_id, request).await {
+            error!(market_maker_id = %market_maker_id, error = %e, "Failed to send user deposit notification");
         }
     }
 
@@ -157,21 +264,10 @@ impl MMRegistry {
         market_maker_id: &Uuid,
         newest_batch_timestamp: Option<DateTime<Utc>>,
     ) -> Result<()> {
-        let (protocol_version, sender) = {
-            let connection = self.connections.get(market_maker_id).ok_or_else(|| {
-                MMRegistryError::MarketMakerNotConnected {
-                    market_maker_id: market_maker_id.to_string(),
-                }
-            })?;
-
-            (
-                connection.protocol_version.clone(),
-                connection.sender.clone(),
-            )
-        };
+        let connection = self.get_connection(market_maker_id)?;
 
         let request = ProtocolMessage {
-            version: protocol_version,
+            version: connection.protocol_version.clone(),
             sequence: 0,
             payload: MMRequest::NewBatches {
                 request_id: Uuid::now_v7(),
@@ -179,10 +275,7 @@ impl MMRegistry {
             },
         };
 
-        sender
-            .send(request)
-            .await
-            .map_err(|e| MMRegistryError::MessageSendError { source: e })?;
+        self.send_live_request(market_maker_id, request).await?;
 
         Ok(())
     }
@@ -191,31 +284,17 @@ impl MMRegistry {
         &self,
         market_maker_id: &Uuid,
     ) -> Result<()> {
-        let (protocol_version, sender) = {
-            let connection = self.connections.get(market_maker_id).ok_or_else(|| {
-                MMRegistryError::MarketMakerNotConnected {
-                    market_maker_id: market_maker_id.to_string(),
-                }
-            })?;
-
-            (
-                connection.protocol_version.clone(),
-                connection.sender.clone(),
-            )
-        };
+        let connection = self.get_connection(market_maker_id)?;
 
         let request = ProtocolMessage {
-            version: protocol_version,
+            version: connection.protocol_version.clone(),
             sequence: 0,
             payload: MMRequest::LatestDepositVaultTimestamp {
                 request_id: Uuid::now_v7(),
             },
         };
 
-        sender
-            .send(request)
-            .await
-            .map_err(|e| MMRegistryError::MessageSendError { source: e })?;
+        self.send_live_request(market_maker_id, request).await?;
 
         info!(
             market_maker_id = %market_maker_id,
@@ -232,24 +311,14 @@ impl MMRegistry {
         user_destination_address: &str,
         mm_nonce: [u8; 16],
         expected_lot: &Lot,
+        settlement_lot: &Lot,
         protocol_fee: U256,
         user_deposit_confirmed_at: DateTime<Utc>,
     ) -> Result<()> {
-        let (protocol_version, sender) = {
-            let connection = self.connections.get(market_maker_id).ok_or_else(|| {
-                MMRegistryError::MarketMakerNotConnected {
-                    market_maker_id: market_maker_id.to_string(),
-                }
-            })?;
-
-            (
-                connection.protocol_version.clone(),
-                connection.sender.clone(),
-            )
-        };
+        let connection = self.get_connection(market_maker_id)?;
 
         let request = ProtocolMessage {
-            version: protocol_version,
+            version: connection.protocol_version.clone(),
             sequence: 0,
             payload: MMRequest::UserDepositConfirmed {
                 request_id: Uuid::now_v7(),
@@ -258,6 +327,7 @@ impl MMRegistry {
                 user_destination_address: user_destination_address.to_string(),
                 mm_nonce,
                 expected_lot: expected_lot.clone(),
+                settlement_lot: settlement_lot.clone(),
                 protocol_fee,
                 user_deposit_confirmed_at,
                 timestamp: utc::now(),
@@ -271,10 +341,27 @@ impl MMRegistry {
             "Notifying MM that user deposit is confirmed - MM should send payment with nonce"
         );
 
-        sender
-            .send(request)
-            .await
-            .map_err(|source| MMRegistryError::MessageSendError { source })
+        self.send_live_request(market_maker_id, request).await
+    }
+
+    pub async fn notify_active_obligations_snapshot(
+        &self,
+        market_maker_id: &Uuid,
+        obligations: Vec<ActiveObligation>,
+    ) -> Result<()> {
+        let connection = self.get_connection(market_maker_id)?;
+
+        let request = ProtocolMessage {
+            version: connection.protocol_version.clone(),
+            sequence: 0,
+            payload: MMRequest::ActiveObligationsSnapshot {
+                request_id: Uuid::now_v7(),
+                obligations,
+                timestamp: utc::now(),
+            },
+        };
+
+        self.send_live_request(market_maker_id, request).await
     }
 
     pub async fn notify_swap_complete(
@@ -286,9 +373,9 @@ impl MMRegistry {
         user_deposit_tx_hash: &str,
         swap_settlement_timestamp: &DateTime<Utc>,
     ) {
-        if let Some(conn) = self.connections.get(market_maker_id) {
-            let request = ProtocolMessage {
-                version: conn.protocol_version.clone(),
+        let request = if let Ok(connection) = self.get_connection(market_maker_id) {
+            ProtocolMessage {
+                version: connection.protocol_version.clone(),
                 sequence: 0,
                 payload: MMRequest::SwapComplete {
                     request_id: Uuid::now_v7(),
@@ -299,10 +386,13 @@ impl MMRegistry {
                     swap_settlement_timestamp: *swap_settlement_timestamp,
                     timestamp: utc::now(),
                 },
-            };
-            if let Err(e) = conn.sender.send(request).await {
-                error!(market_maker_id = %market_maker_id, error = %e, "Failed to send swap complete notification");
             }
+        } else {
+            return;
+        };
+
+        if let Err(e) = self.send_live_request(market_maker_id, request).await {
+            error!(market_maker_id = %market_maker_id, error = %e, "Failed to send swap complete notification");
         }
     }
 
@@ -315,9 +405,9 @@ impl MMRegistry {
         accepted: bool,
         rejection_reason: Option<String>,
     ) {
-        if let Some(conn) = self.connections.get(market_maker_id) {
-            let request = ProtocolMessage {
-                version: conn.protocol_version.clone(),
+        let request = if let Ok(connection) = self.get_connection(market_maker_id) {
+            ProtocolMessage {
+                version: connection.protocol_version.clone(),
                 sequence: 0,
                 payload: MMRequest::FeeSettlementAck {
                     request_id,
@@ -327,18 +417,20 @@ impl MMRegistry {
                     rejection_reason,
                     timestamp: utc::now(),
                 },
-            };
-            if let Err(e) = conn.sender.send(request).await {
-                error!(
-                    market_maker_id = %market_maker_id,
-                    error = %e,
-                    "Failed to send fee settlement ack to market maker"
-                );
             }
         } else {
             warn!(
                 market_maker_id = %market_maker_id,
                 "Cannot send fee settlement ack - market maker not connected"
+            );
+            return;
+        };
+
+        if let Err(e) = self.send_live_request(market_maker_id, request).await {
+            error!(
+                market_maker_id = %market_maker_id,
+                error = %e,
+                "Failed to send fee settlement ack to market maker"
             );
         }
     }
@@ -357,7 +449,7 @@ impl MMRegistry {
             "Validating quote with market maker"
         );
 
-        let mm_connection = if let Some(conn) = self.connections.get(market_maker_id) {
+        let mm_connection = if let Ok(conn) = self.get_connection(market_maker_id) {
             conn
         } else {
             warn!(
@@ -386,7 +478,7 @@ impl MMRegistry {
         self.pending_validations.insert(*quote_id, response_tx);
 
         // Send the validation request
-        if let Err(e) = mm_connection.sender.send(request).await {
+        if let Err(e) = self.send_live_request(market_maker_id, request).await {
             error!(
                 market_maker_id = %market_maker_id,
                 error = %e,
@@ -394,7 +486,7 @@ impl MMRegistry {
             );
             // Remove the pending validation since we failed to send
             if let Some((_, tx)) = self.pending_validations.remove(quote_id) {
-                let _ = tx.send(Err(MMRegistryError::MessageSendError { source: e }));
+                let _ = tx.send(Err(e));
             }
         }
     }
@@ -432,11 +524,52 @@ impl MMRegistry {
     pub fn get_connected_market_makers(&self) -> Vec<Uuid> {
         self.connections.iter().map(|entry| *entry.key()).collect()
     }
+
+    fn get_connection(&self, market_maker_id: &Uuid) -> Result<Arc<MarketMakerConnection>> {
+        self.connections
+            .get(market_maker_id)
+            .map(|entry| entry.value().clone())
+            .ok_or_else(|| MMRegistryError::MarketMakerNotConnected {
+                market_maker_id: market_maker_id.to_string(),
+            })
+    }
+
+    async fn send_live_request(
+        &self,
+        market_maker_id: &Uuid,
+        request: ProtocolMessage<MMRequest>,
+    ) -> Result<()> {
+        let connection = self.get_connection(market_maker_id)?;
+        let mut delivery = connection.delivery.lock().await;
+        if delivery.ready {
+            connection
+                .sender
+                .send(request)
+                .await
+                .map_err(|source| MMRegistryError::MessageSendError { source })?;
+        } else {
+            delivery.live_queue.push_back(request);
+        }
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use otc_models::{Currency, TokenIdentifier};
+
+    fn btc_lot(amount: u64) -> Lot {
+        Lot {
+            currency: Currency {
+                chain: ChainType::Bitcoin,
+                token: TokenIdentifier::Native,
+                decimals: 8,
+            },
+            amount: U256::from(amount),
+        }
+    }
 
     #[tokio::test]
     async fn test_register_unregister() {
@@ -506,5 +639,112 @@ mod tests {
             result,
             Err(MMRegistryError::MarketMakerNotConnected { .. })
         ));
+    }
+
+    #[tokio::test]
+    async fn test_pending_connection_flushes_bootstrap_before_live_messages() {
+        let registry = MMRegistry::new();
+        let mm_id = Uuid::now_v7();
+        let conn_id = Uuid::now_v7();
+        let (tx, mut rx) = mpsc::channel(10);
+
+        registry.register_pending(mm_id, conn_id, tx, "1.0.0".to_string());
+
+        let live_swap_id = Uuid::now_v7();
+        registry
+            .notify_user_deposit_confirmed(
+                &mm_id,
+                &live_swap_id,
+                &Uuid::now_v7(),
+                "dest-live",
+                [7u8; 16],
+                &btc_lot(10),
+                &btc_lot(11),
+                U256::ZERO,
+                utc::now(),
+            )
+            .await
+            .unwrap();
+
+        let bootstrap_request = ProtocolMessage {
+            version: "1.0.0".to_string(),
+            sequence: 0,
+            payload: MMRequest::ActiveObligationsSnapshot {
+                request_id: Uuid::now_v7(),
+                obligations: Vec::new(),
+                timestamp: utc::now(),
+            },
+        };
+        let latest_deposit_request = ProtocolMessage {
+            version: "1.0.0".to_string(),
+            sequence: 0,
+            payload: MMRequest::LatestDepositVaultTimestamp {
+                request_id: Uuid::now_v7(),
+            },
+        };
+
+        registry
+            .queue_bootstrap_requests(
+                mm_id,
+                conn_id,
+                vec![bootstrap_request.clone(), latest_deposit_request.clone()],
+            )
+            .await
+            .unwrap();
+        registry.mark_ready(mm_id, conn_id).await.unwrap();
+
+        let first = rx.recv().await.expect("bootstrap snapshot");
+        let second = rx.recv().await.expect("bootstrap follow-up");
+        let third = rx.recv().await.expect("buffered live notification");
+
+        assert!(matches!(
+            first.payload,
+            MMRequest::ActiveObligationsSnapshot { .. }
+        ));
+        assert!(matches!(
+            second.payload,
+            MMRequest::LatestDepositVaultTimestamp { .. }
+        ));
+        match third.payload {
+            MMRequest::UserDepositConfirmed { swap_id, .. } => {
+                assert_eq!(swap_id, live_swap_id);
+            }
+            other => panic!("unexpected payload order: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_live_messages_after_ready_are_delivered_immediately() {
+        let registry = MMRegistry::new();
+        let mm_id = Uuid::now_v7();
+        let conn_id = Uuid::now_v7();
+        let (tx, mut rx) = mpsc::channel(10);
+
+        registry.register_pending(mm_id, conn_id, tx, "1.0.0".to_string());
+        registry.mark_ready(mm_id, conn_id).await.unwrap();
+
+        let swap_id = Uuid::now_v7();
+        registry
+            .notify_user_deposit_confirmed(
+                &mm_id,
+                &swap_id,
+                &Uuid::now_v7(),
+                "dest-ready",
+                [9u8; 16],
+                &btc_lot(12),
+                &btc_lot(13),
+                U256::ZERO,
+                utc::now(),
+            )
+            .await
+            .unwrap();
+
+        match rx.recv().await.expect("live notification after ready") {
+            ProtocolMessage {
+                payload: MMRequest::UserDepositConfirmed { swap_id: got, .. },
+                ..
+            } => assert_eq!(got, swap_id),
+            other => panic!("unexpected payload: {other:?}"),
+        }
     }
 }
