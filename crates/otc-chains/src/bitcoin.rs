@@ -645,7 +645,7 @@ impl ChainOperations for BitcoinChain {
         }
 
         let fee_address =
-            Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Bitcoin])?
+            Address::from_str(otc_models::fee_address_for_chain(ChainType::Bitcoin))?
                 .assume_checked();
         let fee_spk = fee_address.script_pubkey();
 

@@ -3,7 +3,7 @@ use crate::liquidity_lock::LiquidityLockManager;
 use crate::wallet::{WalletBalance, WalletManager, WalletResult};
 use alloy::primitives::U256;
 use otc_models::{
-    constants::{CB_BTC_CONTRACT_ADDRESS, SUPPORTED_TOKENS_BY_CHAIN},
+    constants::{supported_tokens_for_chain, CB_BTC_CONTRACT_ADDRESS},
     ChainType, Currency, TokenIdentifier,
 };
 use otc_protocols::rfq::TradingPairLiquidity;
@@ -74,16 +74,13 @@ impl LiquidityCache {
                         continue;
                     };
 
-                    let Some(tokens) = SUPPORTED_TOKENS_BY_CHAIN.get(&chain) else {
-                        continue;
-                    };
-
                     let mut token_balances = HashMap::new();
-                    for token in tokens {
-                        match wallet.balance(token).await {
+                    for token in supported_tokens_for_chain(chain) {
+                        let token = token.to_token_identifier();
+                        match wallet.balance(&token).await {
                             Ok(balance) => {
                                 // Normalize token to lowercase for case-insensitive lookups
-                                token_balances.insert(normalize_token(token), balance);
+                                token_balances.insert(normalize_token(&token), balance);
                             }
                             Err(error) => {
                                 warn!(

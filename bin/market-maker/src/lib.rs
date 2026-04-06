@@ -408,22 +408,19 @@ async fn validate_chain_id<P>(provider: &P, expected_chain: ChainType) -> Result
 where
     P: alloy::providers::Provider,
 {
-    use otc_models::constants::EXPECTED_CHAIN_IDS;
-
-    let expected_chain_id =
-        EXPECTED_CHAIN_IDS
-            .get(&expected_chain)
-            .ok_or_else(|| Error::Config {
-                context: format!("No expected chain ID configured for {:?}", expected_chain),
-            })?;
+    let expected_chain_id = otc_models::expected_chain_id(expected_chain).ok_or_else(|| {
+        Error::Config {
+            context: format!("No expected chain ID configured for {:?}", expected_chain),
+        }
+    })?;
 
     let actual_chain_id = provider.get_chain_id().await.map_err(|e| Error::Config {
         context: format!("Failed to query chain ID from RPC: {}", e),
     })?;
 
-    if actual_chain_id != *expected_chain_id {
+    if actual_chain_id != expected_chain_id {
         return Err(Error::ChainIdMismatch {
-            expected: *expected_chain_id,
+            expected: expected_chain_id,
             actual: actual_chain_id,
             chain: expected_chain,
         });

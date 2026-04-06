@@ -216,14 +216,14 @@ pub fn spawn_fee_settlement_engine(
                 FeeSettlementRail::Bitcoin => (
                     ChainType::Bitcoin,
                     ChainType::Bitcoin,
-                    otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Bitcoin].clone(),
+                    otc_models::fee_address_for_chain(ChainType::Bitcoin).to_string(),
                     TokenIdentifier::Native,
                 ),
                 FeeSettlementRail::Evm => (
                     evm_chain,
                     evm_chain,
-                    otc_models::FEE_ADDRESSES_BY_CHAIN[&evm_chain].clone(),
-                    constants::CBBTC_TOKEN.clone(),
+                    otc_models::fee_address_for_chain(evm_chain).to_string(),
+                    constants::cbbtc_token(),
                 ),
             };
 

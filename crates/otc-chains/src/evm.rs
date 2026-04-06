@@ -505,7 +505,7 @@ impl ChainOperations for EvmChain {
             });
         }
 
-        let fee_address = Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&self.chain_type])
+        let fee_address = Address::from_str(otc_models::fee_address_for_chain(self.chain_type))
             .map_err(|_| crate::Error::Serialization {
                 message: "Invalid fee address".to_string(),
             })?;
