@@ -127,6 +127,8 @@ fn deposit_uri_targets_address_directly(deposit_uri: &str, address: &str) -> boo
         .split('/')
         .next()
         .unwrap_or(path);
+    let direct_target = direct_target.split('@').next().unwrap_or(direct_target);
+    let direct_target = direct_target.strip_prefix("pay-").unwrap_or(direct_target);
 
     direct_target.eq_ignore_ascii_case(address)
 }
@@ -788,6 +790,28 @@ mod tests {
 
         let validated = client
             .validate_generated_crypto_address(response, "ethereum", DepositAddressKind::NativeEvm)
+            .unwrap();
+
+        assert_eq!(validated, address);
+    }
+
+    #[test]
+    fn validate_native_eth_deposit_accepts_chain_id_suffix() {
+        let client = test_client();
+        let address = "0x00000000000000000000000000000000000000cc".to_string();
+        let response = GeneratedCryptoAddressResponse {
+            address: address.clone(),
+            network: "base".to_string(),
+            warnings: vec![CoinbaseAddressWarning {
+                title: "Only send Ether (ETH) to this address".to_string(),
+                details: "Sending any other asset will result in permanent loss.".to_string(),
+            }],
+            deposit_uri: format!("ethereum:{address}@8453"),
+            exchange_deposit_address: true,
+        };
+
+        let validated = client
+            .validate_generated_crypto_address(response, "base", DepositAddressKind::NativeEvm)
             .unwrap();
 
         assert_eq!(validated, address);
