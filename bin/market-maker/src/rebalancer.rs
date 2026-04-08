@@ -110,6 +110,13 @@ impl DrainToCoinbaseMode {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExactDrainRequest {
+    Btc { amount_sats: u64 },
+    Cbbtc { amount_sats: u64 },
+    Eth { amount_wei: U256 },
+}
+
 enum Side {
     BtcToCbbtc,
     CbbtcToBtc,
@@ -556,6 +563,100 @@ pub async fn drain_inventory_to_coinbase(
         eth_requested_wei: eth_requested_wei.to_string(),
         eth_tx_hash,
     })
+}
+
+pub async fn drain_exact_asset_to_coinbase(
+    evm_chain: ChainType,
+    coinbase_client: &CoinbaseClient,
+    btc_wallet: &dyn Wallet,
+    evm_wallet: &dyn Wallet,
+    confirmation_poll_interval: Duration,
+    btc_coinbase_confirmations: u32,
+    cbbtc_coinbase_confirmations: u32,
+    request: ExactDrainRequest,
+) -> Result<DrainToCoinbaseSummary> {
+    let btc_balance_sats = btc_wallet
+        .balance(&TokenIdentifier::Native)
+        .await
+        .context(GetBalanceSnafu)?
+        .total_balance
+        .to::<u64>();
+    let cbbtc_balance_sats = evm_wallet
+        .balance(&TokenIdentifier::address(
+            CB_BTC_CONTRACT_ADDRESS.to_string(),
+        ))
+        .await
+        .context(GetBalanceSnafu)?
+        .total_balance
+        .to::<u64>();
+    let eth_balance_wei = evm_wallet
+        .balance(&TokenIdentifier::Native)
+        .await
+        .context(GetBalanceSnafu)?
+        .total_balance;
+
+    let mut summary = DrainToCoinbaseSummary {
+        test_mode: false,
+        drain_eth: matches!(request, ExactDrainRequest::Eth { .. }),
+        btc_balance_sats,
+        btc_requested_sats: 0,
+        btc_tx_hash: None,
+        cbbtc_balance_sats,
+        cbbtc_requested_sats: 0,
+        cbbtc_tx_hash: None,
+        eth_balance_wei: eth_balance_wei.to_string(),
+        eth_requested_wei: U256::ZERO.to_string(),
+        eth_tx_hash: None,
+    };
+
+    match request {
+        ExactDrainRequest::Btc { amount_sats } => {
+            summary.btc_requested_sats = amount_sats;
+            summary.btc_tx_hash = Some(
+                deposit_exact_btc_to_coinbase(
+                    coinbase_client,
+                    btc_wallet,
+                    amount_sats,
+                    confirmation_poll_interval,
+                    btc_coinbase_confirmations,
+                    false,
+                )
+                .await?,
+            );
+        }
+        ExactDrainRequest::Cbbtc { amount_sats } => {
+            summary.cbbtc_requested_sats = amount_sats;
+            summary.cbbtc_tx_hash = Some(
+                deposit_cbbtc_to_coinbase(
+                    evm_chain,
+                    coinbase_client,
+                    evm_wallet,
+                    amount_sats,
+                    confirmation_poll_interval,
+                    cbbtc_coinbase_confirmations,
+                    false,
+                )
+                .await?,
+            );
+        }
+        ExactDrainRequest::Eth { amount_wei } => {
+            summary.eth_requested_wei = amount_wei.to_string();
+            summary.eth_tx_hash = Some(
+                deposit_eth_to_coinbase(
+                    evm_chain,
+                    coinbase_client,
+                    evm_wallet,
+                    amount_wei,
+                    confirmation_poll_interval,
+                    cbbtc_coinbase_confirmations,
+                    false,
+                )
+                .await?,
+            );
+        }
+    }
+
+    Ok(summary)
 }
 
 async fn maybe_wait_for_coinbase_deposit_confirmations(

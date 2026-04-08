@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -26,7 +27,10 @@ use crate::{
     db::{BatchStatus, DepositRepository, DepositStore, PaymentRepository},
     liquidity_lock::LiquidityLockManager,
     payment_manager::PaymentManager,
-    rebalancer::{drain_inventory_to_coinbase, DrainToCoinbaseMode},
+    rebalancer::{
+        drain_exact_asset_to_coinbase, drain_inventory_to_coinbase, DrainToCoinbaseMode,
+        ExactDrainRequest,
+    },
     wallet::{ConsolidationSummary, WalletManager},
 };
 
@@ -63,6 +67,17 @@ pub struct DrainToCoinbaseRequest {
     pub test_mode: bool,
     #[serde(default)]
     pub drain_eth: bool,
+    pub asset: Option<DrainToCoinbaseAsset>,
+    pub amount_sats: Option<u64>,
+    pub amount_wei: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum DrainToCoinbaseAsset {
+    Btc,
+    Cbbtc,
+    Eth,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -144,6 +159,88 @@ struct InventoryTableRow {
     balance: String,
     usd_price: f64,
     usd_value: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum DrainExecutionMode {
+    Inventory,
+    Exact(ExactDrainRequest),
+}
+
+fn resolve_drain_execution_mode(
+    request: &DrainToCoinbaseRequest,
+) -> std::result::Result<DrainExecutionMode, String> {
+    match request.asset {
+        None => {
+            if request.amount_sats.is_some() || request.amount_wei.is_some() {
+                return Err(
+                    "`asset` is required when specifying `amount_sats` or `amount_wei`".to_string(),
+                );
+            }
+
+            Ok(DrainExecutionMode::Inventory)
+        }
+        Some(asset) => {
+            if request.test_mode {
+                return Err("`test_mode` cannot be combined with an exact asset drain".to_string());
+            }
+            if request.drain_eth {
+                return Err("`drain_eth` cannot be combined with an exact asset drain".to_string());
+            }
+
+            match asset {
+                DrainToCoinbaseAsset::Btc => {
+                    let amount_sats = request
+                        .amount_sats
+                        .ok_or_else(|| "`amount_sats` is required when `asset=btc`".to_string())?;
+                    if amount_sats == 0 {
+                        return Err("`amount_sats` must be greater than zero".to_string());
+                    }
+                    if request.amount_wei.is_some() {
+                        return Err("`amount_wei` is not valid when `asset=btc`".to_string());
+                    }
+
+                    Ok(DrainExecutionMode::Exact(ExactDrainRequest::Btc {
+                        amount_sats,
+                    }))
+                }
+                DrainToCoinbaseAsset::Cbbtc => {
+                    let amount_sats = request.amount_sats.ok_or_else(|| {
+                        "`amount_sats` is required when `asset=cbbtc`".to_string()
+                    })?;
+                    if amount_sats == 0 {
+                        return Err("`amount_sats` must be greater than zero".to_string());
+                    }
+                    if request.amount_wei.is_some() {
+                        return Err("`amount_wei` is not valid when `asset=cbbtc`".to_string());
+                    }
+
+                    Ok(DrainExecutionMode::Exact(ExactDrainRequest::Cbbtc {
+                        amount_sats,
+                    }))
+                }
+                DrainToCoinbaseAsset::Eth => {
+                    let amount_wei = request
+                        .amount_wei
+                        .as_ref()
+                        .ok_or_else(|| "`amount_wei` is required when `asset=eth`".to_string())?;
+                    if request.amount_sats.is_some() {
+                        return Err("`amount_sats` is not valid when `asset=eth`".to_string());
+                    }
+
+                    let amount_wei = U256::from_str(amount_wei)
+                        .map_err(|error| format!("Invalid `amount_wei`: {error}"))?;
+                    if amount_wei.is_zero() {
+                        return Err("`amount_wei` must be greater than zero".to_string());
+                    }
+
+                    Ok(DrainExecutionMode::Exact(ExactDrainRequest::Eth {
+                        amount_wei,
+                    }))
+                }
+            }
+        }
+    }
 }
 
 pub fn create_admin_router(state: AdminApiState) -> Router {
@@ -375,10 +472,24 @@ async fn drain_to_coinbase_handler(
     State(state): State<AdminApiState>,
     Query(request): Query<DrainToCoinbaseRequest>,
 ) -> impl IntoResponse {
+    let drain_execution_mode = match resolve_drain_execution_mode(&request) {
+        Ok(mode) => mode,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(AdminApiErrorResponse { error }),
+            )
+                .into_response();
+        }
+    };
+
     state.quoting_enabled.store(false, Ordering::Relaxed);
     info!(
         test_mode = request.test_mode,
         drain_eth = request.drain_eth,
+        ?request.asset,
+        amount_sats = request.amount_sats,
+        ?request.amount_wei,
         "Drain-to-Coinbase requested; quoting disabled before drain"
     );
 
@@ -443,49 +554,69 @@ async fn drain_to_coinbase_handler(
             .into_response();
     };
 
-    let drain_mode = if request.test_mode {
-        match tokio::try_join!(
-            state.coinbase_client.get_product_ticker_price("BTC-USD"),
-            state.coinbase_client.get_product_ticker_price("ETH-USD"),
-        ) {
-            Ok((btc_usd_price, eth_usd_price)) => {
-                info!(
-                    btc_usd_price,
-                    eth_usd_price,
-                    "Using test-mode drain cap of min(1% of balance, $100 of token value)"
-                );
-                DrainToCoinbaseMode::Test {
-                    btc_usd_price,
-                    eth_usd_price,
+    let drain_result = match drain_execution_mode {
+        DrainExecutionMode::Inventory => {
+            let drain_mode = if request.test_mode {
+                match tokio::try_join!(
+                    state.coinbase_client.get_product_ticker_price("BTC-USD"),
+                    state.coinbase_client.get_product_ticker_price("ETH-USD"),
+                ) {
+                    Ok((btc_usd_price, eth_usd_price)) => {
+                        info!(
+                            btc_usd_price,
+                            eth_usd_price,
+                            "Using test-mode drain cap of min(1% of balance, $100 of token value)"
+                        );
+                        DrainToCoinbaseMode::Test {
+                            btc_usd_price,
+                            eth_usd_price,
+                        }
+                    }
+                    Err(error) => {
+                        return (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(AdminApiErrorResponse {
+                                error: format!(
+                                    "Failed to fetch spot price(s) for test drain: {error}"
+                                ),
+                            }),
+                        )
+                            .into_response();
+                    }
                 }
-            }
-            Err(error) => {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(AdminApiErrorResponse {
-                        error: format!("Failed to fetch spot price(s) for test drain: {error}"),
-                    }),
-                )
-                    .into_response();
-            }
+            } else {
+                DrainToCoinbaseMode::Full
+            };
+
+            drain_inventory_to_coinbase(
+                state.evm_chain,
+                &state.coinbase_client,
+                bitcoin_wallet.as_ref(),
+                evm_wallet.as_ref(),
+                state.confirmation_poll_interval,
+                state.btc_coinbase_confirmations,
+                state.cbbtc_coinbase_confirmations,
+                drain_mode,
+                request.drain_eth,
+            )
+            .await
         }
-    } else {
-        DrainToCoinbaseMode::Full
+        DrainExecutionMode::Exact(exact_request) => {
+            drain_exact_asset_to_coinbase(
+                state.evm_chain,
+                &state.coinbase_client,
+                bitcoin_wallet.as_ref(),
+                evm_wallet.as_ref(),
+                state.confirmation_poll_interval,
+                state.btc_coinbase_confirmations,
+                state.cbbtc_coinbase_confirmations,
+                exact_request,
+            )
+            .await
+        }
     };
 
-    match drain_inventory_to_coinbase(
-        state.evm_chain,
-        &state.coinbase_client,
-        bitcoin_wallet.as_ref(),
-        evm_wallet.as_ref(),
-        state.confirmation_poll_interval,
-        state.btc_coinbase_confirmations,
-        state.cbbtc_coinbase_confirmations,
-        drain_mode,
-        request.drain_eth,
-    )
-    .await
-    {
+    match drain_result {
         Ok(summary) => {
             info!(
                 ?summary,
@@ -1109,6 +1240,129 @@ mod tests {
         });
 
         Url::parse(&format!("http://{}", addr)).unwrap()
+    }
+
+    #[test]
+    fn resolve_drain_execution_mode_defaults_to_inventory_drain() {
+        let request = DrainToCoinbaseRequest::default();
+
+        assert_eq!(
+            resolve_drain_execution_mode(&request),
+            Ok(DrainExecutionMode::Inventory)
+        );
+    }
+
+    #[test]
+    fn resolve_drain_execution_mode_accepts_exact_btc_request() {
+        let request = DrainToCoinbaseRequest {
+            asset: Some(DrainToCoinbaseAsset::Btc),
+            amount_sats: Some(140_000),
+            ..DrainToCoinbaseRequest::default()
+        };
+
+        assert_eq!(
+            resolve_drain_execution_mode(&request),
+            Ok(DrainExecutionMode::Exact(ExactDrainRequest::Btc {
+                amount_sats: 140_000,
+            }))
+        );
+    }
+
+    #[test]
+    fn resolve_drain_execution_mode_accepts_exact_cbbtc_request() {
+        let request = DrainToCoinbaseRequest {
+            asset: Some(DrainToCoinbaseAsset::Cbbtc),
+            amount_sats: Some(140_000),
+            ..DrainToCoinbaseRequest::default()
+        };
+
+        assert_eq!(
+            resolve_drain_execution_mode(&request),
+            Ok(DrainExecutionMode::Exact(ExactDrainRequest::Cbbtc {
+                amount_sats: 140_000,
+            }))
+        );
+    }
+
+    #[test]
+    fn resolve_drain_execution_mode_accepts_exact_eth_request() {
+        let request = DrainToCoinbaseRequest {
+            asset: Some(DrainToCoinbaseAsset::Eth),
+            amount_wei: Some("50000000000000000".to_string()),
+            ..DrainToCoinbaseRequest::default()
+        };
+
+        assert_eq!(
+            resolve_drain_execution_mode(&request),
+            Ok(DrainExecutionMode::Exact(ExactDrainRequest::Eth {
+                amount_wei: U256::from(50_000_000_000_000_000u64),
+            }))
+        );
+    }
+
+    #[test]
+    fn resolve_drain_execution_mode_rejects_amount_without_asset() {
+        let request = DrainToCoinbaseRequest {
+            amount_sats: Some(140_000),
+            ..DrainToCoinbaseRequest::default()
+        };
+
+        assert_eq!(
+            resolve_drain_execution_mode(&request),
+            Err("`asset` is required when specifying `amount_sats` or `amount_wei`".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_drain_execution_mode_rejects_incompatible_exact_flags() {
+        let request = DrainToCoinbaseRequest {
+            test_mode: true,
+            asset: Some(DrainToCoinbaseAsset::Btc),
+            amount_sats: Some(140_000),
+            ..DrainToCoinbaseRequest::default()
+        };
+
+        assert_eq!(
+            resolve_drain_execution_mode(&request),
+            Err("`test_mode` cannot be combined with an exact asset drain".to_string())
+        );
+
+        let request = DrainToCoinbaseRequest {
+            drain_eth: true,
+            asset: Some(DrainToCoinbaseAsset::Eth),
+            amount_wei: Some("1".to_string()),
+            ..DrainToCoinbaseRequest::default()
+        };
+
+        assert_eq!(
+            resolve_drain_execution_mode(&request),
+            Err("`drain_eth` cannot be combined with an exact asset drain".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_drain_execution_mode_rejects_wrong_amount_units() {
+        let btc_request = DrainToCoinbaseRequest {
+            asset: Some(DrainToCoinbaseAsset::Btc),
+            amount_sats: Some(140_000),
+            amount_wei: Some("1".to_string()),
+            ..DrainToCoinbaseRequest::default()
+        };
+        assert_eq!(
+            resolve_drain_execution_mode(&btc_request),
+            Err("`amount_wei` is not valid when `asset=btc`".to_string())
+        );
+
+        let eth_request = DrainToCoinbaseRequest {
+            asset: Some(DrainToCoinbaseAsset::Eth),
+            amount_sats: Some(1),
+            amount_wei: Some("1".to_string()),
+            ..DrainToCoinbaseRequest::default()
+        };
+        assert_eq!(
+            resolve_drain_execution_mode(&eth_request),
+            Err("`amount_sats` is not valid when `asset=eth`".to_string())
+        );
     }
 
     #[sqlx::test]
