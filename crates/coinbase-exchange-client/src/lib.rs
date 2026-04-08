@@ -97,11 +97,15 @@ fn is_evm_network(chain: ChainType) -> bool {
     matches!(chain, ChainType::Ethereum | ChainType::Base)
 }
 
-fn has_token_only_warning(warnings: &[CoinbaseAddressWarning]) -> bool {
+fn warnings_mention_expected_asset(
+    warnings: &[CoinbaseAddressWarning],
+    expected_keywords: &[&str],
+) -> bool {
     warnings.iter().any(|warning| {
-        let title = warning.title.to_ascii_lowercase();
-        let details = warning.details.to_ascii_lowercase();
-        title.contains("only send") || details.contains("permanent loss")
+        let text = format!("{} {}", warning.title, warning.details).to_ascii_lowercase();
+        expected_keywords
+            .iter()
+            .any(|keyword| text.contains(&keyword.to_ascii_lowercase()))
     })
 }
 
@@ -362,7 +366,6 @@ impl CoinbaseClient {
             .fail();
         }
 
-        let token_only_warning = has_token_only_warning(&response.warnings);
         let is_token_transfer_uri = response.deposit_uri.contains("/transfer?");
 
         match expected_kind {
@@ -376,10 +379,12 @@ impl CoinbaseClient {
                     }
                     .fail();
                 }
-                if token_only_warning {
+                if !response.warnings.is_empty()
+                    && !warnings_mention_expected_asset(&response.warnings, &["bitcoin", "btc"])
+                {
                     return InvalidRequestSnafu {
                         reason: format!(
-                            "Bitcoin deposit address returned token-only warning(s): {:?}",
+                            "Bitcoin deposit address returned warning(s) that do not mention BTC: {:?}",
                             response.warnings
                         ),
                     }
@@ -405,10 +410,15 @@ impl CoinbaseClient {
                     }
                     .fail();
                 }
-                if !token_only_warning {
+                if response.warnings.is_empty()
+                    || !warnings_mention_expected_asset(
+                        &response.warnings,
+                        &["bitcoin", "btc", "cbbtc"],
+                    )
+                {
                     return InvalidRequestSnafu {
                         reason: format!(
-                            "Token deposit address is missing token-only warning(s): {:?}",
+                            "Token deposit address is missing BTC/cbBTC warning(s): {:?}",
                             response.warnings
                         ),
                     }
@@ -434,10 +444,15 @@ impl CoinbaseClient {
                     }
                     .fail();
                 }
-                if token_only_warning {
+                if !response.warnings.is_empty()
+                    && !warnings_mention_expected_asset(
+                        &response.warnings,
+                        &["ethereum", "ether", "eth"],
+                    )
+                {
                     return InvalidRequestSnafu {
                         reason: format!(
-                            "Native EVM deposit address returned token-only warning(s): {:?}",
+                            "Native EVM deposit address returned warning(s) that do not mention ETH: {:?}",
                             response.warnings
                         ),
                     }
@@ -693,6 +708,28 @@ mod tests {
     }
 
     #[test]
+    fn validate_bitcoin_deposit_accepts_btc_warning() {
+        let client = test_client();
+        let address = "bcrt1qexample0000000000000000000000000000000000000".to_string();
+        let response = GeneratedCryptoAddressResponse {
+            address: address.clone(),
+            network: "bitcoin".to_string(),
+            warnings: vec![CoinbaseAddressWarning {
+                title: "Only send Bitcoin (BTC) to this address".to_string(),
+                details: "Sending any other asset, including Bitcoin Cash (BCH), will result in permanent loss.".to_string(),
+            }],
+            deposit_uri: format!("bitcoin:{address}"),
+            exchange_deposit_address: true,
+        };
+
+        let validated = client
+            .validate_generated_crypto_address(response, "bitcoin", DepositAddressKind::Bitcoin)
+            .unwrap();
+
+        assert_eq!(validated, address);
+    }
+
+    #[test]
     fn validate_cbbtc_deposit_requires_token_transfer_uri_and_warning() {
         let client = test_client();
         let response = GeneratedCryptoAddressResponse {
@@ -709,6 +746,30 @@ mod tests {
 
         assert!(
             error.to_string().contains("missing transfer semantics"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_native_eth_deposit_rejects_btc_warning() {
+        let client = test_client();
+        let response = GeneratedCryptoAddressResponse {
+            address: "0x00000000000000000000000000000000000000cc".to_string(),
+            network: "ethereum".to_string(),
+            warnings: vec![CoinbaseAddressWarning {
+                title: "Only send Bitcoin (BTC) to this address".to_string(),
+                details: "Sending any other asset, including Bitcoin Cash (BCH), will result in permanent loss.".to_string(),
+            }],
+            deposit_uri: "ethereum:0x00000000000000000000000000000000000000cc".to_string(),
+            exchange_deposit_address: true,
+        };
+
+        let error = client
+            .validate_generated_crypto_address(response, "ethereum", DepositAddressKind::NativeEvm)
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("do not mention ETH"),
             "unexpected error: {error}"
         );
     }
