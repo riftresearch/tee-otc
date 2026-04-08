@@ -344,7 +344,7 @@ impl WrappedBitcoinQuoter {
         }
 
         // Get the cbBTC token address for the configured chain (normalized to lowercase)
-        let cbbtc_token = constants::CBBTC_TOKEN.normalize();
+        let cbbtc_token = constants::cbbtc_token().normalize();
 
         // Normalize request tokens for case-insensitive comparison
         let from_token = quote_request.from.token.normalize();

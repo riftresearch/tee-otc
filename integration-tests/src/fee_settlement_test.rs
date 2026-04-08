@@ -410,7 +410,7 @@ async fn test_fee_settlement_with_ethereum_swaps(
     let cbbtc_address = devnet.ethereum.cbbtc_contract.address().to_string();
 
     // Record initial fee wallet balance
-    let fee_address = Address::from_str(&otc_models::FEE_ADDRESSES_BY_CHAIN[&ChainType::Ethereum])
+    let fee_address = Address::from_str(otc_models::fee_address_for_chain(ChainType::Ethereum))
         .expect("Valid fee address");
 
     let initial_fee_balance = get_cbbtc_balance(

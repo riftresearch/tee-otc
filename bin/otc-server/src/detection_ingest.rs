@@ -19,8 +19,7 @@ use axum::{
 use metrics::{counter, gauge, histogram};
 use otc_auth::ApiKeyStore;
 use otc_models::{
-    constants::EXPECTED_CHAIN_IDS, ChainType, RealizedSwap, Swap, SwapStatus, TokenIdentifier,
-    UserDepositStatus,
+    ChainType, RealizedSwap, Swap, SwapStatus, TokenIdentifier, UserDepositStatus,
 };
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -489,8 +488,8 @@ async fn verify_participant_submission(
     };
 
     let allowed_signers = allowed_participant_signers(swap);
-    let signer_chain_id = match EXPECTED_CHAIN_IDS.get(&participant_auth.signer_chain) {
-        Some(chain_id) => *chain_id,
+    let signer_chain_id = match otc_models::expected_chain_id(participant_auth.signer_chain) {
+        Some(chain_id) => chain_id,
         None => {
             return Err(rejection(
                 SubmissionLane::ParticipantSigned,

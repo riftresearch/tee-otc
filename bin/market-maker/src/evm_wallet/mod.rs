@@ -911,12 +911,10 @@ async fn build_native_transfer_transaction(
 }
 
 fn ensure_valid_token(chain_type: ChainType, token: &TokenIdentifier) -> Result<(), WalletError> {
-    let normalized = token.normalize();
-    let supported = otc_models::SUPPORTED_TOKENS_BY_CHAIN
-        .get(&chain_type)
-        .unwrap()
+    let supported = otc_models::supported_tokens_for_chain(chain_type)
         .iter()
-        .any(|t| t.normalize() == normalized);
+        .copied()
+        .any(|supported_token| supported_token.matches(token));
 
     if !supported {
         return Err(WalletError::UnsupportedToken {
