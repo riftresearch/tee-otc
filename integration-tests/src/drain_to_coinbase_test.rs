@@ -402,7 +402,7 @@ async fn test_market_maker_admin_drain_to_coinbase_eth_uses_eth_account_address(
         Duration::from_secs(10),
         admin_client
             .post(format!(
-                "http://127.0.0.1:{admin_port}/coinbase/drain?drain_eth=true"
+                "http://127.0.0.1:{admin_port}/coinbase/drain?test_mode=true&drain_eth=true"
             ))
             .send(),
     )

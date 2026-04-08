@@ -280,7 +280,9 @@ impl Wallet for EVMWallet {
                 loc: location!(),
             });
         }
-        ensure_valid_token(self.chain_type, &first_payment.lot.currency.token)?;
+        if !matches!(first_payment.lot.currency.token, TokenIdentifier::Native) {
+            ensure_valid_token(self.chain_type, &first_payment.lot.currency.token)?;
+        }
         // now make sure all payments lots currencies are the same
         for payment in &payments {
             if payment.lot.currency != first_payment.lot.currency {
