@@ -30,6 +30,18 @@ use crate::{
     WalletError, WalletResult,
 };
 
+fn max_fee_per_gas_with_retry_headroom(max_fee_per_gas: u128) -> u128 {
+    let mut bumped_fee = max_fee_per_gas;
+
+    for _ in 0..transaction_broadcaster::MAX_NONCE_RETRIES {
+        bumped_fee = bumped_fee
+            .saturating_mul(transaction_broadcaster::GAS_PRICE_BUMP_NUMERATOR)
+            .div_ceil(transaction_broadcaster::GAS_PRICE_BUMP_DENOMINATOR);
+    }
+
+    bumped_fee
+}
+
 pub struct EVMWallet {
     pub tx_broadcaster: transaction_broadcaster::EVMTransactionBroadcaster,
     pub provider: Arc<WebsocketWalletProvider>,
@@ -160,10 +172,61 @@ impl EVMWallet {
 
         Ok(())
     }
+
+    async fn broadcast_transaction_request(
+        &self,
+        transaction_request: TransactionRequest,
+    ) -> WalletResult<String> {
+        let broadcast_result = self
+            .tx_broadcaster
+            .broadcast_transaction(
+                transaction_request,
+                transaction_broadcaster::PreflightCheck::Simulate,
+            )
+            .await
+            .map_err(|e| WalletError::TransactionCreationFailed {
+                reason: e.to_string(),
+            })?;
+
+        match broadcast_result {
+            transaction_broadcaster::TransactionExecutionResult::Success(tx_receipt) => {
+                info!(
+                    "Payment created for swap [evm_wallet] tx={}, status={:?}, gas_used={:?}",
+                    tx_receipt.transaction_hash,
+                    tx_receipt.status(),
+                    tx_receipt.gas_used
+                );
+                Ok(tx_receipt.transaction_hash.to_string())
+            }
+            _ => Err(WalletError::TransactionCreationFailed {
+                reason: format!("{broadcast_result:?}"),
+            }),
+        }
+    }
 }
 
 #[async_trait]
 impl Wallet for EVMWallet {
+    async fn drain_to_address(&self, to_address: &str) -> WalletResult<String> {
+        let recipient =
+            to_address
+                .parse::<Address>()
+                .map_err(|_| WalletError::ParseAddressFailed {
+                    context: format!("invalid recipient address: {to_address}"),
+                })?;
+
+        let transaction_request = build_native_transfer_transaction(
+            &self.tx_broadcaster.sender,
+            &self.provider,
+            recipient,
+            None,
+        )
+        .await?;
+
+        self.broadcast_transaction_request(transaction_request)
+            .await
+    }
+
     async fn cancel_tx(&self, _tx_hash: &str) -> WalletResult<String> {
         unimplemented!()
     }
@@ -232,30 +295,33 @@ impl Wallet for EVMWallet {
         let mut funding_executions = Vec::new();
         let mut reserved_deposit_keys = Vec::new();
 
-        if let Some(deposit_repository) = &self.deposit_repository {
-            for payment in &payments {
-                let (consolidation_executions, fill_status) = get_funding_executions_from_deposits(
-                    deposit_repository,
-                    &payment.lot,
-                    &self.provider,
-                    &self.tx_broadcaster.sender,
-                    self.max_deposits_per_lot,
-                )
-                .await?;
+        if !matches!(first_payment.lot.currency.token, TokenIdentifier::Native) {
+            if let Some(deposit_repository) = &self.deposit_repository {
+                for payment in &payments {
+                    let (consolidation_executions, fill_status) =
+                        get_funding_executions_from_deposits(
+                            deposit_repository,
+                            &payment.lot,
+                            &self.provider,
+                            &self.tx_broadcaster.sender,
+                            self.max_deposits_per_lot,
+                        )
+                        .await?;
 
-                // Track deposit keys for potential unreserving on failure
-                match fill_status {
-                    FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
-                        reserved_deposit_keys
-                            .extend(deposits.iter().map(|d| d.private_key.clone()));
+                    // Track deposit keys for potential unreserving on failure
+                    match fill_status {
+                        FillStatus::Full(deposits) | FillStatus::Partial(deposits) => {
+                            reserved_deposit_keys
+                                .extend(deposits.iter().map(|d| d.private_key.clone()));
+                        }
+                        FillStatus::Empty => {}
                     }
-                    FillStatus::Empty => {}
-                }
 
-                funding_executions.extend(consolidation_executions);
-                if funding_executions.len() >= self.max_deposits_per_lot {
-                    // roughly limit number of funding executions for this batch
-                    break;
+                    funding_executions.extend(consolidation_executions);
+                    if funding_executions.len() >= self.max_deposits_per_lot {
+                        // roughly limit number of funding executions for this batch
+                        break;
+                    }
                 }
             }
         };
@@ -270,28 +336,12 @@ impl Wallet for EVMWallet {
         )
         .await?;
 
-        let broadcast_result = self
-            .tx_broadcaster
-            .broadcast_transaction(
-                transaction_request,
-                transaction_broadcaster::PreflightCheck::Simulate,
-            )
+        match self
+            .broadcast_transaction_request(transaction_request)
             .await
-            .map_err(|e| WalletError::TransactionCreationFailed {
-                reason: e.to_string(),
-            })?;
-
-        match broadcast_result {
-            transaction_broadcaster::TransactionExecutionResult::Success(tx_receipt) => {
-                info!(
-                    "Payment created for swap [evm_wallet] tx={}, status={:?}, gas_used={:?}",
-                    tx_receipt.transaction_hash,
-                    tx_receipt.status(),
-                    tx_receipt.gas_used
-                );
-                Ok(tx_receipt.transaction_hash.to_string())
-            }
-            _ => {
+        {
+            Ok(tx_hash) => Ok(tx_hash),
+            Err(error) => {
                 // Broadcast failed - unreserve the deposits so they can be used again
                 if !reserved_deposit_keys.is_empty() {
                     if let Some(deposit_repository) = &self.deposit_repository {
@@ -303,7 +353,7 @@ impl Wallet for EVMWallet {
                                 tracing::warn!(
                                     "Unreserved {} deposits after broadcast failure: {:?}",
                                     count,
-                                    broadcast_result
+                                    error
                                 );
                             }
                             Err(unreserve_err) => {
@@ -311,16 +361,14 @@ impl Wallet for EVMWallet {
                                     "Failed to unreserve {} deposits after broadcast failure. \
                                     Original error: {:?}, Unreserve error: {:?}",
                                     reserved_deposit_keys.len(),
-                                    broadcast_result,
+                                    error,
                                     unreserve_err
                                 );
                             }
                         }
                     }
                 }
-                Err(WalletError::TransactionCreationFailed {
-                    reason: format!("{broadcast_result:?}"),
-                })
+                Err(error)
             }
         }
     }
@@ -707,7 +755,41 @@ pub async fn create_evm_transfer_transaction(
 
     // -> extension of the above TODO, since we know all payments are to the same lot, the following is safe
     match &payments[0].lot.currency.token {
-        TokenIdentifier::Native => unimplemented!(),
+        TokenIdentifier::Native => {
+            if payments.len() != 1 {
+                return Err(WalletError::InvalidBatchPaymentRequest { loc: location!() });
+            }
+
+            if !additional_funding_executions.is_empty() {
+                return Err(WalletError::TransactionCreationFailed {
+                    reason: "native EVM transfers do not support deposit-key funding executions"
+                        .to_string(),
+                });
+            }
+
+            if mm_payment_validation.is_some() {
+                return Err(WalletError::TransactionCreationFailed {
+                    reason: "native EVM transfers do not support MM payment validation".to_string(),
+                });
+            }
+
+            let recipient = payments[0].to_address.parse::<Address>().map_err(|_| {
+                WalletError::ParseAddressFailed {
+                    context: format!(
+                        "invalid recipient {} when parsing address for payment",
+                        payments[0].to_address
+                    ),
+                }
+            })?;
+
+            build_native_transfer_transaction(
+                sender,
+                provider,
+                recipient,
+                Some(payments[0].lot.amount),
+            )
+            .await
+        }
         TokenIdentifier::Address(address) => {
             let token_address =
                 address
@@ -750,6 +832,80 @@ pub async fn create_evm_transfer_transaction(
             )
         }
     }
+}
+
+async fn build_native_transfer_transaction(
+    sender: &Address,
+    provider: &Arc<WebsocketWalletProvider>,
+    recipient: Address,
+    requested_amount: Option<U256>,
+) -> Result<TransactionRequest, WalletError> {
+    let native_balance =
+        provider
+            .get_balance(*sender)
+            .await
+            .map_err(|e| WalletError::RpcCallError {
+                source: e,
+                loc: location!(),
+            })?;
+
+    let estimate_request = TransactionRequest::default()
+        .with_from(*sender)
+        .with_to(recipient)
+        .with_value(U256::ZERO);
+
+    let gas_limit =
+        provider
+            .estimate_gas(estimate_request)
+            .await
+            .map_err(|e| WalletError::RpcCallError {
+                source: e,
+                loc: location!(),
+            })?;
+
+    let fee_estimate =
+        provider
+            .estimate_eip1559_fees()
+            .await
+            .map_err(|e| WalletError::RpcCallError {
+                source: e,
+                loc: location!(),
+            })?;
+
+    let reserved_fee = U256::from(gas_limit).saturating_mul(U256::from(
+        max_fee_per_gas_with_retry_headroom(fee_estimate.max_fee_per_gas),
+    ));
+
+    let transfer_amount = match requested_amount {
+        Some(amount) => {
+            let required = amount.saturating_add(reserved_fee);
+            if required > native_balance {
+                return Err(WalletError::InsufficientBalance {
+                    required: required.to_string(),
+                    available: native_balance.to_string(),
+                });
+            }
+            amount
+        }
+        None => {
+            if native_balance <= reserved_fee {
+                return Err(WalletError::InsufficientBalance {
+                    required: reserved_fee.to_string(),
+                    available: native_balance.to_string(),
+                });
+            }
+            // Reserve enough fee headroom for the broadcaster's gas-bump retry policy.
+            native_balance.saturating_sub(reserved_fee)
+        }
+    };
+
+    Ok(TransactionRequest::default()
+        .with_from(*sender)
+        .with_to(recipient)
+        .with_value(transfer_amount)
+        .with_gas_limit(gas_limit)
+        .with_max_fee_per_gas(fee_estimate.max_fee_per_gas)
+        .with_max_priority_fee_per_gas(fee_estimate.max_priority_fee_per_gas))
 }
 
 fn ensure_valid_token(chain_type: ChainType, token: &TokenIdentifier) -> Result<(), WalletError> {

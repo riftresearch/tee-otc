@@ -16,7 +16,7 @@ use std::{path::PathBuf, str::FromStr};
 use tempfile::{NamedTempFile, TempDir};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
-use tracing::info;
+use tracing::{info, warn};
 
 use bitcoincore_rpc_async::RpcApi;
 
@@ -528,7 +528,7 @@ impl RiftDevnetBuilder {
 
         // 1) Bitcoin side
         let bitcoin_start = Instant::now();
-        let (bitcoin_devnet, current_mined_height) = crate::bitcoin_devnet::BitcoinDevnet::setup(
+        let bitcoin_setup = crate::bitcoin_devnet::BitcoinDevnet::setup(
             self.funded_bitcoin_addreses.clone(),
             self.using_esplora,
             self.interactive,
@@ -536,8 +536,39 @@ impl RiftDevnetBuilder {
             &mut join_set,
             devnet_cache.clone(),
         )
-        .await
-        .map_err(|e| eyre::eyre!("[devnet builder] Failed to setup Bitcoin devnet: {}", e))?;
+        .await;
+        let (bitcoin_devnet, current_mined_height) = match bitcoin_setup {
+            Ok(result) => result,
+            Err(error) if devnet_cache.is_some() => {
+                warn!(
+                    "Cached Bitcoin devnet setup failed: {}. Retrying with a fresh bitcoin datadir.",
+                    error
+                );
+                crate::bitcoin_devnet::BitcoinDevnet::setup(
+                    self.funded_bitcoin_addreses.clone(),
+                    self.using_esplora,
+                    self.interactive,
+                    self.bitcoin_mining_mode,
+                    &mut join_set,
+                    None,
+                )
+                .await
+                .map_err(|retry_error| {
+                    eyre::eyre!(
+                        "[devnet builder] Failed to setup Bitcoin devnet from cache ({}) and fresh ({})",
+                        error,
+                        retry_error
+                    )
+                })?
+            }
+            Err(error) => {
+                return Err(eyre::eyre!(
+                    "[devnet builder] Failed to setup Bitcoin devnet: {}",
+                    error
+                )
+                .into())
+            }
+        };
         info!(
             "[Devnet Builder] Bitcoin devnet setup took {:?}",
             bitcoin_start.elapsed()

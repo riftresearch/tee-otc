@@ -4,18 +4,20 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    time::Duration,
 };
 
 use alloy::primitives::U256;
 use axum::{
     extract::{Query, State},
-    http::StatusCode,
-    response::IntoResponse,
+    http::{header, StatusCode},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use chrono::{DateTime, Utc};
-use otc_models::{ChainType, Lot, TokenIdentifier};
+use coinbase_exchange_client::CoinbaseClient;
+use otc_models::{ChainType, Lot, TokenIdentifier, CB_BTC_CONTRACT_ADDRESS};
 use serde::{Deserialize, Serialize};
 use tracing::{error, info};
 use uuid::Uuid;
@@ -24,6 +26,7 @@ use crate::{
     db::{BatchStatus, DepositRepository, DepositStore, PaymentRepository},
     liquidity_lock::LiquidityLockManager,
     payment_manager::PaymentManager,
+    rebalancer::{drain_inventory_to_coinbase, DrainToCoinbaseMode},
     wallet::{ConsolidationSummary, WalletManager},
 };
 
@@ -38,6 +41,10 @@ pub struct AdminApiState {
     pub evm_chain: ChainType,
     pub bitcoin_max_deposits_per_iteration: usize,
     pub evm_max_deposits_per_iteration: usize,
+    pub coinbase_client: CoinbaseClient,
+    pub confirmation_poll_interval: Duration,
+    pub btc_coinbase_confirmations: u32,
+    pub cbbtc_coinbase_confirmations: u32,
 }
 
 #[derive(Debug, Deserialize)]
@@ -48,6 +55,14 @@ pub struct ConsolidateRequest {
 #[derive(Debug, Deserialize)]
 pub struct SetQuotingRequest {
     pub enabled: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub struct DrainToCoinbaseRequest {
+    #[serde(default)]
+    pub test_mode: bool,
+    #[serde(default)]
+    pub drain_eth: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -122,9 +137,20 @@ pub struct InFlightSwapsResponse {
     pub broadcast_pending_confirmation: Vec<BroadcastPendingConfirmationBatch>,
 }
 
+#[derive(Debug)]
+struct InventoryTableRow {
+    asset: &'static str,
+    chain: String,
+    balance: String,
+    usd_price: f64,
+    usd_value: f64,
+}
+
 pub fn create_admin_router(state: AdminApiState) -> Router {
     Router::new()
         .route("/consolidate", post(consolidate_handler))
+        .route("/coinbase/drain", post(drain_to_coinbase_handler))
+        .route("/inventory", get(get_inventory_handler))
         .route(
             "/quoting",
             get(get_quoting_handler).post(set_quoting_handler),
@@ -241,6 +267,243 @@ async fn get_in_flight_swaps_handler(State(state): State<AdminApiState>) -> impl
     };
 
     (StatusCode::OK, Json(response)).into_response()
+}
+
+async fn get_inventory_handler(State(state): State<AdminApiState>) -> Response {
+    let Some(bitcoin_wallet) = state.wallet_manager.get(ChainType::Bitcoin) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AdminApiErrorResponse {
+                error: "Bitcoin wallet not configured".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    let Some(evm_wallet) = state.wallet_manager.get(state.evm_chain) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AdminApiErrorResponse {
+                error: format!("{} wallet not configured", state.evm_chain.to_db_string()),
+            }),
+        )
+            .into_response();
+    };
+
+    let btc_token = TokenIdentifier::Native;
+    let cbbtc_token = TokenIdentifier::address(CB_BTC_CONTRACT_ADDRESS.to_string());
+    let eth_token = TokenIdentifier::Native;
+
+    let (btc_balance, cbbtc_balance, eth_balance) = match tokio::try_join!(
+        bitcoin_wallet.balance(&btc_token),
+        evm_wallet.balance(&cbbtc_token),
+        evm_wallet.balance(&eth_token),
+    ) {
+        Ok(balances) => balances,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AdminApiErrorResponse {
+                    error: format!("Failed to fetch inventory balances: {error}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let (btc_price_usd, eth_price_usd) = match tokio::try_join!(
+        state.coinbase_client.get_product_ticker_price("BTC-USD"),
+        state.coinbase_client.get_product_ticker_price("ETH-USD"),
+    ) {
+        Ok(prices) => prices,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AdminApiErrorResponse {
+                    error: format!("Failed to fetch Coinbase spot prices: {error}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let rows = match [
+        build_inventory_row(
+            "BTC",
+            ChainType::Bitcoin,
+            btc_balance.total_balance,
+            8,
+            btc_price_usd,
+        ),
+        build_inventory_row(
+            "cbBTC",
+            state.evm_chain,
+            cbbtc_balance.total_balance,
+            8,
+            btc_price_usd,
+        ),
+        build_inventory_row(
+            "ETH",
+            state.evm_chain,
+            eth_balance.total_balance,
+            18,
+            eth_price_usd,
+        ),
+    ]
+    .into_iter()
+    .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(rows) => rows,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AdminApiErrorResponse { error }),
+            )
+                .into_response();
+        }
+    };
+
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/markdown; charset=utf-8")],
+        render_inventory_markdown(&rows),
+    )
+        .into_response()
+}
+
+async fn drain_to_coinbase_handler(
+    State(state): State<AdminApiState>,
+    Query(request): Query<DrainToCoinbaseRequest>,
+) -> impl IntoResponse {
+    state.quoting_enabled.store(false, Ordering::Relaxed);
+    info!(
+        test_mode = request.test_mode,
+        drain_eth = request.drain_eth,
+        "Drain-to-Coinbase requested; quoting disabled before drain"
+    );
+
+    let awaiting_deposit_confirmation_swaps =
+        state.liquidity_lock_manager.snapshot_locks().await.len();
+    let queued_for_payment_swaps = state.payment_manager.in_flight_payments().len();
+    let created_batches = match state
+        .payment_repository
+        .get_batches_by_status(BatchStatus::Created)
+        .await
+    {
+        Ok(batches) => batches,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AdminApiErrorResponse {
+                    error: format!("Failed to load in-flight batches before drain: {error}"),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let broadcast_pending_confirmation_swaps = created_batches
+        .iter()
+        .map(|batch| batch.swap_ids.len())
+        .sum::<usize>();
+    let total_blocking_swaps = awaiting_deposit_confirmation_swaps
+        + queued_for_payment_swaps
+        + broadcast_pending_confirmation_swaps;
+
+    if total_blocking_swaps > 0 {
+        return (
+            StatusCode::CONFLICT,
+            Json(AdminApiErrorResponse {
+                error: format!(
+                    "Refusing to drain while {} swap(s) or batch payment(s) are still in flight. Check GET /swaps/in-flight and retry when safe_to_take_down is true.",
+                    total_blocking_swaps
+                ),
+            }),
+        )
+            .into_response();
+    }
+
+    let Some(bitcoin_wallet) = state.wallet_manager.get(ChainType::Bitcoin) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AdminApiErrorResponse {
+                error: "Bitcoin wallet not configured".to_string(),
+            }),
+        )
+            .into_response();
+    };
+
+    let Some(evm_wallet) = state.wallet_manager.get(state.evm_chain) else {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(AdminApiErrorResponse {
+                error: format!("{} wallet not configured", state.evm_chain.to_db_string()),
+            }),
+        )
+            .into_response();
+    };
+
+    let drain_mode = if request.test_mode {
+        match tokio::try_join!(
+            state.coinbase_client.get_product_ticker_price("BTC-USD"),
+            state.coinbase_client.get_product_ticker_price("ETH-USD"),
+        ) {
+            Ok((btc_usd_price, eth_usd_price)) => {
+                info!(
+                    btc_usd_price,
+                    eth_usd_price,
+                    "Using test-mode drain cap of min(1% of balance, $100 of token value)"
+                );
+                DrainToCoinbaseMode::Test {
+                    btc_usd_price,
+                    eth_usd_price,
+                }
+            }
+            Err(error) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(AdminApiErrorResponse {
+                        error: format!("Failed to fetch spot price(s) for test drain: {error}"),
+                    }),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        DrainToCoinbaseMode::Full
+    };
+
+    match drain_inventory_to_coinbase(
+        state.evm_chain,
+        &state.coinbase_client,
+        bitcoin_wallet.as_ref(),
+        evm_wallet.as_ref(),
+        state.confirmation_poll_interval,
+        state.btc_coinbase_confirmations,
+        state.cbbtc_coinbase_confirmations,
+        drain_mode,
+        request.drain_eth,
+    )
+    .await
+    {
+        Ok(summary) => {
+            info!(
+                ?summary,
+                "Drain-to-Coinbase completed successfully via admin API"
+            );
+            (StatusCode::OK, Json(summary)).into_response()
+        }
+        Err(error) => {
+            error!("Failed to drain inventory to Coinbase: {}", error);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(AdminApiErrorResponse {
+                    error: format!("Drain-to-Coinbase failed: {error}"),
+                }),
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn consolidate_handler(
@@ -516,15 +779,129 @@ fn summarize_consolidation(
     }
 }
 
+fn build_inventory_row(
+    asset: &'static str,
+    chain: ChainType,
+    raw_balance: U256,
+    decimals: u8,
+    usd_price: f64,
+) -> Result<InventoryTableRow, String> {
+    let balance_plain = format_decimal_amount(raw_balance, decimals);
+    let balance_units = balance_plain.parse::<f64>().map_err(|error| {
+        format!(
+            "Failed to parse {asset} balance '{}' as a decimal: {error}",
+            balance_plain
+        )
+    })?;
+
+    Ok(InventoryTableRow {
+        asset,
+        chain: chain.to_db_string().to_string(),
+        balance: format_decimal_amount_for_display(&balance_plain),
+        usd_price,
+        usd_value: balance_units * usd_price,
+    })
+}
+
+fn render_inventory_markdown(rows: &[InventoryTableRow]) -> String {
+    let total_usd = rows.iter().map(|row| row.usd_value).sum::<f64>();
+    let mut markdown = String::from("# Market Maker Inventory\n\n");
+    markdown.push_str("| Asset | Chain | Balance | USD Price | USD Value |\n");
+    markdown.push_str("| --- | --- | ---: | ---: | ---: |\n");
+
+    for row in rows {
+        markdown.push_str(&format!(
+            "| {} | {} | {} | {} | {} |\n",
+            row.asset,
+            row.chain,
+            row.balance,
+            format_usd(row.usd_price),
+            format_usd(row.usd_value)
+        ));
+    }
+
+    markdown.push_str(&format!(
+        "| **Total** |  |  |  | **{}** |\n",
+        format_usd(total_usd)
+    ));
+
+    markdown
+}
+
+fn format_decimal_amount(raw_balance: U256, decimals: u8) -> String {
+    let digits = raw_balance.to_string();
+    if decimals == 0 {
+        return digits;
+    }
+
+    let decimals = decimals as usize;
+    let mut result = if digits.len() <= decimals {
+        format!("0.{:0>width$}", digits, width = decimals)
+    } else {
+        let split_at = digits.len() - decimals;
+        format!("{}.{}", &digits[..split_at], &digits[split_at..])
+    };
+
+    trim_trailing_decimal_zeros(&mut result);
+    result
+}
+
+fn format_decimal_amount_for_display(amount: &str) -> String {
+    let Some((whole, fractional)) = amount.split_once('.') else {
+        return add_thousands_separators(amount);
+    };
+
+    format!("{}.{}", add_thousands_separators(whole), fractional)
+}
+
+fn format_usd(value: f64) -> String {
+    let sign = if value.is_sign_negative() { "-" } else { "" };
+    let rounded = format!("{:.2}", value.abs());
+    let (whole, fractional) = rounded
+        .split_once('.')
+        .expect("USD display should always have two decimals");
+
+    format!("{sign}${}.{}", add_thousands_separators(whole), fractional)
+}
+
+fn add_thousands_separators(digits: &str) -> String {
+    let mut formatted = String::with_capacity(digits.len() + (digits.len() / 3));
+    for (index, ch) in digits.chars().rev().enumerate() {
+        if index > 0 && index % 3 == 0 {
+            formatted.push(',');
+        }
+        formatted.push(ch);
+    }
+    formatted.chars().rev().collect()
+}
+
+fn trim_trailing_decimal_zeros(value: &mut String) {
+    if !value.contains('.') {
+        return;
+    }
+
+    while value.ends_with('0') {
+        value.pop();
+    }
+
+    if value.ends_with('.') {
+        value.pop();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
     use axum::{
         body::{to_bytes, Body},
+        extract::Path,
         http::Request,
+        routing::get as axum_get,
+        Json as AxumJson, Router as AxumRouter,
     };
     use otc_chains::traits::{MarketMakerPaymentVerification, Payment};
+    use reqwest::Url;
     use std::{sync::Mutex, time::Duration};
     use tokio::{sync::mpsc, task::JoinSet};
     use tokio_util::sync::CancellationToken;
@@ -542,10 +919,20 @@ mod tests {
         chain: ChainType,
         consolidations: Mutex<Vec<(ChainType, TokenIdentifier)>>,
         summary: ConsolidationSummary,
+        balances: HashMap<TokenIdentifier, WalletBalance>,
     }
 
     impl MockWallet {
         fn new(chain: ChainType, tx_hash: &str, amount: u64) -> Self {
+            let default_balance = WalletBalance {
+                total_balance: U256::from(1_000_000u64),
+                native_balance: U256::from(1_000_000u64),
+                deposit_key_balance: U256::ZERO,
+            };
+
+            let mut balances = HashMap::new();
+            balances.insert(TokenIdentifier::Native, default_balance);
+
             Self {
                 chain,
                 consolidations: Mutex::new(Vec::new()),
@@ -554,11 +941,30 @@ mod tests {
                     iterations: 1,
                     tx_hashes: vec![tx_hash.to_string()],
                 },
+                balances,
             }
         }
 
         fn consolidations(&self) -> Vec<(ChainType, TokenIdentifier)> {
             self.consolidations.lock().unwrap().clone()
+        }
+
+        fn with_balance(
+            mut self,
+            token: TokenIdentifier,
+            total_balance: U256,
+            native_balance: U256,
+            deposit_key_balance: U256,
+        ) -> Self {
+            self.balances.insert(
+                token,
+                WalletBalance {
+                    total_balance,
+                    native_balance,
+                    deposit_key_balance,
+                },
+            );
+            self
         }
     }
 
@@ -574,6 +980,10 @@ mod tests {
             })
         }
 
+        async fn drain_to_address(&self, _to_address: &str) -> WalletResult<String> {
+            Ok("drain-tx".to_string())
+        }
+
         async fn guarantee_confirmations(
             &self,
             _tx_hash: &str,
@@ -583,11 +993,11 @@ mod tests {
             Ok(())
         }
 
-        async fn balance(&self, _token: &TokenIdentifier) -> WalletResult<WalletBalance> {
-            Ok(WalletBalance {
-                total_balance: U256::from(1_000_000u64),
-                native_balance: U256::from(1_000_000u64),
-                deposit_key_balance: U256::ZERO,
+        async fn balance(&self, token: &TokenIdentifier) -> WalletResult<WalletBalance> {
+            self.balances.get(token).cloned().ok_or_else(|| {
+                WalletError::TransactionCreationFailed {
+                    reason: format!("Unsupported test token: {token:?}"),
+                }
             })
         }
 
@@ -646,11 +1056,59 @@ mod tests {
         ))
     }
 
+    fn build_coinbase_client() -> CoinbaseClient {
+        CoinbaseClient::new(
+            Url::parse("http://127.0.0.1:1").unwrap(),
+            String::new(),
+            String::new(),
+            String::new(),
+        )
+        .unwrap()
+    }
+
     async fn response_json<T: serde::de::DeserializeOwned>(
         response: axum::response::Response,
     ) -> T {
         let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         serde_json::from_slice(&bytes).unwrap()
+    }
+
+    async fn response_text(response: axum::response::Response) -> String {
+        let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        String::from_utf8(bytes.to_vec()).unwrap()
+    }
+
+    async fn spawn_coinbase_price_server() -> Url {
+        async fn ticker(Path(product_id): Path<String>) -> impl IntoResponse {
+            let price = match product_id.as_str() {
+                "BTC-USD" => "65000.00",
+                "ETH-USD" => "3200.00",
+                _ => return (StatusCode::NOT_FOUND, AxumJson(serde_json::json!({}))),
+            };
+
+            (
+                StatusCode::OK,
+                AxumJson(serde_json::json!({
+                    "price": price,
+                    "trade_id": 1,
+                    "size": "1.0",
+                    "time": utc::now().to_rfc3339(),
+                    "bid": price,
+                    "ask": price,
+                    "volume": "1.0"
+                })),
+            )
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let app = AxumRouter::new().route("/products/:product_id/ticker", axum_get(ticker));
+
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        Url::parse(&format!("http://{}", addr)).unwrap()
     }
 
     #[sqlx::test]
@@ -700,6 +1158,10 @@ mod tests {
             evm_chain: ChainType::Base,
             bitcoin_max_deposits_per_iteration: 100,
             evm_max_deposits_per_iteration: 200,
+            coinbase_client: build_coinbase_client(),
+            confirmation_poll_interval: Duration::from_secs(1),
+            btc_coinbase_confirmations: 0,
+            cbbtc_coinbase_confirmations: 0,
         };
 
         let response = create_admin_router(state)
@@ -801,6 +1263,10 @@ mod tests {
             evm_chain: ChainType::Ethereum,
             bitcoin_max_deposits_per_iteration: 100,
             evm_max_deposits_per_iteration: 200,
+            coinbase_client: build_coinbase_client(),
+            confirmation_poll_interval: Duration::from_secs(1),
+            btc_coinbase_confirmations: 0,
+            cbbtc_coinbase_confirmations: 0,
         };
 
         let response = create_admin_router(state)
@@ -855,6 +1321,10 @@ mod tests {
             evm_chain: ChainType::Ethereum,
             bitcoin_max_deposits_per_iteration: 100,
             evm_max_deposits_per_iteration: 200,
+            coinbase_client: build_coinbase_client(),
+            confirmation_poll_interval: Duration::from_secs(1),
+            btc_coinbase_confirmations: 0,
+            cbbtc_coinbase_confirmations: 0,
         };
 
         let response = create_admin_router(state)
@@ -873,6 +1343,97 @@ mod tests {
         let response: InFlightSwapsResponse = response_json(response).await;
         assert!(response.safe_to_take_down);
         assert_eq!(response.summary.total_blocking_swaps, 0);
+
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn test_inventory_endpoint_returns_markdown_table(
+        pool: sqlx::PgPool,
+    ) -> sqlx::Result<()> {
+        let db = Database::from_pool(pool).await.unwrap();
+        let deposit_repository = Arc::new(db.deposits());
+        let payment_repository = Arc::new(db.payments());
+        let coinbase_base_url = spawn_coinbase_price_server().await;
+
+        let bitcoin_wallet = Arc::new(
+            MockWallet::new(ChainType::Bitcoin, "btc-tx", 1).with_balance(
+                TokenIdentifier::Native,
+                U256::from(150_000_000u64),
+                U256::from(150_000_000u64),
+                U256::ZERO,
+            ),
+        );
+        let base_wallet = Arc::new(
+            MockWallet::new(ChainType::Base, "base-tx", 1)
+                .with_balance(
+                    TokenIdentifier::address(CB_BTC_CONTRACT_ADDRESS.to_string()),
+                    U256::from(25_000_000u64),
+                    U256::from(25_000_000u64),
+                    U256::ZERO,
+                )
+                .with_balance(
+                    TokenIdentifier::Native,
+                    U256::from(3_500_000_000_000_000_000u64),
+                    U256::from(3_500_000_000_000_000_000u64),
+                    U256::ZERO,
+                ),
+        );
+        let wallet_manager = build_wallet_manager(vec![
+            bitcoin_wallet as Arc<dyn Wallet>,
+            base_wallet as Arc<dyn Wallet>,
+        ]);
+        let payment_manager =
+            build_payment_manager(wallet_manager.clone(), payment_repository.clone());
+
+        let state = AdminApiState {
+            deposit_repository,
+            payment_repository,
+            payment_manager,
+            liquidity_lock_manager: Arc::new(LiquidityLockManager::with_ttl(
+                chrono::Duration::hours(1),
+            )),
+            wallet_manager,
+            quoting_enabled: Arc::new(AtomicBool::new(true)),
+            evm_chain: ChainType::Base,
+            bitcoin_max_deposits_per_iteration: 100,
+            evm_max_deposits_per_iteration: 200,
+            coinbase_client: CoinbaseClient::new(
+                coinbase_base_url,
+                String::new(),
+                String::new(),
+                String::new(),
+            )
+            .unwrap(),
+            confirmation_poll_interval: Duration::from_secs(1),
+            btc_coinbase_confirmations: 0,
+            cbbtc_coinbase_confirmations: 0,
+        };
+
+        let response = create_admin_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/inventory")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "text/markdown; charset=utf-8"
+        );
+
+        let body = response_text(response).await;
+        assert!(body.contains("# Market Maker Inventory"));
+        assert!(body.contains("| Asset | Chain | Balance | USD Price | USD Value |"));
+        assert!(body.contains("| BTC | bitcoin | 1.5 | $65,000.00 | $97,500.00 |"));
+        assert!(body.contains("| cbBTC | base | 0.25 | $65,000.00 | $16,250.00 |"));
+        assert!(body.contains("| ETH | base | 3.5 | $3,200.00 | $11,200.00 |"));
+        assert!(body.contains("| **Total** |  |  |  | **$124,950.00** |"));
 
         Ok(())
     }

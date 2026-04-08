@@ -248,6 +248,16 @@ impl BitcoinWallet {
         })
     }
 
+    pub async fn drain_to_address(&self, to_address: &str) -> WalletResult<String> {
+        self.tx_broadcaster
+            .broadcast_drain_transaction(to_address.to_string(), Vec::new(), None)
+            .await
+            .map_err(|e| WalletError::BitcoinWalletClient {
+                source: e,
+                loc: location!(),
+            })
+    }
+
     /// Converts a single deposit to ForeignUtxos by fetching the funding transaction
     /// and parsing the deposit's descriptor to identify spendable outputs.
     async fn deposit_to_foreign_utxos(
@@ -412,6 +422,10 @@ impl BitcoinWallet {
 impl WalletTrait for BitcoinWallet {
     fn chain_type(&self) -> ChainType {
         ChainType::Bitcoin
+    }
+
+    async fn drain_to_address(&self, to_address: &str) -> WalletResult<String> {
+        BitcoinWallet::drain_to_address(self, to_address).await
     }
 
     async fn cancel_tx(&self, tx_hash: &str) -> WalletResult<String> {

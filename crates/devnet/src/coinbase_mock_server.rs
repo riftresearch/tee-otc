@@ -36,6 +36,15 @@ pub struct CreateAddressRequest {
 pub struct CreateAddressResponse {
     pub address: String,
     pub network: String,
+    pub warnings: Vec<CreateAddressWarning>,
+    pub deposit_uri: String,
+    pub exchange_deposit_address: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CreateAddressWarning {
+    pub title: String,
+    pub details: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,7 +110,8 @@ struct AppState {
     bitcoin_devnet: Arc<BitcoinDevnet>,
     ethereum_devnet: Arc<EthDevnet>,
     btc_account_id: String,
-    deposit_addresses: Arc<DashMap<String, String>>, // network -> address
+    eth_account_id: String,
+    deposit_addresses: Arc<DashMap<String, String>>, // account/network -> address
     withdrawals: Arc<DashMap<String, Withdrawal>>,
     processing_mode: WithdrawalProcessingMode,
 }
@@ -116,6 +126,7 @@ impl AppState {
             bitcoin_devnet,
             ethereum_devnet,
             btc_account_id: Uuid::now_v7().to_string(),
+            eth_account_id: Uuid::now_v7().to_string(),
             deposit_addresses: Arc::new(DashMap::new()),
             withdrawals: Arc::new(DashMap::new()),
             processing_mode,
@@ -174,6 +185,10 @@ impl CoinbaseMockServer {
             .route(
                 "/transfers/:withdrawal_id",
                 axum::routing::get(get_transfer_status),
+            )
+            .route(
+                "/products/:product_id/ticker",
+                axum::routing::get(get_product_ticker),
             )
             .route(
                 "/admin/process-withdrawals",
@@ -256,11 +271,17 @@ async fn execute_withdrawal(
 }
 
 async fn get_accounts(State(state): State<AppState>) -> impl IntoResponse {
-    let account = CoinbaseAccount {
-        id: state.btc_account_id.clone(),
-        currency: "BTC".to_string(),
-    };
-    (StatusCode::OK, Json(json!([account])))
+    let accounts = [
+        CoinbaseAccount {
+            id: state.btc_account_id.clone(),
+            currency: "BTC".to_string(),
+        },
+        CoinbaseAccount {
+            id: state.eth_account_id.clone(),
+            currency: "ETH".to_string(),
+        },
+    ];
+    (StatusCode::OK, Json(json!(accounts)))
 }
 
 async fn create_deposit_address(
@@ -268,7 +289,7 @@ async fn create_deposit_address(
     Path(account_id): Path<String>,
     Json(req): Json<CreateAddressRequest>,
 ) -> impl IntoResponse {
-    if account_id != state.btc_account_id {
+    if account_id != state.btc_account_id && account_id != state.eth_account_id {
         return (
             StatusCode::NOT_FOUND,
             Json(json!({"error": "Account not found"})),
@@ -278,20 +299,63 @@ async fn create_deposit_address(
     let network = req.network.to_lowercase();
     let address_key = format!("{}_{}", account_id, network);
 
+    let build_response = |account_id: &str,
+                          network: &str,
+                          address: String|
+     -> CreateAddressResponse {
+        if network == "bitcoin" {
+            return CreateAddressResponse {
+                address: address.clone(),
+                network: network.to_string(),
+                warnings: Vec::new(),
+                deposit_uri: format!("bitcoin:{address}"),
+                exchange_deposit_address: true,
+            };
+        }
+
+        if account_id == state.eth_account_id {
+            return CreateAddressResponse {
+                address: address.clone(),
+                network: network.to_string(),
+                warnings: Vec::new(),
+                deposit_uri: format!("{network}:{address}"),
+                exchange_deposit_address: true,
+            };
+        }
+
+        let token_contract = if network == "base" {
+            "0x0000000000000000000000000000000000000ba5"
+        } else {
+            "0x0000000000000000000000000000000000000cb7"
+        };
+
+        CreateAddressResponse {
+            address: address.clone(),
+            network: network.to_string(),
+            warnings: vec![CreateAddressWarning {
+                title: "Only send cbBTC to this address".to_string(),
+                details: "Sending any other digital asset, including Ethereum (ETH), will result in permanent loss.".to_string(),
+            }],
+            deposit_uri: format!("{network}:{token_contract}/transfer?address={address}"),
+            exchange_deposit_address: true,
+        }
+    };
+
     // Check if we already have an address for this network
     if let Some(addr) = state.deposit_addresses.get(&address_key) {
         return (
             StatusCode::OK,
-            Json(json!(CreateAddressResponse {
-                address: addr.clone(),
-                network: req.network.clone(),
-            })),
+            Json(json!(build_response(
+                account_id.as_str(),
+                network.as_str(),
+                addr.clone()
+            ))),
         );
     }
 
     // Generate new address based on network
-    let address = match network.as_str() {
-        "bitcoin" => {
+    let address = match (account_id.as_str(), network.as_str()) {
+        (_, "bitcoin") => {
             // Generate Bitcoin address using RPC
             match state
                 .bitcoin_devnet
@@ -309,16 +373,14 @@ async fn create_deposit_address(
                 }
             }
         }
-        "ethereum" => {
-            // Generate Ethereum address - use a simple random address
-            // For devnet, we can use any valid address format
+        (_account_id, "ethereum") | (_account_id, "base") => {
             use rand::Rng;
+
             let mut rng = rand::thread_rng();
             let bytes: [u8; 20] = rng.gen();
-            let random_addr = Address::from(bytes);
-            format!("{:?}", random_addr)
+            format!("{:?}", Address::from(bytes))
         }
-        _ => {
+        (_, _) => {
             return (
                 StatusCode::BAD_REQUEST,
                 Json(json!({"error": format!("Unsupported network: {}", network)})),
@@ -330,10 +392,11 @@ async fn create_deposit_address(
 
     (
         StatusCode::OK,
-        Json(json!(CreateAddressResponse {
-            address,
-            network: req.network.clone(),
-        })),
+        Json(json!(build_response(
+            account_id.as_str(),
+            network.as_str(),
+            address
+        ))),
     )
 }
 
@@ -518,6 +581,32 @@ async fn get_transfer_status(
     };
 
     (StatusCode::OK, Json(response))
+}
+
+async fn get_product_ticker(Path(product_id): Path<String>) -> impl IntoResponse {
+    let price = match product_id.as_str() {
+        "BTC-USD" => "65000.00",
+        "ETH-USD" => "3200.00",
+        _ => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(json!({"error": format!("Unsupported product: {}", product_id)})),
+            );
+        }
+    };
+
+    (
+        StatusCode::OK,
+        Json(json!({
+            "trade_id": 1,
+            "price": price,
+            "size": "1.0",
+            "time": Utc::now().to_rfc3339(),
+            "bid": price,
+            "ask": price,
+            "volume": "1.0"
+        })),
+    )
 }
 
 /// Admin endpoint to manually process pending withdrawals

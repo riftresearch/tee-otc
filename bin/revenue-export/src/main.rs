@@ -113,11 +113,8 @@ impl MonthlySummary {
     }
 
     fn write_csv_header<W: Write>(mut writer: W) -> Result<()> {
-        writeln!(
-            writer,
-            "month,btc_fee,cbbtc_fee,usd_fee_aggregate"
-        )
-        .context("failed to write CSV header")?;
+        writeln!(writer, "month,btc_fee,cbbtc_fee,usd_fee_aggregate")
+            .context("failed to write CSV header")?;
         Ok(())
     }
 

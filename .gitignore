@@ -52,3 +52,4 @@ tmp/
 **/postgres-data/
 tx-flood-dedicated-wallets/
 rift-api/
+bin/market-maker/spec/

@@ -32,6 +32,33 @@ pub enum CoinbaseExchangeClientError {
 
 pub type Result<T> = std::result::Result<T, CoinbaseExchangeClientError>;
 
+#[derive(Debug, Deserialize)]
+struct ProductTickerResponse {
+    price: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CoinbaseAddressWarning {
+    title: String,
+    details: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct GeneratedCryptoAddressResponse {
+    address: String,
+    network: String,
+    warnings: Vec<CoinbaseAddressWarning>,
+    deposit_uri: String,
+    exchange_deposit_address: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DepositAddressKind {
+    Bitcoin,
+    EvmToken,
+    NativeEvm,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct CoinbaseAuthHeaders {
     access_key: String,
@@ -64,6 +91,40 @@ fn chain_type_to_coinbase_network(chain: ChainType) -> &'static str {
         ChainType::Ethereum => "ethereum",
         ChainType::Base => "base",
     }
+}
+
+fn is_evm_network(chain: ChainType) -> bool {
+    matches!(chain, ChainType::Ethereum | ChainType::Base)
+}
+
+fn has_token_only_warning(warnings: &[CoinbaseAddressWarning]) -> bool {
+    warnings.iter().any(|warning| {
+        let title = warning.title.to_ascii_lowercase();
+        let details = warning.details.to_ascii_lowercase();
+        title.contains("only send") || details.contains("permanent loss")
+    })
+}
+
+fn deposit_uri_contains_recipient(deposit_uri: &str, address: &str) -> bool {
+    deposit_uri
+        .to_ascii_lowercase()
+        .contains(&format!("address={}", address.to_ascii_lowercase()))
+}
+
+fn deposit_uri_targets_address_directly(deposit_uri: &str, address: &str) -> bool {
+    let Some((_, remainder)) = deposit_uri.split_once(':') else {
+        return false;
+    };
+
+    let path = remainder.split('?').next().unwrap_or(remainder);
+    let direct_target = path
+        .strip_prefix("//")
+        .unwrap_or(path)
+        .split('/')
+        .next()
+        .unwrap_or(path);
+
+    direct_target.eq_ignore_ascii_case(address)
 }
 
 impl CoinbaseClient {
@@ -126,6 +187,48 @@ impl CoinbaseClient {
         })
     }
 
+    pub async fn get_product_ticker_price(&self, product_id: &str) -> Result<f64> {
+        let endpoint_path = format!("/products/{product_id}/ticker");
+        let endpoint_url = self.coinbase_base_url.join(&endpoint_path).map_err(|_| {
+            InvalidRequestSnafu {
+                reason: format!("Failed to construct ticker URL for product {product_id}"),
+            }
+            .build()
+        })?;
+
+        let response = self
+            .http_client
+            .get(endpoint_url)
+            .header("User-Agent", USER_AGENT)
+            .send()
+            .await
+            .context(HttpRequestSnafu)?;
+
+        let status = response.status();
+        let text = response.text().await.context(HttpRequestSnafu)?;
+
+        if !status.is_success() {
+            return InvalidRequestSnafu {
+                reason: format!(
+                    "Ticker request failed for {product_id}: HTTP {status} | Response: {text}"
+                ),
+            }
+            .fail();
+        }
+
+        let ticker: ProductTickerResponse = serde_json::from_str(&text).context(JsonDecodeSnafu)?;
+
+        ticker.price.parse::<f64>().map_err(|error| {
+            InvalidRequestSnafu {
+                reason: format!(
+                    "Failed to parse ticker price '{}' for {product_id}: {error}",
+                    ticker.price
+                ),
+            }
+            .build()
+        })
+    }
+
     pub async fn get_btc_account_id(&self) -> Result<String> {
         let endpoint_path = "/coinbase-accounts";
         let endpoint_url = self.coinbase_base_url.join(endpoint_path).map_err(|_| {
@@ -174,14 +277,196 @@ impl CoinbaseClient {
         Ok(id)
     }
 
-    pub async fn get_btc_deposit_address(
+    pub async fn get_eth_account_id(&self) -> Result<String> {
+        let endpoint_path = "/coinbase-accounts";
+        let endpoint_url = self.coinbase_base_url.join(endpoint_path).map_err(|_| {
+            InvalidRequestSnafu {
+                reason: "Failed to construct coinbase-accounts URL".to_string(),
+            }
+            .build()
+        })?;
+
+        let empty_body = "";
+        let auth_headers = self.create_coinbase_auth_headers("GET", endpoint_path, empty_body)?;
+
+        let response = self
+            .http_client
+            .get(endpoint_url)
+            .header("User-Agent", USER_AGENT)
+            .header("CB-ACCESS-KEY", &auth_headers.access_key)
+            .header("CB-ACCESS-PASSPHRASE", &auth_headers.access_passphrase)
+            .header("CB-ACCESS-SIGN", &auth_headers.access_signature)
+            .header("CB-ACCESS-TIMESTAMP", &auth_headers.access_timestamp)
+            .send()
+            .await
+            .context(HttpRequestSnafu)?;
+
+        let text = response.text().await.context(HttpRequestSnafu)?;
+        let wallets: serde_json::Value = serde_json::from_str(&text).context(JsonDecodeSnafu)?;
+
+        let wallets_array = wallets.as_array().context(InvalidRequestSnafu {
+            reason: format!("Response is not an array | Actual response: {text}"),
+        })?;
+
+        let eth_wallet = wallets_array
+            .iter()
+            .find(|wallet| wallet["currency"] == "ETH")
+            .context(InvalidRequestSnafu {
+                reason: "No ETH wallet found",
+            })?;
+
+        let id = eth_wallet["id"]
+            .as_str()
+            .context(InvalidRequestSnafu {
+                reason: "ETH wallet id missing or not string",
+            })?
+            .to_string();
+
+        Ok(id)
+    }
+
+    fn validate_generated_crypto_address(
         &self,
-        btc_account_id: &str,
+        response: GeneratedCryptoAddressResponse,
+        requested_network: &str,
+        expected_kind: DepositAddressKind,
+    ) -> Result<String> {
+        if response.network != requested_network {
+            return InvalidRequestSnafu {
+                reason: format!(
+                    "Response network '{}' does not match requested network '{}'",
+                    response.network, requested_network
+                ),
+            }
+            .fail();
+        }
+
+        if !response.exchange_deposit_address {
+            return InvalidRequestSnafu {
+                reason: "Coinbase returned a non-exchange deposit address".to_string(),
+            }
+            .fail();
+        }
+
+        if response.address.trim().is_empty() {
+            return InvalidRequestSnafu {
+                reason: "Coinbase deposit address response was empty".to_string(),
+            }
+            .fail();
+        }
+
+        if response.deposit_uri.trim().is_empty() {
+            return InvalidRequestSnafu {
+                reason: "Coinbase deposit URI response was empty".to_string(),
+            }
+            .fail();
+        }
+
+        let token_only_warning = has_token_only_warning(&response.warnings);
+        let is_token_transfer_uri = response.deposit_uri.contains("/transfer?");
+
+        match expected_kind {
+            DepositAddressKind::Bitcoin => {
+                if is_token_transfer_uri {
+                    return InvalidRequestSnafu {
+                        reason: format!(
+                            "Bitcoin deposit URI unexpectedly requires token transfer semantics: {}",
+                            response.deposit_uri
+                        ),
+                    }
+                    .fail();
+                }
+                if token_only_warning {
+                    return InvalidRequestSnafu {
+                        reason: format!(
+                            "Bitcoin deposit address returned token-only warning(s): {:?}",
+                            response.warnings
+                        ),
+                    }
+                    .fail();
+                }
+                if !deposit_uri_targets_address_directly(&response.deposit_uri, &response.address) {
+                    return InvalidRequestSnafu {
+                        reason: format!(
+                            "Bitcoin deposit URI does not directly target returned address: {}",
+                            response.deposit_uri
+                        ),
+                    }
+                    .fail();
+                }
+            }
+            DepositAddressKind::EvmToken => {
+                if !is_token_transfer_uri {
+                    return InvalidRequestSnafu {
+                        reason: format!(
+                            "Token deposit URI is missing transfer semantics: {}",
+                            response.deposit_uri
+                        ),
+                    }
+                    .fail();
+                }
+                if !token_only_warning {
+                    return InvalidRequestSnafu {
+                        reason: format!(
+                            "Token deposit address is missing token-only warning(s): {:?}",
+                            response.warnings
+                        ),
+                    }
+                    .fail();
+                }
+                if !deposit_uri_contains_recipient(&response.deposit_uri, &response.address) {
+                    return InvalidRequestSnafu {
+                        reason: format!(
+                            "Token deposit URI does not target returned recipient address: {}",
+                            response.deposit_uri
+                        ),
+                    }
+                    .fail();
+                }
+            }
+            DepositAddressKind::NativeEvm => {
+                if is_token_transfer_uri {
+                    return InvalidRequestSnafu {
+                        reason: format!(
+                            "Native EVM deposit URI unexpectedly requires token transfer semantics: {}",
+                            response.deposit_uri
+                        ),
+                    }
+                    .fail();
+                }
+                if token_only_warning {
+                    return InvalidRequestSnafu {
+                        reason: format!(
+                            "Native EVM deposit address returned token-only warning(s): {:?}",
+                            response.warnings
+                        ),
+                    }
+                    .fail();
+                }
+                if !deposit_uri_targets_address_directly(&response.deposit_uri, &response.address) {
+                    return InvalidRequestSnafu {
+                        reason: format!(
+                            "Native EVM deposit URI does not directly target returned address: {}",
+                            response.deposit_uri
+                        ),
+                    }
+                    .fail();
+                }
+            }
+        }
+
+        Ok(response.address)
+    }
+
+    async fn get_validated_deposit_address(
+        &self,
+        account_id: &str,
         network: ChainType,
+        expected_kind: DepositAddressKind,
     ) -> Result<String> {
         let network = chain_type_to_coinbase_network(network);
 
-        let endpoint_path = format!("/coinbase-accounts/{btc_account_id}/addresses");
+        let endpoint_path = format!("/coinbase-accounts/{account_id}/addresses");
         let endpoint_url = self.coinbase_base_url.join(&endpoint_path).map_err(|_| {
             InvalidRequestSnafu {
                 reason: "Failed to construct addresses URL".to_string(),
@@ -211,31 +496,51 @@ impl CoinbaseClient {
             .await
             .context(HttpRequestSnafu)?;
 
-        let response_data: serde_json::Value =
+        let response_data: GeneratedCryptoAddressResponse =
             serde_json::from_str(&text).context(JsonDecodeSnafu)?;
 
-        let addr = response_data["address"]
-            .as_str()
-            .context(InvalidRequestSnafu {
-                reason: "Address missing or not string",
-            })?
-            .to_string();
+        self.validate_generated_crypto_address(response_data, network, expected_kind)
+    }
 
-        let response_network = response_data["network"]
-            .as_str()
-            .context(InvalidRequestSnafu {
-                reason: "Response network missing or not string",
-            })?
-            .to_string();
+    pub async fn get_bitcoin_deposit_address(&self, btc_account_id: &str) -> Result<String> {
+        self.get_validated_deposit_address(
+            btc_account_id,
+            ChainType::Bitcoin,
+            DepositAddressKind::Bitcoin,
+        )
+        .await
+    }
 
-        if response_network != network {
+    pub async fn get_cbbtc_deposit_address(
+        &self,
+        btc_account_id: &str,
+        network: ChainType,
+    ) -> Result<String> {
+        if !is_evm_network(network) {
             return InvalidRequestSnafu {
-                reason: "Response network is not the same as the request network",
+                reason: format!("cbBTC deposits require an EVM network, got {network:?}"),
             }
             .fail();
         }
 
-        Ok(addr)
+        self.get_validated_deposit_address(btc_account_id, network, DepositAddressKind::EvmToken)
+            .await
+    }
+
+    pub async fn get_eth_deposit_address(
+        &self,
+        eth_account_id: &str,
+        network: ChainType,
+    ) -> Result<String> {
+        if !is_evm_network(network) {
+            return InvalidRequestSnafu {
+                reason: format!("Native ETH deposits require an EVM network, got {network:?}"),
+            }
+            .fail();
+        }
+
+        self.get_validated_deposit_address(eth_account_id, network, DepositAddressKind::NativeEvm)
+            .await
     }
 
     pub async fn withdraw_bitcoin(
@@ -351,6 +656,82 @@ impl CoinbaseClient {
 mod tests {
     use super::*;
 
+    fn test_client() -> CoinbaseClient {
+        CoinbaseClient::new(
+            Url::parse("http://127.0.0.1:1").unwrap(),
+            String::new(),
+            String::new(),
+            String::new(),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn validate_native_eth_deposit_rejects_token_transfer_uri() {
+        let client = test_client();
+        let response = GeneratedCryptoAddressResponse {
+            address: "0x00000000000000000000000000000000000000cc".to_string(),
+            network: "ethereum".to_string(),
+            warnings: vec![CoinbaseAddressWarning {
+                title: "Only send cbBTC to this address".to_string(),
+                details: "Sending any other digital asset, including Ethereum (ETH), will result in permanent loss.".to_string(),
+            }],
+            deposit_uri: "ethereum:0x0000000000000000000000000000000000000cb7/transfer?address=0x00000000000000000000000000000000000000cc".to_string(),
+            exchange_deposit_address: true,
+        };
+
+        let error = client
+            .validate_generated_crypto_address(response, "ethereum", DepositAddressKind::NativeEvm)
+            .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("unexpectedly requires token transfer semantics"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_cbbtc_deposit_requires_token_transfer_uri_and_warning() {
+        let client = test_client();
+        let response = GeneratedCryptoAddressResponse {
+            address: "0x00000000000000000000000000000000000000aa".to_string(),
+            network: "ethereum".to_string(),
+            warnings: Vec::new(),
+            deposit_uri: "ethereum:0x00000000000000000000000000000000000000aa".to_string(),
+            exchange_deposit_address: true,
+        };
+
+        let error = client
+            .validate_generated_crypto_address(response, "ethereum", DepositAddressKind::EvmToken)
+            .unwrap_err();
+
+        assert!(
+            error.to_string().contains("missing transfer semantics"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn validate_native_eth_deposit_accepts_direct_uri_without_warnings() {
+        let client = test_client();
+        let address = "0x00000000000000000000000000000000000000cc".to_string();
+        let response = GeneratedCryptoAddressResponse {
+            address: address.clone(),
+            network: "ethereum".to_string(),
+            warnings: Vec::new(),
+            deposit_uri: format!("ethereum:{address}"),
+            exchange_deposit_address: true,
+        };
+
+        let validated = client
+            .validate_generated_crypto_address(response, "ethereum", DepositAddressKind::NativeEvm)
+            .unwrap();
+
+        assert_eq!(validated, address);
+    }
+
     #[tokio::test]
     #[ignore = "requires COINBASE_* environment variables and live API access"]
     async fn test_cb_account_api_coverage() {
@@ -370,20 +751,28 @@ mod tests {
 
         let btc_account_id = coinbase_client.get_btc_account_id().await.unwrap();
         println!("btc_account_id: {btc_account_id}");
+        let eth_account_id = coinbase_client.get_eth_account_id().await.unwrap();
+        println!("eth_account_id: {eth_account_id}");
 
         // now test the btc deposit address
         let btc_deposit_address = coinbase_client
-            .get_btc_deposit_address(&btc_account_id, ChainType::Bitcoin)
+            .get_bitcoin_deposit_address(&btc_account_id)
             .await
             .unwrap();
         println!("btc_deposit_address: {btc_deposit_address}");
 
         // now test the cbbtc deposit address
         let cbbtc_deposit_address = coinbase_client
-            .get_btc_deposit_address(&btc_account_id, ChainType::Ethereum)
+            .get_cbbtc_deposit_address(&btc_account_id, ChainType::Ethereum)
             .await
             .unwrap();
         println!("cbbtc_deposit_address: {cbbtc_deposit_address}");
+
+        let eth_deposit_address = coinbase_client
+            .get_eth_deposit_address(&eth_account_id, ChainType::Ethereum)
+            .await
+            .unwrap();
+        println!("eth_deposit_address: {eth_deposit_address}");
     }
 
     #[tokio::test]

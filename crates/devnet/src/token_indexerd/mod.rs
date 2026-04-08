@@ -1,8 +1,9 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tokio::{
     net::TcpListener,
     process::{Child, Command},
+    time::{sleep, Duration},
 };
 use tracing::info;
 use uuid::Uuid;
@@ -12,6 +13,8 @@ use uuid::Uuid;
 use std::os::unix::process::CommandExt;
 
 const HOST: &str = "127.0.0.1";
+const INDEXER_STARTUP_TIMEOUT: Duration = Duration::from_secs(15);
+const INDEXER_STARTUP_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 pub struct TokenIndexerInstance {
     // Handle to the spawned pnpm dev process
@@ -29,12 +32,10 @@ impl TokenIndexerInstance {
         database_url: String,
         interactive_port: Option<u16>,
     ) -> std::io::Result<Self> {
-        let workspace_root = std::env::var("CARGO_MANIFEST_DIR")
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR")
             .map(PathBuf::from)
-            .map(|p| p.ancestors().nth(1).unwrap().to_path_buf()) // Go up 2 levels from crates/devnet
             .unwrap_or_else(|_| PathBuf::from("."));
-
-        let token_indexer_dir = workspace_root.join("evm-token-indexer");
+        let token_indexer_dir = resolve_token_indexer_dir(&manifest_dir);
 
         let ponder_port = if interactive {
             interactive_port.unwrap_or(50104_u16)
@@ -92,10 +93,13 @@ impl TokenIndexerInstance {
         let api_server_url = format!("http://{HOST}:{ponder_port}");
         info!("Indexer API server URL: {api_server_url}");
 
-        Ok(Self {
+        let mut instance = Self {
             child,
             api_server_url,
-        })
+        };
+        instance.wait_until_ready().await?;
+
+        Ok(instance)
     }
 
     /// Check if the process is still running
@@ -111,6 +115,36 @@ impl TokenIndexerInstance {
     /// Wait for the process to finish
     pub async fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
         self.child.wait().await
+    }
+
+    async fn wait_until_ready(&mut self) -> std::io::Result<()> {
+        let client = reqwest::Client::new();
+        let health_url = format!("{}/health", self.api_server_url);
+        let start = std::time::Instant::now();
+
+        loop {
+            if let Some(status) = self.child.try_wait()? {
+                return Err(std::io::Error::other(format!(
+                    "token indexer exited before becoming ready: {status}"
+                )));
+            }
+
+            if client.get(&health_url).send().await.is_ok() {
+                return Ok(());
+            }
+
+            if start.elapsed() >= INDEXER_STARTUP_TIMEOUT {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    format!(
+                        "token indexer did not become ready within {:?} at {}",
+                        INDEXER_STARTUP_TIMEOUT, health_url
+                    ),
+                ));
+            }
+
+            sleep(INDEXER_STARTUP_POLL_INTERVAL).await;
+        }
     }
 }
 
@@ -142,4 +176,25 @@ impl TokenIndexerInstance {
                 .output();
         }
     }
+}
+
+fn resolve_token_indexer_dir(manifest_dir: &Path) -> PathBuf {
+    let mut package_dir_without_node_modules = None;
+
+    for ancestor in manifest_dir.ancestors() {
+        let candidate = ancestor.join("evm-token-indexer");
+        if !candidate.join("package.json").is_file() {
+            continue;
+        }
+
+        if candidate.join("node_modules").is_dir() {
+            return candidate;
+        }
+
+        if package_dir_without_node_modules.is_none() {
+            package_dir_without_node_modules = Some(candidate);
+        }
+    }
+
+    package_dir_without_node_modules.unwrap_or_else(|| PathBuf::from("evm-token-indexer"))
 }

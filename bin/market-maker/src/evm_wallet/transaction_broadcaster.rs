@@ -20,6 +20,10 @@ use tokio::{
 };
 use tracing::{self};
 
+pub(crate) const MAX_NONCE_RETRIES: u32 = 10;
+pub(crate) const GAS_PRICE_BUMP_NUMERATOR: u128 = 110;
+pub(crate) const GAS_PRICE_BUMP_DENOMINATOR: u128 = 100;
+
 #[derive(Debug, Clone)]
 pub struct RevertInfo {
     pub error_payload: ErrorPayload,
@@ -264,7 +268,6 @@ impl EVMTransactionBroadcaster {
             }
 
             // Send TXN with retry logic for nonce errors
-            const MAX_RETRIES: u32 = 10;
             let mut retry_count = 0;
             let mut tx_hash = FixedBytes::<32>::default();
 
@@ -293,14 +296,14 @@ impl EVMTransactionBroadcaster {
                     }
                     Err(e) => {
                         // Check if this is a nonce error and we should retry
-                        if Self::is_nonce_error(&e) && retry_count < MAX_RETRIES {
+                        if Self::is_nonce_error(&e) && retry_count < MAX_NONCE_RETRIES {
                             retry_count += 1;
 
                             // Log the retry attempt
                             tracing::warn!(
                                 "Nonce error detected (attempt {}/{}): {:?}. Retrying with gas bump...",
                                 retry_count,
-                                MAX_RETRIES,
+                                MAX_NONCE_RETRIES,
                                 e
                             );
 

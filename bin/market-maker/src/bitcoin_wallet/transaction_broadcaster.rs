@@ -34,6 +34,7 @@ pub struct TransactionRequest {
     pub payments: Vec<Payment>,
     pub foreign_utxos: Vec<ForeignUtxo>,
     pub mm_payment_validation: Option<MarketMakerPaymentVerification>,
+    pub drain_to_address: Option<String>,
     pub response_tx: oneshot::Sender<Result<String, BitcoinWalletError>>,
     pub explicit_absolute_fee: Option<u64>,
 }
@@ -69,6 +70,7 @@ impl BitcoinTransactionBroadcaster {
                     network,
                     &broadcasted_transaction_repository,
                     request.payments,
+                    request.drain_to_address,
                     request.explicit_absolute_fee,
                     request.foreign_utxos,
                     request.mm_payment_validation,
@@ -100,6 +102,31 @@ impl BitcoinTransactionBroadcaster {
             payments,
             foreign_utxos,
             mm_payment_validation,
+            drain_to_address: None,
+            response_tx,
+            explicit_absolute_fee,
+        };
+
+        self.request_tx
+            .send(request)
+            .context(BroadcasterFailedSnafu)?;
+
+        response_rx.await.context(ReceiverFailedSnafu)?
+    }
+
+    pub async fn broadcast_drain_transaction(
+        &self,
+        drain_to_address: String,
+        foreign_utxos: Vec<ForeignUtxo>,
+        explicit_absolute_fee: Option<u64>,
+    ) -> Result<String, BitcoinWalletError> {
+        let (response_tx, response_rx) = oneshot::channel();
+
+        let request = TransactionRequest {
+            payments: Vec::new(),
+            foreign_utxos,
+            mm_payment_validation: None,
+            drain_to_address: Some(drain_to_address),
             response_tx,
             explicit_absolute_fee,
         };
@@ -140,14 +167,22 @@ async fn process_transaction(
     network: bitcoin::Network,
     broadcasted_transaction_repository: &Option<Arc<BroadcastedTransactionRepository>>,
     payments: Vec<Payment>,
+    drain_to_address: Option<String>,
     explicit_absolute_fee: Option<u64>,
     foreign_utxos: Vec<ForeignUtxo>,
     mm_payment_validation: Option<MarketMakerPaymentVerification>,
 ) -> Result<String, BitcoinWalletError> {
     let start_time = Instant::now();
 
-    let is_consolidation_tx = if payments.len() > 1 {
-        info!("Processing batch bitcoin payments: count={}", payments.len());
+    let is_explicit_drain_tx = drain_to_address.is_some();
+    let is_consolidation_tx = if is_explicit_drain_tx {
+        info!("Processing bitcoin drain transaction");
+        false
+    } else if payments.len() > 1 {
+        info!(
+            "Processing batch bitcoin payments: count={}",
+            payments.len()
+        );
         false
     } else if payments.len() == 1 {
         info!(
@@ -195,7 +230,21 @@ async fn process_transaction(
     // Build transaction
     let mut tx_builder = wallet_guard.build_tx();
 
-    if is_consolidation_tx {
+    if let Some(drain_to_address) = drain_to_address {
+        let address = Address::from_str(&drain_to_address)
+            .map_err(|e| BitcoinWalletError::InvalidAddress {
+                reason: e.to_string(),
+            })?
+            .require_network(network)
+            .map_err(|_| BitcoinWalletError::InvalidAddress {
+                reason: format!(
+                    "Address {} is not valid for network {:?}",
+                    drain_to_address, network
+                ),
+            })?;
+        tx_builder.drain_wallet();
+        tx_builder.drain_to(address.script_pubkey());
+    } else if is_consolidation_tx {
         tx_builder.drain_to(script_pubkey);
     }
 

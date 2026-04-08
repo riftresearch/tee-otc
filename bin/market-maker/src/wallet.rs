@@ -158,6 +158,9 @@ pub trait Wallet: Send + Sync {
         mm_payment_validation: Option<MarketMakerPaymentVerification>,
     ) -> WalletResult<String>;
 
+    /// Drains the wallet's spendable balance to the provided address.
+    async fn drain_to_address(&self, to_address: &str) -> WalletResult<String>;
+
     /// Waits until the given transaction reaches the specified number of confirmations.
     ///
     /// Behavior:
@@ -272,6 +275,10 @@ mod tests {
             _mm_payment_validation: Option<MarketMakerPaymentVerification>,
         ) -> WalletResult<String> {
             Ok("mock_txid_123".to_string())
+        }
+
+        async fn drain_to_address(&self, _to_address: &str) -> WalletResult<String> {
+            Ok("mock_drain_txid_123".to_string())
         }
 
         fn chain_type(&self) -> ChainType {

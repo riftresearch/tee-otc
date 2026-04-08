@@ -69,8 +69,14 @@ pub struct PlannerPolicy {
 impl PlannerPolicy {
     #[must_use]
     pub fn new(rebalance_trigger_bps: u16, rebalance_target_bps: u16) -> Self {
-        assert!(rebalance_trigger_bps <= 10_000, "trigger bps must be <= 10000");
-        assert!(rebalance_target_bps <= 10_000, "target bps must be <= 10000");
+        assert!(
+            rebalance_trigger_bps <= 10_000,
+            "trigger bps must be <= 10000"
+        );
+        assert!(
+            rebalance_target_bps <= 10_000,
+            "target bps must be <= 10000"
+        );
         assert!(
             rebalance_target_bps <= rebalance_trigger_bps,
             "target bps must be <= trigger bps"
@@ -161,12 +167,17 @@ impl PlannerState {
                 .get(&batch.payout_asset)
                 .copied()
                 .unwrap_or_default();
-            inventory_after_outbound_batches
-                .insert(batch.payout_asset, available.saturating_sub(batch.payout_amount));
+            inventory_after_outbound_batches.insert(
+                batch.payout_asset,
+                available.saturating_sub(batch.payout_amount),
+            );
         }
 
-        let rebalance =
-            self.next_rebalance(policy, &started_outbound_ids, &inventory_after_outbound_batches);
+        let rebalance = self.next_rebalance(
+            policy,
+            &started_outbound_ids,
+            &inventory_after_outbound_batches,
+        );
 
         PlannerActions {
             outbound_batches,
@@ -183,7 +194,10 @@ impl PlannerState {
                 available_before >= batch.payout_amount,
                 "outbound batch exceeds available inventory"
             );
-            self.set_available_inventory(batch.payout_asset, available_before - batch.payout_amount);
+            self.set_available_inventory(
+                batch.payout_asset,
+                available_before - batch.payout_amount,
+            );
 
             for obligation_id in &batch.obligation_ids {
                 let obligation = self
@@ -196,7 +210,10 @@ impl PlannerState {
             let previous = self
                 .outbound_batches
                 .insert(batch.payout_asset, batch.clone());
-            assert!(previous.is_none(), "outbound batch already active for asset");
+            assert!(
+                previous.is_none(),
+                "outbound batch already active for asset"
+            );
         }
 
         if let Some(rebalance) = actions.rebalance {
@@ -399,14 +416,10 @@ impl PlannerState {
             return None;
         }
 
-        let demand_a = self.open_payout_demand_after_outbound_batches(
-            PlannerAsset::AssetA,
-            started_outbound_ids,
-        );
-        let demand_b = self.open_payout_demand_after_outbound_batches(
-            PlannerAsset::AssetB,
-            started_outbound_ids,
-        );
+        let demand_a = self
+            .open_payout_demand_after_outbound_batches(PlannerAsset::AssetA, started_outbound_ids);
+        let demand_b = self
+            .open_payout_demand_after_outbound_batches(PlannerAsset::AssetB, started_outbound_ids);
 
         let deficit_a = demand_a.saturating_sub(available_a);
         let deficit_b = demand_b.saturating_sub(available_b);
@@ -423,15 +436,27 @@ impl PlannerState {
 
         let (src_asset, dst_asset, source_surplus, target_deficit) =
             if surplus_a > 0 && deficit_b > 0 {
-                (PlannerAsset::AssetA, PlannerAsset::AssetB, surplus_a, deficit_b)
+                (
+                    PlannerAsset::AssetA,
+                    PlannerAsset::AssetB,
+                    surplus_a,
+                    deficit_b,
+                )
             } else if surplus_b > 0 && deficit_a > 0 {
-                (PlannerAsset::AssetB, PlannerAsset::AssetA, surplus_b, deficit_a)
+                (
+                    PlannerAsset::AssetB,
+                    PlannerAsset::AssetA,
+                    surplus_b,
+                    deficit_a,
+                )
             } else {
                 return None;
             };
 
-        let target_majority_cap =
-            div_ceil_u64((policy.rebalance_target_bps as u128) * (total_available as u128), 10_000);
+        let target_majority_cap = div_ceil_u64(
+            (policy.rebalance_target_bps as u128) * (total_available as u128),
+            10_000,
+        );
         let amount_to_target = majority_available.saturating_sub(target_majority_cap);
         if amount_to_target == 0 {
             return None;
@@ -466,8 +491,7 @@ impl PlannerState {
             }
 
             payout_amount = next_payout_amount;
-            settlement_amount =
-                settlement_amount.saturating_add(obligation.settlement_amount);
+            settlement_amount = settlement_amount.saturating_add(obligation.settlement_amount);
             obligation_ids.insert(obligation.id);
         }
 
@@ -551,7 +575,10 @@ mod tests {
         let actions = state.commit_next_actions(PlannerPolicy::default());
 
         assert_eq!(actions.outbound_batches.len(), 1);
-        assert_eq!(actions.outbound_batches[0].payout_asset, PlannerAsset::AssetA);
+        assert_eq!(
+            actions.outbound_batches[0].payout_asset,
+            PlannerAsset::AssetA
+        );
         assert_eq!(actions.outbound_batches[0].payout_amount, 5);
         assert_eq!(
             actions.outbound_batches[0].obligation_ids,
@@ -672,8 +699,14 @@ mod tests {
         let actions = state.commit_next_actions(PlannerPolicy::default());
 
         assert_eq!(actions.outbound_batches.len(), 1);
-        assert_eq!(actions.outbound_batches[0].payout_asset, PlannerAsset::AssetA);
-        assert_eq!(actions.outbound_batches[0].obligation_ids, BTreeSet::from([2]));
+        assert_eq!(
+            actions.outbound_batches[0].payout_asset,
+            PlannerAsset::AssetA
+        );
+        assert_eq!(
+            actions.outbound_batches[0].obligation_ids,
+            BTreeSet::from([2])
+        );
         assert!(actions.rebalance.is_none());
         assert!(state.rebalance.is_some());
     }
@@ -695,7 +728,10 @@ mod tests {
             })
         );
         assert_eq!(rounds[1].outbound_batches.len(), 1);
-        assert_eq!(rounds[1].outbound_batches[0].payout_asset, PlannerAsset::AssetB);
+        assert_eq!(
+            rounds[1].outbound_batches[0].payout_asset,
+            PlannerAsset::AssetB
+        );
         assert_eq!(
             rounds[1].outbound_batches[0].obligation_ids,
             BTreeSet::from([1])

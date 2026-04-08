@@ -461,9 +461,6 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         .context(DatabaseSnafu)?,
     );
 
-    let quote_repository = Arc::new(database.quotes());
-    quote_repository.start_cleanup_task(&mut join_set);
-
     let deposit_repository = Arc::new(database.deposits());
     let broadcasted_transaction_repository = Arc::new(database.broadcasted_transactions());
 
@@ -520,6 +517,17 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
         )
         .await
         .expect("Should have been able to ensure EIP-7702 delegation");
+
+    let coinbase_client = CoinbaseClient::new(
+        args.coinbase_exchange_api_base_url.clone(),
+        args.coinbase_exchange_api_key.clone(),
+        args.coinbase_exchange_api_passphrase.clone(),
+        args.coinbase_exchange_api_secret.clone(),
+    )
+    .context(CoinbaseExchangeClientSnafu)?;
+
+    let quote_repository = Arc::new(database.quotes());
+    quote_repository.start_cleanup_task(&mut join_set);
 
     let mut wallet_manager = WalletManager::new();
 
@@ -616,6 +624,10 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
             args.evm_chain,
             args.bitcoin_max_deposits_per_lot,
             args.ethereum_max_deposits_per_lot,
+            coinbase_client.clone(),
+            Duration::from_secs(args.confirmation_poll_interval_secs),
+            args.btc_coinbase_confirmations,
+            args.cbbtc_coinbase_confirmations,
         )?;
     }
 
@@ -699,14 +711,6 @@ pub async fn run_market_maker(args: MarketMakerArgs) -> Result<()> {
 
     // Spawn RFQ WebSocket connection (ezsockets handles reconnection automatically)
     join_set.spawn(async move { rfq_future.await.context(WebSocketClientSnafu) });
-
-    let coinbase_client = CoinbaseClient::new(
-        args.coinbase_exchange_api_base_url,
-        args.coinbase_exchange_api_key,
-        args.coinbase_exchange_api_passphrase,
-        args.coinbase_exchange_api_secret,
-    )
-    .context(CoinbaseExchangeClientSnafu)?;
 
     // Run rebalancer, even if auto manage inventory is disabled
     // b/c it's still useful to track the balance of the wallets in metrics
@@ -849,6 +853,10 @@ fn setup_admin_api(
     evm_chain: ChainType,
     bitcoin_max_deposits_per_iteration: usize,
     evm_max_deposits_per_iteration: usize,
+    coinbase_client: CoinbaseClient,
+    confirmation_poll_interval: Duration,
+    btc_coinbase_confirmations: u32,
+    cbbtc_coinbase_confirmations: u32,
 ) -> Result<()> {
     let state = admin_api::AdminApiState {
         deposit_repository,
@@ -860,6 +868,10 @@ fn setup_admin_api(
         evm_chain,
         bitcoin_max_deposits_per_iteration,
         evm_max_deposits_per_iteration,
+        coinbase_client,
+        confirmation_poll_interval,
+        btc_coinbase_confirmations,
+        cbbtc_coinbase_confirmations,
     };
 
     let app = admin_api::create_admin_router(state);

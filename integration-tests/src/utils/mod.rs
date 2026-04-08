@@ -6,7 +6,10 @@ pub use test_proxy::TestProxy;
 use std::{
     collections::HashMap,
     env::current_dir,
+    fs::OpenOptions,
+    io::{Read, Seek, SeekFrom, Write},
     net::{IpAddr, Ipv4Addr},
+    path::PathBuf,
     sync::{Arc, Mutex, OnceLock},
     time::Duration,
     time::Instant,
@@ -16,6 +19,7 @@ use bitcoincore_rpc_async::Auth;
 use blockchain_utils::{create_websocket_wallet_provider, init_logger};
 use ctor::ctor;
 use devnet::MultichainAccount;
+use fs2::FileExt;
 use market_maker::{evm_wallet::EVMWallet, MarketMakerArgs};
 use otc_models::Swap;
 use otc_server::OtcServerArgs;
@@ -26,6 +30,10 @@ use tokio::{net::TcpListener, task::JoinSet};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
+
+const PORT_ALLOCATOR_FILE: &str = "tee-otc-test-port-allocator";
+const PORT_ALLOCATOR_START: u16 = 20000;
+const PORT_ALLOCATOR_END: u16 = 30000;
 
 pub trait PgConnectOptionsExt {
     fn to_database_url(&self) -> String;
@@ -45,14 +53,66 @@ impl PgConnectOptionsExt for PgConnectOptions {
 }
 
 pub async fn get_free_port() -> u16 {
-    let listener = TcpListener::bind(("127.0.0.1", 0))
-        .await
-        .expect("Should be able to bind to port");
+    loop {
+        let candidate_port = next_allocated_port();
+        if let Ok(listener) = TcpListener::bind(("127.0.0.1", candidate_port)).await {
+            drop(listener);
+            return candidate_port;
+        }
+    }
+}
 
-    listener
-        .local_addr()
-        .expect("Should have a local address")
-        .port()
+fn next_allocated_port() -> u16 {
+    let allocator_file_path = std::env::temp_dir().join(PORT_ALLOCATOR_FILE);
+    let mut allocator_file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&allocator_file_path)
+        .unwrap_or_else(|error| {
+            panic!(
+                "Should be able to open integration-test port allocator at {}: {}",
+                allocator_file_path.display(),
+                error
+            )
+        });
+
+    allocator_file
+        .lock_exclusive()
+        .expect("Should be able to acquire integration-test port allocator lock");
+
+    let mut buffer = String::new();
+    allocator_file
+        .read_to_string(&mut buffer)
+        .expect("Should be able to read integration-test port allocator");
+
+    let candidate_port = buffer
+        .trim()
+        .parse::<u16>()
+        .ok()
+        .filter(|port| *port >= PORT_ALLOCATOR_START && *port < PORT_ALLOCATOR_END)
+        .unwrap_or(PORT_ALLOCATOR_START);
+
+    let next_port = if candidate_port + 1 >= PORT_ALLOCATOR_END {
+        PORT_ALLOCATOR_START
+    } else {
+        candidate_port + 1
+    };
+
+    allocator_file
+        .set_len(0)
+        .expect("Should be able to truncate integration-test port allocator");
+    allocator_file
+        .seek(SeekFrom::Start(0))
+        .expect("Should be able to rewind integration-test port allocator");
+    write!(allocator_file, "{next_port}")
+        .expect("Should be able to update integration-test port allocator");
+    allocator_file
+        .unlock()
+        .expect("Should be able to unlock integration-test port allocator");
+
+    candidate_port
 }
 
 // Ethereum market maker credentials

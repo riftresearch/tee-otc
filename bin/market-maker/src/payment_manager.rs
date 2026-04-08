@@ -656,6 +656,10 @@ mod tests {
 
     #[async_trait]
     impl crate::wallet::Wallet for RecordingWallet {
+        async fn drain_to_address(&self, _to_address: &str) -> crate::wallet::WalletResult<String> {
+            Ok("mock_drain_tx".to_string())
+        }
+
         async fn consolidate(
             &self,
             _lot: &otc_models::Lot,

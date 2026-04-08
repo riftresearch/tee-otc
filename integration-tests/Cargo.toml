@@ -16,6 +16,7 @@ tracing-subscriber = { workspace = true }
 otc-server = {workspace = true, features = ["test-market-makers", "test-fast-fee-settle"] }
 rfq-server = {workspace= true, features = ["test-market-makers"]}
 market-maker = {workspace = true, features = ["mock-price-oracle"]}
+coinbase-exchange-client = {workspace = true}
 sqlx = {workspace = true}
 reqwest = {workspace = true}
 serde_json = {workspace = true}
@@ -41,3 +42,4 @@ metrics = {workspace = true}
 socket2 = {workspace = true}
 snafu = {workspace = true}
 console-subscriber = {workspace = true}
+fs2 = { workspace = true }
