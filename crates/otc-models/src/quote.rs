@@ -83,8 +83,8 @@ pub struct Fees {
 ///
 /// Contains:
 /// - Exact quoted amounts (`from`/`to` lots) for the requested input/output
-/// - Valid deposit bounds (`min_input`/`max_input`) - user can deposit any amount within
-/// - Rate parameters (`rates`) to compute realized amounts for any deposit
+/// - Compatibility bounds (`min_input`/`max_input`) which must both equal the exact input
+/// - Rate parameters (`rates`) used during quote generation and persisted for compatibility
 /// - Fee breakdown (`fees`) for the exact quoted amount
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Quote {
@@ -99,18 +99,19 @@ pub struct Quote {
     /// What the user receives (currency + exact quoted amount)
     pub to: Lot,
 
-    /// Rate parameters used for computation
-    /// (used to compute realized amounts if user deposits a different amount)
+    /// Rate parameters used for quote generation and persisted for compatibility
     pub rates: SwapRates,
 
     /// Fee breakdown for the exact quoted amount
     pub fees: Fees,
 
-    /// Minimum input amount allowed (in from currency smallest unit)
+    /// Minimum input amount allowed (in from currency smallest unit).
+    /// Exact-match execution requires this to equal `from.amount`.
     #[serde(with = "u256_decimal")]
     pub min_input: U256,
 
-    /// Maximum input amount allowed (in from currency smallest unit)
+    /// Maximum input amount allowed (in from currency smallest unit).
+    /// Exact-match execution requires this to equal `from.amount`.
     #[serde(with = "u256_decimal")]
     pub max_input: U256,
 
@@ -198,9 +199,19 @@ impl Quote {
         keccak256(to_canonical_json(&normalized).unwrap().as_bytes()).into()
     }
 
-    /// Checks if the given input amount is within the allowed bounds.
+    /// Returns true when the quote encodes exact-match input semantics.
+    pub fn has_exact_input_bounds(&self) -> bool {
+        self.min_input == self.from.amount && self.max_input == self.from.amount
+    }
+
+    /// Checks if the given input amount matches the quoted input exactly.
+    pub fn matches_expected_input(&self, amount: U256) -> bool {
+        amount == self.from.amount
+    }
+
+    /// Checks if the quote is executable for the given input amount.
     pub fn is_valid_input(&self, amount: U256) -> bool {
-        amount >= self.min_input && amount <= self.max_input
+        self.has_exact_input_bounds() && self.matches_expected_input(amount)
     }
 }
 

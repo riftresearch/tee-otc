@@ -1,4 +1,5 @@
 use crate::mm_registry::RfqMMRegistry;
+use alloy::primitives::U256;
 use futures_util::future;
 use otc_models::{Quote, QuoteRequest, SwapMode};
 use otc_protocols::rfq::{RFQResponse, RFQResult};
@@ -77,7 +78,7 @@ impl QuoteAggregator {
         // Collect quotes with timeout
         let collection_result = timeout(
             self.timeout_duration,
-            self.collect_quotes(receivers, request_id, protocol_fee_bps),
+            self.collect_quotes(receivers, request_id, request.clone(), protocol_fee_bps),
         )
         .await;
 
@@ -154,27 +155,31 @@ impl QuoteAggregator {
         &self,
         receivers: Vec<(Uuid, mpsc::Receiver<RFQResponse>)>,
         _request_id: Uuid,
+        request: QuoteRequest,
         expected_protocol_fee_bps: u64,
     ) -> Vec<RFQResult<Quote>> {
         let mut quotes = Vec::new();
+        let request = Arc::new(request);
 
         // Convert receivers into futures
         let mut futures = Vec::new();
         for (mm_id, mut rx) in receivers {
+            let request = Arc::clone(&request);
             let future = async move {
                 match rx.recv().await {
                     Some(response) => match response {
                         RFQResponse::QuoteResponse { quote, .. } => {
                             if let RFQResult::Success(ref returned_quote) = quote {
-                                if returned_quote.rates.protocol_fee_bps
-                                    != expected_protocol_fee_bps
-                                {
+                                if let Err(reason) = validate_returned_quote(
+                                    returned_quote,
+                                    &request,
+                                    expected_protocol_fee_bps,
+                                ) {
                                     warn!(
                                         market_maker_id = %mm_id,
                                         quote_id = %returned_quote.id,
-                                        expected_protocol_fee_bps = expected_protocol_fee_bps,
-                                        returned_protocol_fee_bps = returned_quote.rates.protocol_fee_bps,
-                                        "Rejecting quote with mismatched protocol fee bps"
+                                        reason = reason,
+                                        "Rejecting invalid quote returned by market maker"
                                     );
                                     return None;
                                 }
@@ -208,6 +213,34 @@ impl QuoteAggregator {
     }
 }
 
+fn validate_returned_quote(
+    returned_quote: &Quote,
+    request: &QuoteRequest,
+    expected_protocol_fee_bps: u64,
+) -> std::result::Result<(), &'static str> {
+    if returned_quote.rates.protocol_fee_bps != expected_protocol_fee_bps {
+        return Err("mismatched protocol fee bps");
+    }
+
+    if !returned_quote.has_exact_input_bounds() {
+        return Err("quote is not exact-input bounded");
+    }
+
+    if returned_quote.from.currency != request.from || returned_quote.to.currency != request.to {
+        return Err("quote currencies do not match request");
+    }
+
+    match &request.mode {
+        SwapMode::ExactInput(amount) if returned_quote.from.amount != U256::from(*amount) => {
+            Err("quote input amount does not match request")
+        }
+        SwapMode::ExactOutput(amount) if returned_quote.to.amount != U256::from(*amount) => {
+            Err("quote output amount does not match request")
+        }
+        _ => Ok(()),
+    }
+}
+
 /// Select the best quote based on the swap mode.
 ///
 /// - ExactInput: User sends a fixed amount, best quote = highest output (to.amount)
@@ -233,15 +266,11 @@ fn select_best_quote<'a>(quotes: &'a [RFQResult<Quote>], mode: &SwapMode) -> Opt
 #[cfg(test)]
 mod tests {
     use super::*;
-    use otc_models::Currency;
-    use otc_models::{ChainType, TokenIdentifier};
+    use chrono::Duration;
+    use otc_models::{ChainType, Currency, Fees, Lot, TokenIdentifier};
 
-    #[tokio::test]
-    async fn test_no_market_makers() {
-        let registry = Arc::new(RfqMMRegistry::new(None));
-        let aggregator = QuoteAggregator::new(registry, 5);
-
-        let request = QuoteRequest {
+    fn make_request() -> QuoteRequest {
+        QuoteRequest {
             from: Currency {
                 chain: ChainType::Bitcoin,
                 token: TokenIdentifier::Native,
@@ -254,12 +283,71 @@ mod tests {
             },
             mode: SwapMode::ExactInput(100_000),
             affiliate: None,
-        };
+        }
+    }
+
+    fn make_quote() -> Quote {
+        Quote {
+            id: Uuid::now_v7(),
+            market_maker_id: Uuid::now_v7(),
+            from: Lot {
+                currency: Currency {
+                    chain: ChainType::Bitcoin,
+                    token: TokenIdentifier::Native,
+                    decimals: 8,
+                },
+                amount: U256::from(100_000u64),
+            },
+            to: Lot {
+                currency: Currency {
+                    chain: ChainType::Ethereum,
+                    token: TokenIdentifier::Native,
+                    decimals: 18,
+                },
+                amount: U256::from(99_000u64),
+            },
+            rates: otc_models::SwapRates::new(10, 8, 500),
+            fees: Fees {
+                liquidity_fee: U256::from(500u64),
+                protocol_fee: U256::from(80u64),
+                network_fee: U256::from(420u64),
+            },
+            min_input: U256::from(100_000u64),
+            max_input: U256::from(100_000u64),
+            affiliate: None,
+            expires_at: utc::now() + Duration::minutes(1),
+            created_at: utc::now(),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_no_market_makers() {
+        let registry = Arc::new(RfqMMRegistry::new(None));
+        let aggregator = QuoteAggregator::new(registry, 5);
+
+        let request = make_request();
 
         let result = aggregator.request_quotes(request, 8).await;
         assert!(matches!(
             result,
             Err(QuoteAggregatorError::NoMarketMakersConnected)
         ));
+    }
+
+    #[test]
+    fn validate_returned_quote_accepts_exact_quote() {
+        let request = make_request();
+        let quote = make_quote();
+
+        assert!(validate_returned_quote(&quote, &request, 8).is_ok());
+    }
+
+    #[test]
+    fn validate_returned_quote_rejects_non_exact_bounds() {
+        let request = make_request();
+        let mut quote = make_quote();
+        quote.min_input = U256::from(90_000u64);
+
+        assert!(validate_returned_quote(&quote, &request, 8).is_err());
     }
 }

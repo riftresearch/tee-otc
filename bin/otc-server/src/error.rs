@@ -132,6 +132,7 @@ impl From<crate::services::swap_manager::SwapError> for OtcServerError {
             SwapError::QuoteExpired => OtcServerError::BadRequest {
                 message: "Quote has expired".to_string(),
             },
+            SwapError::InvalidQuote { reason } => OtcServerError::BadRequest { message: reason },
             SwapError::MarketMakerRejected => OtcServerError::Conflict {
                 message: "Market maker rejected the quote".to_string(),
             },

@@ -283,14 +283,25 @@ impl OTCMessageHandler {
                     deposit_amount = %deposit_amount
                 );
 
-                // Lock up funds based on actual deposit amount (not max_input)
+                // OTC now guarantees exact-match deposits, so reserve against the quoted amount.
                 match self.quote_repository.get_quote(*quote_id).await {
                     Ok(quote) => {
+                        if !quote.has_exact_input_bounds() || *deposit_amount != quote.from.amount {
+                            warn!(
+                                message = "Rejecting liquidity lock for non-exact deposit",
+                                swap_id = %swap_id,
+                                quote_id = %quote_id,
+                                deposit_amount = %deposit_amount,
+                                quoted_amount = %quote.from.amount
+                            );
+                            return None;
+                        }
+
                         let locked = LockedLiquidity {
                             quote_id: *quote_id,
                             from: quote.from.currency.clone(),
                             to: quote.to.currency.clone(),
-                            amount: *deposit_amount,
+                            amount: quote.from.amount,
                             created_at: utc::now(),
                         };
                         self.liquidity_lock_manager.lock(*swap_id, locked).await;

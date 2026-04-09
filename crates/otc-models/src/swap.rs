@@ -13,8 +13,7 @@ pub const MM_DEPOSIT_NEVER_CONFIRMED_TIMEOUT: Duration = Duration::minutes(60 * 
 pub const MM_DEPOSIT_RISK_WINDOW: Duration = Duration::minutes(10); // if one of the refund cases is within this window the market maker should consider this risky
 
 /// Computed amounts when user deposit is detected and validated.
-/// These represent the exact amounts for this specific swap based on the
-/// actual deposited amount and the quote's rates.
+/// These represent the exact amounts for this specific swap.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RealizedSwap {
     /// Actual amount the user deposited
@@ -42,14 +41,9 @@ impl RealizedSwap {
     /// - ExactOutput quotes deliver exactly the quoted output
     /// - ExactInput quotes deliver exactly the quoted output
     ///
-    /// If the user deposits a different amount (within min/max bounds),
-    /// recomputes fees using ExactInput mode with proportional output.
-    ///
-    /// Returns `None` if the resulting output would be below `MIN_VIABLE_OUTPUT_SATS`.
-    pub fn from_quote(quote: &Quote, input: u64) -> Option<Self> {
-        let input_u256 = U256::from(input);
-
-        if input_u256 == quote.from.amount {
+    /// Returns `None` for any other deposit amount.
+    pub fn from_quote(quote: &Quote, input: U256) -> Option<Self> {
+        if input == quote.from.amount {
             // User deposited exactly the quoted input - use quote's pre-computed fees
             // This guarantees exact output for ExactOutput quotes
             Some(Self {
@@ -60,8 +54,7 @@ impl RealizedSwap {
                 network_fee: quote.fees.network_fee,
             })
         } else {
-            // User deposited a different amount - recompute with ExactInput
-            Self::compute(input, &quote.rates)
+            None
         }
     }
 
@@ -96,8 +89,8 @@ pub struct Swap {
     pub quote: Quote,
     pub metadata: Metadata,
 
-    /// Realized amounts computed when user deposit is detected.
-    /// None until a valid deposit is detected within quote bounds.
+    /// Realized amounts computed when the exact quoted user deposit is detected.
+    /// None until a valid exact deposit is detected.
     pub realized: Option<RealizedSwap>,
 
     /// Salt for deterministic wallet generation when combined with the TEE master key
@@ -229,8 +222,8 @@ mod tests {
                 protocol_fee: U256::from(1000u64),
                 network_fee: U256::from(1000u64),
             },
-            min_input: U256::from(10_000u64),
-            max_input: U256::from(100_000_000u64),
+            min_input: U256::from(1_000_000u64),
+            max_input: U256::from(1_000_000u64),
             affiliate: None,
             expires_at: utc::now() + Duration::hours(1),
             created_at: utc::now(),
@@ -464,7 +457,7 @@ mod tests {
     fn realized_swap_from_quote_exact_input_matches() {
         // When user deposits exactly the quoted input, should use quote's fees
         let quote = make_test_quote();
-        let exact_input = quote.from.amount.to::<u64>();
+        let exact_input = quote.from.amount;
 
         let realized = RealizedSwap::from_quote(&quote, exact_input)
             .expect("Exact input should produce valid output");
@@ -478,25 +471,15 @@ mod tests {
     }
 
     #[test]
-    fn realized_swap_from_quote_different_input_recomputes() {
-        // When user deposits a different amount, should recompute with ExactInput
+    fn realized_swap_from_quote_different_input_is_rejected() {
+        // When user deposits a different amount, the quote is no longer executable
         let quote = make_test_quote();
-        let different_input = quote.from.amount.to::<u64>() / 2; // Half the quoted amount
+        let different_input = quote.from.amount / U256::from(2u64); // Half the quoted amount
 
-        let realized = RealizedSwap::from_quote(&quote, different_input)
-            .expect("Half input should produce valid output");
-
-        // Should NOT use quote's values - should recompute
-        assert_eq!(realized.user_input, U256::from(different_input));
         assert!(
-            realized.mm_output < quote.to.amount,
-            "Output should be less than quoted"
+            RealizedSwap::from_quote(&quote, different_input).is_none(),
+            "Different input amounts must be rejected"
         );
-
-        // Verify it matches what compute() would return
-        let direct = RealizedSwap::compute(different_input, &quote.rates)
-            .expect("Should produce valid output");
-        assert_eq!(realized, direct);
     }
 }
 

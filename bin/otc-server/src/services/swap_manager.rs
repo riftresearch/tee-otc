@@ -28,6 +28,9 @@ pub enum SwapError {
     #[snafu(display("Quote has expired"))]
     QuoteExpired,
 
+    #[snafu(display("Invalid quote: {}", reason))]
+    InvalidQuote { reason: String },
+
     #[snafu(display("Market maker rejected the quote"))]
     MarketMakerRejected,
 
@@ -248,6 +251,12 @@ impl SwapManager {
         // 1. Check if quote has expired
         if quote.expires_at < utc::now() {
             return Err(SwapError::QuoteExpired);
+        }
+
+        if !quote.has_exact_input_bounds() {
+            return Err(SwapError::InvalidQuote {
+                reason: "quote must require the exact quoted input amount".to_string(),
+            });
         }
 
         // 2. Ask market maker if they'll fill this quote

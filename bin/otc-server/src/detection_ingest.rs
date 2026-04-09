@@ -324,25 +324,35 @@ async fn handle_detection_request_inner(
         Err(err) => return Err(transient_failure(err)),
     };
 
-    if !swap.quote.is_valid_input(verified.amount) {
+    if !swap.quote.has_exact_input_bounds() {
         return Err(rejection(
             lane,
             trusted_detector.as_ref(),
-            "amount_out_of_bounds",
+            "invalid_quote_bounds",
             StatusCode::CONFLICT,
-            "candidate amount is outside the swap bounds",
+            "swap quote does not require an exact input amount",
         ));
     }
 
-    let realized = match RealizedSwap::from_quote(&swap.quote, verified.amount.to::<u64>()) {
+    if !swap.quote.matches_expected_input(verified.amount) {
+        return Err(rejection(
+            lane,
+            trusted_detector.as_ref(),
+            "amount_mismatch",
+            StatusCode::CONFLICT,
+            "candidate amount does not match the exact quoted input amount",
+        ));
+    }
+
+    let realized = match RealizedSwap::from_quote(&swap.quote, verified.amount) {
         Some(realized) => realized,
         None => {
             return Err(rejection(
                 lane,
                 trusted_detector.as_ref(),
-                "dust_output",
+                "invalid_realized_swap",
                 StatusCode::CONFLICT,
-                "candidate amount would result in dust output",
+                "candidate amount could not be realized from the exact quote",
             ))
         }
     };

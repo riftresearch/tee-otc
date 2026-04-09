@@ -12,8 +12,7 @@ use blockchain_utils::MempoolEsploraFeeExt;
 #[cfg(test)]
 use otc_models::MIN_VIABLE_OUTPUT_SATS;
 use otc_models::{
-    compute_fees, compute_max_input_for_output, compute_min_viable_input, constants, ChainType,
-    Fees, Lot, Quote, QuoteRequest, SwapRates, TokenIdentifier,
+    compute_fees, constants, ChainType, Fees, Lot, Quote, QuoteRequest, SwapRates, TokenIdentifier,
 };
 use otc_protocols::rfq::RFQResult;
 use snafu::{Location, Snafu};
@@ -289,21 +288,10 @@ impl WrappedBitcoinQuoter {
             ));
         }
 
-        // Validate against liquidity bounds
-        let max_input = compute_max_input_for_output(max_output.to::<u64>(), &rates);
-        let min_input = compute_min_viable_input(&rates);
-
-        if breakdown.input < min_input {
-            return Ok(RFQResult::InvalidRequest(format!(
-                "Input {} below minimum viable input {}",
-                breakdown.input, min_input
-            )));
-        }
-
-        if breakdown.input > max_input {
+        if U256::from(breakdown.output) > max_output {
             return Ok(RFQResult::MakerUnavailable(format!(
-                "Insufficient liquidity: requires {} but max available is {}",
-                breakdown.input, max_input
+                "Insufficient liquidity: requires output {} but max available is {}",
+                breakdown.output, max_output
             )));
         }
 
@@ -324,8 +312,8 @@ impl WrappedBitcoinQuoter {
                 protocol_fee: U256::from(breakdown.protocol_fee),
                 network_fee: U256::from(breakdown.network_fee),
             },
-            min_input: U256::from(min_input),
-            max_input: U256::from(max_input),
+            min_input: U256::from(breakdown.input),
+            max_input: U256::from(breakdown.input),
             affiliate: quote_request.affiliate.clone(),
             expires_at: utc::now() + QUOTE_EXPIRATION_TIME,
             created_at: utc::now(),
@@ -435,7 +423,7 @@ fn eth_fees_in_sats(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use otc_models::RealizedSwap;
+    use otc_models::{compute_max_input_for_output, compute_min_viable_input, RealizedSwap};
 
     const SATS_PER_VBYTE: f64 = 1.5;
     const TRADE_SPREAD_BPS: u64 = 13;
